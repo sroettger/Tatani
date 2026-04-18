@@ -128,52 +128,66 @@ Deno.serve(async (req) => {
 
     const cleaned = stripSubtitleFormatting(subtitle_text).slice(0, 40000);
 
-    const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: "You are a Japanese language teacher creating a comprehensive study database from anime subtitles. Extract EVERY meaningful vocabulary word that appears in the subtitles — do not filter by difficulty or learner level. Include common words (N5/N4) AND advanced words (N1/N2) AND proper nouns and slang. Aim for 150-250 vocabulary entries, 15-25 grammar points, and 25-40 example sentences. Tag each word with its accurate JLPT level so individual learners can filter client-side. You MUST call the extract_japanese_learning_data function." },
-          { role: "user", content: `Extract ALL Japanese vocabulary from these subtitles. Be exhaustive — capture every meaningful word regardless of difficulty:\n\n${cleaned}` },
-        ],
-        tools: [EXTRACTION_TOOL],
-        tool_choice: { type: "function", function: { name: "extract_japanese_learning_data" } },
-      }),
-    });
-    if (!aiResp.ok) {
-      const t = await aiResp.text();
-      console.error("AI gateway error", aiResp.status, t);
-      await supabase.from("episodes").update({ processing_status: "failed" }).eq("id", episode_id);
-      if (aiResp.status === 429) return new Response(JSON.stringify({ error: "Rate limit exceeded. Try again later." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      if (aiResp.status === 402) return new Response(JSON.stringify({ error: "AI credits exhausted. Please add credits to your workspace." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      return new Response(JSON.stringify({ error: "AI extraction failed" }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-    const aiJson = await aiResp.json();
-    const call = aiJson?.choices?.[0]?.message?.tool_calls?.[0];
-    if (!call?.function?.arguments) {
-      console.error("no tool_call in AI response:", JSON.stringify(aiJson).slice(0, 2000));
-      await supabase.from("episodes").update({ processing_status: "failed" }).eq("id", episode_id);
-      return new Response(JSON.stringify({ error: "AI returned no extraction" }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-    let extracted: any;
-    try { extracted = JSON.parse(call.function.arguments); }
-    catch (e) {
-      console.error("parse fail", e);
-      await supabase.from("episodes").update({ processing_status: "failed" }).eq("id", episode_id);
-      return new Response(JSON.stringify({ error: "invalid AI response" }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    // Run the heavy AI extraction in the background so the request returns immediately.
+    // The client polls `episodes.processing_status` (and `episode_vocab_cache`) for progress.
+    const work = (async () => {
+      try {
+        const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "google/gemini-2.5-flash",
+            messages: [
+              { role: "system", content: "You are a Japanese language teacher creating a comprehensive study database from anime subtitles. Extract EVERY meaningful vocabulary word that appears in the subtitles — do not filter by difficulty or learner level. Include common words (N5/N4) AND advanced words (N1/N2) AND proper nouns and slang. Aim for 150-250 vocabulary entries, 15-25 grammar points, and 25-40 example sentences. Tag each word with its accurate JLPT level so individual learners can filter client-side. You MUST call the extract_japanese_learning_data function." },
+              { role: "user", content: `Extract ALL Japanese vocabulary from these subtitles. Be exhaustive — capture every meaningful word regardless of difficulty:\n\n${cleaned}` },
+            ],
+            tools: [EXTRACTION_TOOL],
+            tool_choice: { type: "function", function: { name: "extract_japanese_learning_data" } },
+          }),
+        });
+        if (!aiResp.ok) {
+          const t = await aiResp.text();
+          console.error("AI gateway error", aiResp.status, t);
+          await supabase.from("episodes").update({ processing_status: "failed" }).eq("id", episode_id);
+          return;
+        }
+        const aiJson = await aiResp.json();
+        const call = aiJson?.choices?.[0]?.message?.tool_calls?.[0];
+        if (!call?.function?.arguments) {
+          console.error("no tool_call in AI response:", JSON.stringify(aiJson).slice(0, 2000));
+          await supabase.from("episodes").update({ processing_status: "failed" }).eq("id", episode_id);
+          return;
+        }
+        let extracted: any;
+        try { extracted = JSON.parse(call.function.arguments); }
+        catch (e) {
+          console.error("parse fail", e);
+          await supabase.from("episodes").update({ processing_status: "failed" }).eq("id", episode_id);
+          return;
+        }
+        const payload = {
+          episode_id,
+          vocab: extracted.vocab ?? [],
+          grammar: extracted.grammar ?? [],
+          sentences: extracted.sentences ?? [],
+        };
+        await supabase.from("episode_vocab_cache").upsert(payload, { onConflict: "episode_id" });
+        await supabase.from("episodes").update({ processing_status: "ready" }).eq("id", episode_id);
+        console.log(`Episode ${episode_id} processed: ${payload.vocab.length} vocab, ${payload.grammar.length} grammar, ${payload.sentences.length} sentences`);
+      } catch (e) {
+        console.error("background processing failed", e);
+        await supabase.from("episodes").update({ processing_status: "failed" }).eq("id", episode_id);
+      }
+    })();
+
+    // @ts-ignore - EdgeRuntime is available in Supabase edge functions
+    if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
+      // @ts-ignore
+      EdgeRuntime.waitUntil(work);
     }
 
-    const payload = {
-      episode_id,
-      vocab: extracted.vocab ?? [],
-      grammar: extracted.grammar ?? [],
-      sentences: extracted.sentences ?? [],
-    };
-    await supabase.from("episode_vocab_cache").upsert(payload, { onConflict: "episode_id" });
-    await supabase.from("episodes").update({ processing_status: "ready" }).eq("id", episode_id);
-
-    return new Response(JSON.stringify({ cached: false, ...payload }), {
+    return new Response(JSON.stringify({ started: true, status: "processing" }), {
+      status: 202,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {

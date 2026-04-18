@@ -24,11 +24,13 @@ export default function EpisodeDetail() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const fileRef = useRef<HTMLInputElement>(null);
+  const pollRef = useRef<number | null>(null);
   const [episode, setEpisode] = useState<{ id: string; episode_number: number; processing_status: string } | null>(null);
   const [vocab, setVocab] = useState<VocabItem[]>([]);
   const [sentences, setSentences] = useState<SentenceItem[]>([]);
   const [knownWords, setKnownWords] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [progressStage, setProgressStage] = useState<string>("");
   const [showSkipped, setShowSkipped] = useState(false);
 
   const load = async () => {
@@ -40,30 +42,63 @@ export default function EpisodeDetail() {
     setSentences(((cache?.sentences ?? []) as SentenceItem[]));
     const { data: words } = await supabase.from("user_word_state").select("word,state").eq("user_id", user.id).eq("state", "known");
     setKnownWords(new Set((words ?? []).map((w: any) => w.word)));
+    return ep;
   };
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [episodeId, user]);
+  useEffect(() => {
+    load();
+    return () => { if (pollRef.current) window.clearInterval(pollRef.current); };
+    // eslint-disable-next-line
+  }, [episodeId, user]);
+
+  // Poll while processing
+  useEffect(() => {
+    if (episode?.processing_status === "processing" && !pollRef.current) {
+      setBusy(true);
+      setProgressStage("Extracting vocabulary with AI…");
+      pollRef.current = window.setInterval(async () => {
+        const ep = await load();
+        if ((ep as any)?.processing_status === "ready") {
+          if (pollRef.current) { window.clearInterval(pollRef.current); pollRef.current = null; }
+          setBusy(false); setProgressStage("");
+          toast.success("Episode processed!");
+        } else if ((ep as any)?.processing_status === "failed") {
+          if (pollRef.current) { window.clearInterval(pollRef.current); pollRef.current = null; }
+          setBusy(false); setProgressStage("");
+          toast.error("Processing failed", { description: "Please try again." });
+        }
+      }, 3000);
+    }
+  }, [episode?.processing_status]);
 
   const startProcess = async (subText: string) => {
     if (!episodeId) return;
     setBusy(true);
+    setProgressStage("Sending subtitles to AI…");
     const { data, error } = await supabase.functions.invoke("process-episode", {
       body: { episode_id: episodeId, subtitle_text: subText },
     });
-    setBusy(false);
-    if (error) { toast.error("Processing failed", { description: error.message }); return; }
-    if ((data as any)?.error) { toast.error("Processing failed", { description: (data as any).error }); return; }
-    toast.success((data as any)?.cached ? "Loaded from cache" : "Episode processed!");
-    load();
+    if (error) { setBusy(false); setProgressStage(""); toast.error("Processing failed", { description: error.message }); return; }
+    if ((data as any)?.error) { setBusy(false); setProgressStage(""); toast.error("Processing failed", { description: (data as any).error }); return; }
+    if ((data as any)?.cached) {
+      setBusy(false); setProgressStage("");
+      toast.success("Loaded from cache");
+      load();
+      return;
+    }
+    // Background processing started — switch to polling
+    setProgressStage("Extracting vocabulary with AI… (this can take 1–2 minutes)");
+    await load();
   };
 
   const tryAutoFetch = async () => {
     if (!episodeId) return;
     setBusy(true);
+    setProgressStage("Fetching Japanese subtitles…");
     const { data, error } = await supabase.functions.invoke("fetch-subtitles", { body: { episode_id: episodeId } });
-    if (error) { setBusy(false); toast.error("Subtitle fetch failed", { description: error.message }); return; }
+    if (error) { setBusy(false); setProgressStage(""); toast.error("Subtitle fetch failed", { description: error.message }); return; }
     if (!data?.found) {
-      setBusy(false);
+      setBusy(false); setProgressStage("");
       toast.message("No auto-subtitles found", { description: "Upload a .srt or .ass file to continue." });
       fileRef.current?.click();
       return;
@@ -99,10 +134,22 @@ export default function EpisodeDetail() {
       {vocab.length === 0 ? (
         <Card className="p-6 text-center gradient-card border-border/50 shadow-card">
           <Sparkles className="h-10 w-10 mx-auto text-primary mb-3" />
-          <h2 className="text-lg font-semibold mb-1">Process this episode</h2>
+          <h2 className="text-lg font-semibold mb-1">
+            {busy ? "Processing episode…" : "Process this episode"}
+          </h2>
           <p className="text-sm text-muted-foreground mb-5">
-            We'll auto-fetch the Japanese subtitles, extract vocabulary with AI, and generate flashcards just for you.
+            {busy
+              ? (progressStage || "Working on it…")
+              : "We'll auto-fetch the Japanese subtitles, extract vocabulary with AI, and generate flashcards just for you."}
           </p>
+          {busy && (
+            <div className="mb-5">
+              <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                <div className="h-full w-1/3 gradient-primary animate-pulse" />
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">You can leave this page — processing continues in the background.</p>
+            </div>
+          )}
           <div className="grid gap-2">
             <Button onClick={tryAutoFetch} disabled={busy} className="gradient-primary text-primary-foreground h-12">
               {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> Working…</> : <><Sparkles className="h-4 w-4" /> Auto-fetch & process</>}
