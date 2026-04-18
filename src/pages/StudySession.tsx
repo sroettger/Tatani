@@ -258,8 +258,19 @@ export default function StudySession() {
 
           <Card className="p-6 gradient-card border-border/50 shadow-card mb-4 text-center">
             <div className="text-xs text-muted-foreground mb-2">What does this mean?</div>
-            <div className="font-jp text-5xl font-bold mb-2">{quizCard?.word}</div>
-            <div className="font-jp text-muted-foreground">{quizCard?.reading}</div>
+            {(() => {
+              const showKanji = !quizCard ? false : (streaks[quizCard.word] ?? 0) >= KANJI_THRESHOLD || quizCard.word === quizCard.reading;
+              return (
+                <>
+                  <div className="font-jp text-5xl font-bold mb-2">
+                    {showKanji ? quizCard?.word : quizCard?.reading}
+                  </div>
+                  {showKanji
+                    ? <div className="font-jp text-muted-foreground">{quizCard?.reading}</div>
+                    : quizCard && quizCard.word !== quizCard.reading && <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Hiragana mode</div>}
+                </>
+              );
+            })()}
           </Card>
 
           <div className="grid gap-2">
