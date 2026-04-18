@@ -2,7 +2,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/PageHeader";
 import { useAuth } from "@/context/AuthContext";
-import { Settings as SettingsIcon, LogOut, RotateCw } from "lucide-react";
+import { Settings as SettingsIcon, LogOut, RotateCw, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -17,6 +17,27 @@ export default function Settings() {
     await refreshProfile();
     toast.success("Let's redo your placement");
     navigate("/onboarding");
+  };
+
+  const resetStudyData = async () => {
+    if (!user) return;
+    if (!confirm("Reset all study data? This wipes known words, quiz results, and study sessions, and resets your placement.")) return;
+    try {
+      await Promise.all([
+        supabase.from("user_word_state").delete().eq("user_id", user.id),
+        supabase.from("quiz_results").delete().eq("user_id", user.id),
+        supabase.from("study_sessions").delete().eq("user_id", user.id),
+      ]);
+      await supabase
+        .from("profiles")
+        .update({ placement_done: false, jlpt_level: "none", total_words_known: 0, study_streak: 0 })
+        .eq("user_id", user.id);
+      await refreshProfile();
+      toast.success("Study data reset");
+      navigate("/onboarding");
+    } catch (e) {
+      toast.error("Failed to reset study data");
+    }
   };
 
   return (
@@ -37,6 +58,12 @@ export default function Settings() {
           <h3 className="font-semibold mb-1">Retake placement quiz</h3>
           <p className="text-xs text-muted-foreground mb-3">Generates a fresh quiz and re-seeds your known-word list.</p>
           <Button variant="outline" onClick={retakePlacement}><RotateCw className="h-4 w-4" /> Retake</Button>
+        </Card>
+
+        <Card className="p-4 gradient-card border-border/50">
+          <h3 className="font-semibold mb-1">Reset study data <span className="text-xs text-muted-foreground font-normal">(dev)</span></h3>
+          <p className="text-xs text-muted-foreground mb-3">Wipes known words, quiz results, and study sessions, then sends you back to onboarding.</p>
+          <Button variant="outline" onClick={resetStudyData}><Trash2 className="h-4 w-4" /> Reset study data</Button>
         </Card>
 
         <Card className="p-4 gradient-card border-border/50">
