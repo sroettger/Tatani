@@ -126,20 +126,39 @@ Deno.serve(async (req) => {
 
     await supabase.from("episodes").update({ processing_status: "processing" }).eq("id", episode_id);
 
-    const cleaned = stripSubtitleFormatting(subtitle_text).slice(0, 40000);
+    const cleaned = stripSubtitleFormatting(subtitle_text).slice(0, 60000);
+
+    // Split cleaned subtitles into roughly equal chunks on line boundaries.
+    // Each chunk is sent to the AI in parallel and the results are merged + deduped.
+    const CHUNK_SIZE = 7000;       // chars per chunk — keeps each tool_call response well under output limits
+    const MAX_CONCURRENCY = 4;     // parallel AI calls
+    const chunkText = (text: string, size: number): string[] => {
+      const lines = text.split("\n");
+      const chunks: string[] = [];
+      let buf = "";
+      for (const line of lines) {
+        if (buf.length + line.length + 1 > size && buf.length > 0) {
+          chunks.push(buf);
+          buf = "";
+        }
+        buf += (buf ? "\n" : "") + line;
+      }
+      if (buf) chunks.push(buf);
+      return chunks;
+    };
 
     // Run the heavy AI extraction in the background so the request returns immediately.
     // The client polls `episodes.processing_status` (and `episode_vocab_cache`) for progress.
     const work = (async () => {
-      const callAi = async (text: string, vocabTarget: string) => {
+      const callAi = async (text: string) => {
         const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
           method: "POST",
           headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             model: "google/gemini-2.5-flash",
             messages: [
-              { role: "system", content: `You are a Japanese language teacher building a study database from anime subtitles. Extract EVERY meaningful vocabulary word that appears in the subtitles regardless of difficulty (N5 through N1, plus proper nouns and slang). Aim for ${vocabTarget} vocabulary entries, 10-20 grammar points, and 20-30 example sentences. Tag each word with its accurate JLPT level. You MUST call the extract_japanese_learning_data function and return valid JSON.` },
-              { role: "user", content: `Extract Japanese vocabulary from these subtitles:\n\n${text}` },
+              { role: "system", content: "You are a Japanese language teacher building a study database from anime subtitles. Extract EVERY meaningful vocabulary word that appears in the given subtitle excerpt regardless of difficulty (N5 through N1, plus proper nouns and slang). Aim for 30-60 vocabulary entries, 3-6 grammar points, and 6-10 example sentences from THIS excerpt. Tag each word with its accurate JLPT level. You MUST call the extract_japanese_learning_data function and return valid JSON." },
+              { role: "user", content: `Extract Japanese vocabulary from this subtitle excerpt:\n\n${text}` },
             ],
             tools: [EXTRACTION_TOOL],
             tool_choice: { type: "function", function: { name: "extract_japanese_learning_data" } },
@@ -157,7 +176,7 @@ Deno.serve(async (req) => {
         const call = choice?.message?.tool_calls?.[0];
         const finish = choice?.finish_reason;
         if (!call?.function?.arguments) {
-          throw new Error(`no_tool_call (finish_reason=${finish}): ${JSON.stringify(aiJson).slice(0, 1500)}`);
+          throw new Error(`no_tool_call (finish_reason=${finish}): ${JSON.stringify(aiJson).slice(0, 1000)}`);
         }
         try {
           return { parsed: JSON.parse(call.function.arguments), finish };
@@ -166,31 +185,72 @@ Deno.serve(async (req) => {
         }
       };
 
-      try {
-        let extracted: any;
+      const processChunk = async (text: string, idx: number) => {
         try {
-          const aiJson = await callAi(cleaned, "120-200");
-          const { parsed, finish } = tryParse(aiJson);
-          extracted = parsed;
-          console.log(`Episode ${episode_id} first pass ok (finish=${finish})`);
-        } catch (firstErr) {
-          console.warn(`Episode ${episode_id} first pass failed:`, (firstErr as Error).message);
-          // Retry with a smaller subtitle chunk + lower target so the tool_call arguments fit.
-          const shorter = cleaned.slice(0, 18000);
-          const aiJson2 = await callAi(shorter, "60-100");
-          const { parsed, finish } = tryParse(aiJson2);
-          extracted = parsed;
-          console.log(`Episode ${episode_id} retry ok (finish=${finish})`);
+          const aiJson = await callAi(text);
+          const { parsed } = tryParse(aiJson);
+          return parsed;
+        } catch (e) {
+          console.warn(`Episode ${episode_id} chunk ${idx} failed:`, (e as Error).message);
+          return null;
         }
+      };
+
+      // Simple concurrency-limited runner.
+      const runWithConcurrency = async <T,>(items: T[], limit: number, fn: (item: T, idx: number) => Promise<any>) => {
+        const results: any[] = new Array(items.length);
+        let cursor = 0;
+        const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+          while (true) {
+            const i = cursor++;
+            if (i >= items.length) return;
+            results[i] = await fn(items[i], i);
+          }
+        });
+        await Promise.all(workers);
+        return results;
+      };
+
+      try {
+        const chunks = chunkText(cleaned, CHUNK_SIZE);
+        console.log(`Episode ${episode_id}: split into ${chunks.length} chunk(s), running with concurrency ${MAX_CONCURRENCY}`);
+        const partials = await runWithConcurrency(chunks, MAX_CONCURRENCY, processChunk);
+
+        const vocabMap = new Map<string, any>();
+        const grammarMap = new Map<string, any>();
+        const sentenceSet = new Set<string>();
+        const sentences: any[] = [];
+        let successCount = 0;
+        for (const p of partials) {
+          if (!p) continue;
+          successCount++;
+          for (const v of (p.vocab ?? [])) {
+            if (v?.word && !vocabMap.has(v.word)) vocabMap.set(v.word, v);
+          }
+          for (const g of (p.grammar ?? [])) {
+            if (g?.pattern && !grammarMap.has(g.pattern)) grammarMap.set(g.pattern, g);
+          }
+          for (const s of (p.sentences ?? [])) {
+            if (s?.jp && !sentenceSet.has(s.jp)) {
+              sentenceSet.add(s.jp);
+              sentences.push(s);
+            }
+          }
+        }
+
+        if (successCount === 0) {
+          throw new Error("all chunks failed");
+        }
+
         const payload = {
           episode_id,
-          vocab: extracted.vocab ?? [],
-          grammar: extracted.grammar ?? [],
-          sentences: extracted.sentences ?? [],
+          vocab: Array.from(vocabMap.values()),
+          grammar: Array.from(grammarMap.values()),
+          sentences: sentences.slice(0, 60),
         };
         await supabase.from("episode_vocab_cache").upsert(payload, { onConflict: "episode_id" });
         await supabase.from("episodes").update({ processing_status: "ready" }).eq("id", episode_id);
-        console.log(`Episode ${episode_id} processed: ${payload.vocab.length} vocab, ${payload.grammar.length} grammar, ${payload.sentences.length} sentences`);
+        console.log(`Episode ${episode_id} processed: ${successCount}/${chunks.length} chunks ok, ${payload.vocab.length} vocab, ${payload.grammar.length} grammar, ${payload.sentences.length} sentences`);
       } catch (e) {
         console.error(`Episode ${episode_id} background processing failed:`, e instanceof Error ? e.message : e);
         await supabase.from("episodes").update({ processing_status: "failed" }).eq("id", episode_id);
