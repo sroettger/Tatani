@@ -16,28 +16,31 @@ type VocabItem = {
 
 type Mode = "review" | "quiz";
 
-// Words that count as "I know it"
-const YES_WORDS = ["yes", "yeah", "yep", "know", "i know", "i know it", "got it", "knew it", "easy", "correct", "right"];
-// Words that count as "still learning"
-const NO_WORDS = ["no", "nope", "skip", "again", "dunno", "don't know", "do not know", "i don't know", "wrong", "pass", "next"];
-// Control words
-const REPEAT_WORDS = ["repeat", "say again", "again please"];
-const MEANING_WORDS = ["meaning", "what", "hint", "answer", "show", "what does it mean"];
-const PAUSE_WORDS = ["pause", "stop", "wait", "hold on"];
-const RESUME_WORDS = ["resume", "continue", "go", "start"];
+// Single-token keywords (any of these as a word in the transcript triggers the action)
+const YES_TOKENS = ["yes", "yeah", "yep", "yup", "ya", "know", "knew", "got", "easy", "correct", "right", "ok", "okay", "sure"];
+const NO_TOKENS = ["no", "nope", "nah", "skip", "again", "dunno", "wrong", "pass", "next", "dont", "don"];
+const REPEAT_TOKENS = ["repeat", "again"];
+const MEANING_TOKENS = ["meaning", "hint", "answer", "show", "translate", "translation"];
+const PAUSE_TOKENS = ["pause", "stop", "wait"];
+const RESUME_TOKENS = ["resume", "continue"];
 
 const normalize = (s: string) =>
   s.toLowerCase().normalize("NFKD").replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
 
+const tokensOf = (s: string) => normalize(s).split(" ").filter(Boolean);
+
 const meaningVariants = (meaning: string) =>
   meaning.split(/[,/;]| or | and /i).map(s => normalize(s)).filter(Boolean);
 
-const matchesYes = (t: string) => YES_WORDS.includes(t);
-const matchesNo = (t: string) => NO_WORDS.includes(t);
-const matchesRepeat = (t: string) => REPEAT_WORDS.includes(t);
-const matchesMeaning = (t: string) => MEANING_WORDS.includes(t);
-const matchesPause = (t: string) => PAUSE_WORDS.includes(t);
-const matchesResume = (t: string) => RESUME_WORDS.includes(t);
+const hasAny = (tokens: string[], keywords: string[]) =>
+  tokens.some(t => keywords.includes(t));
+
+const matchesYes = (tokens: string[]) => hasAny(tokens, YES_TOKENS);
+const matchesNo = (tokens: string[]) => hasAny(tokens, NO_TOKENS);
+const matchesRepeat = (tokens: string[]) => hasAny(tokens, REPEAT_TOKENS);
+const matchesMeaning = (tokens: string[]) => hasAny(tokens, MEANING_TOKENS);
+const matchesPause = (tokens: string[]) => hasAny(tokens, PAUSE_TOKENS);
+const matchesResume = (tokens: string[]) => hasAny(tokens, RESUME_TOKENS);
 
 const JLPT_RANK: Record<string, number> = { N5: 1, N4: 2, N3: 3, N2: 4, N1: 5, none: 6 };
 const KANJI_THRESHOLD = 2;
@@ -122,8 +125,12 @@ export default function VoiceStudySession() {
     r.lang = "en-US";
     r.maxAlternatives = 5;
 
+    r.onstart = () => { console.log("[voice] recognition started"); setListening(true); };
+    r.onaudiostart = () => console.log("[voice] audio capture started");
+    r.onspeechstart = () => console.log("[voice] speech detected");
+    r.onspeechend = () => console.log("[voice] speech ended");
     r.onresult = (event: any) => {
-      // collect every alternative from every result
+      console.log("[voice] onresult fired, results:", event.results.length);
       const transcripts: string[] = [];
       for (let i = 0; i < event.results.length; i++) {
         const res = event.results[i];
@@ -135,6 +142,7 @@ export default function VoiceStudySession() {
       handleVoiceInput(transcripts);
     };
     r.onerror = (e: any) => {
+      console.log("[voice] error:", e.error, e.message);
       if (e.error === "not-allowed" || e.error === "service-not-allowed") {
         setPermissionDenied(true);
         setRunning(false);
@@ -145,10 +153,10 @@ export default function VoiceStudySession() {
       // 'no-speech' / 'aborted' / 'audio-capture' — let onend handle restart
     };
     r.onend = () => {
+      console.log("[voice] recognition ended; running:", runningRef.current, "awaiting:", awaitingRef.current);
       setListening(false);
-      // auto-restart only when running AND we're awaiting an answer
       if (runningRef.current && awaitingRef.current) {
-        try { r.start(); setListening(true); } catch { /* already started */ }
+        try { r.start(); setListening(true); } catch (err) { console.log("[voice] restart failed:", err); }
       }
     };
 
@@ -209,30 +217,39 @@ export default function VoiceStudySession() {
   // ---------- voice command handling ----------
   const handleVoiceInput = (transcripts: string[]) => {
     if (!runningRef.current) return;
-    const t = transcripts[0] ?? "";
-    if (!t) return;
+    if (transcripts.length === 0) return;
 
-    if (transcripts.some(matchesPause)) { pause(); return; }
-    if (transcripts.some(matchesResume)) { resume(); return; }
-    if (transcripts.some(matchesRepeat)) { repeatPrompt(); return; }
+    // tokenize every alternative into a single deduped token bag
+    const allTokens = Array.from(new Set(transcripts.flatMap(tokensOf)));
+    console.log("[voice] heard:", transcripts, "tokens:", allTokens, "awaiting:", awaitingRef.current);
+
+    if (matchesPause(allTokens)) { console.log("[voice] -> pause"); pause(); return; }
+    if (matchesResume(allTokens)) { console.log("[voice] -> resume"); resume(); return; }
 
     if (!awaitingRef.current) return;
     const c = vocabRef.current[idxRef.current];
     if (!c) return;
 
+    // "repeat" only valid while awaiting (otherwise it loops with TTS feedback)
+    if (matchesRepeat(allTokens) && !matchesYes(allTokens) && !matchesNo(allTokens)) {
+      console.log("[voice] -> repeat"); repeatPrompt(); return;
+    }
+
     if (modeRef.current === "review") {
-      if (transcripts.some(matchesMeaning)) { revealMeaning(c); return; }
-      if (transcripts.some(matchesYes)) { gradeReview(true); return; }
-      if (transcripts.some(matchesNo)) { gradeReview(false); return; }
+      if (matchesMeaning(allTokens)) { console.log("[voice] -> meaning"); revealMeaning(c); return; }
+      // YES wins ties (we want to be optimistic — user can say "skip" explicitly for no)
+      if (matchesYes(allTokens)) { console.log("[voice] -> known"); gradeReview(true); return; }
+      if (matchesNo(allTokens)) { console.log("[voice] -> learning"); gradeReview(false); return; }
+      console.log("[voice] no match for review");
     } else {
-      // quiz: check if any transcript matches any meaning variant
-      if (transcripts.some(matchesNo)) { gradeQuiz(false, c); return; }
+      if (matchesNo(allTokens)) { console.log("[voice] -> quiz wrong"); gradeQuiz(false, c); return; }
       const targets = meaningVariants(c.meaning);
-      const hit = transcripts.some(tr =>
-        targets.some(target => target && (tr === target || tr.includes(target) || target.includes(tr)))
-      );
-      if (hit) { gradeQuiz(true, c); return; }
-      // unknown utterance — just ignore, keep listening
+      const hit = transcripts.some(tr => {
+        const trN = normalize(tr);
+        return targets.some(target => target && (trN === target || trN.includes(target) || target.includes(trN)));
+      });
+      if (hit) { console.log("[voice] -> quiz correct"); gradeQuiz(true, c); return; }
+      console.log("[voice] no quiz match, targets:", targets);
     }
   };
 
@@ -476,7 +493,7 @@ export default function VoiceStudySession() {
             {heard && <span>• heard: "{heard}"</span>}
           </div>
 
-          <div className="grid grid-cols-3 gap-2 mb-4">
+          <div className="grid grid-cols-3 gap-2 mb-3">
             {!running ? (
               <Button onClick={start} className="col-span-3 h-12 gradient-primary text-primary-foreground">
                 <Play className="h-4 w-4" /> Start hands-free
@@ -495,6 +512,28 @@ export default function VoiceStudySession() {
               </>
             )}
           </div>
+
+          {/* Manual tap fallback — works even if voice recognition fails */}
+          {running && mode === "review" && (
+            <div className="grid grid-cols-2 gap-2 mb-4">
+              <Button variant="outline" onClick={() => gradeReview(false)} className="h-11">
+                Still learning
+              </Button>
+              <Button onClick={() => gradeReview(true)} className="h-11 bg-success text-success-foreground hover:bg-success/90">
+                I know this
+              </Button>
+            </div>
+          )}
+
+          {/* Hint for iframe contexts where mic is blocked by parent */}
+          {window.self !== window.top && (
+            <Card className="p-3 mb-4 border-accent/40 bg-accent/5 text-xs">
+              <div className="font-semibold mb-1">Tip for the Lovable preview</div>
+              <div className="text-muted-foreground">
+                The mic may be blocked inside the editor iframe. Open the preview URL in a new tab on your phone for full voice support.
+              </div>
+            </Card>
+          )}
 
           <Card className="p-3 gradient-card border-border/50 text-xs text-muted-foreground">
             <div className="font-semibold text-foreground mb-1">Voice commands</div>
