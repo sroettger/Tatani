@@ -35,7 +35,7 @@ export default function EpisodeDetail() {
 
   const load = async () => {
     if (!episodeId || !user) return;
-    const { data: ep } = await supabase.from("episodes").select("id,episode_number,processing_status").eq("id", episodeId).maybeSingle();
+    const { data: ep } = await supabase.from("episodes").select("id,episode_number,processing_status,processing_chunks_total,processing_chunks_done").eq("id", episodeId).maybeSingle();
     setEpisode(ep as any);
     const { data: cache } = await supabase.from("episode_vocab_cache").select("vocab,sentences").eq("episode_id", episodeId).maybeSingle();
     setVocab(((cache?.vocab ?? []) as VocabItem[]));
