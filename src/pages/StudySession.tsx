@@ -8,6 +8,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
+import { TutorChat } from "@/components/TutorChat";
 
 type VocabItem = {
   word: string; reading: string; meaning: string; part_of_speech: string;
@@ -320,6 +321,12 @@ export default function StudySession() {
           </div>
         </TabsContent>
       </Tabs>
+
+      <TutorChat
+        vocab={vocab}
+        focusWord={reviewCard?.word ?? quizCard?.word ?? null}
+        onWordMarkedKnown={(w) => setKnownWords((prev) => new Set([...prev, w]))}
+      />
     </div>
   );
 }
