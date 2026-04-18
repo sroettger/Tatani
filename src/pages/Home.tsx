@@ -37,6 +37,26 @@ export default function Home() {
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<LibraryEntry | null>(null);
+  const [removing, setRemoving] = useState(false);
+
+  const removeAnime = async () => {
+    if (!removeTarget || !user) return;
+    setRemoving(true);
+    const { error } = await supabase
+      .from("user_anime")
+      .delete()
+      .eq("id", removeTarget.id)
+      .eq("user_id", user.id);
+    setRemoving(false);
+    if (error) {
+      toast({ title: "Couldn't remove", description: error.message, variant: "destructive" });
+      return;
+    }
+    setLibrary(prev => prev.filter(e => e.id !== removeTarget.id));
+    toast({ title: "Removed", description: `${removeTarget.anime.title_en ?? removeTarget.anime.title_romaji} removed from your library.` });
+    setRemoveTarget(null);
+  };
 
   const load = async () => {
     if (!user) return;
