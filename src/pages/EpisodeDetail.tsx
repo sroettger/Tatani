@@ -142,14 +142,27 @@ export default function EpisodeDetail() {
               ? (progressStage || "Working on it…")
               : "We'll auto-fetch the Japanese subtitles, extract vocabulary with AI, and generate flashcards just for you."}
           </p>
-          {busy && (
-            <div className="mb-5">
-              <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
-                <div className="h-full w-1/3 gradient-primary animate-pulse" />
+          {busy && (() => {
+            const total = episode?.processing_chunks_total ?? 0;
+            const done = episode?.processing_chunks_done ?? 0;
+            const hasChunks = total > 0;
+            const pct = hasChunks ? Math.round((done / total) * 100) : 15;
+            return (
+              <div className="mb-5">
+                <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                  <div
+                    className={`h-full gradient-primary transition-all duration-500 ${hasChunks ? "" : "animate-pulse"}`}
+                    style={{ width: `${hasChunks ? pct : 33}%` }}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground mt-2">
+                  {hasChunks
+                    ? `Processed ${done} of ${total} chunks (${pct}%) — you can leave this page, processing continues in the background.`
+                    : "You can leave this page — processing continues in the background."}
+                </p>
               </div>
-              <p className="text-xs text-muted-foreground mt-2">You can leave this page — processing continues in the background.</p>
-            </div>
-          )}
+            );
+          })()}
           <div className="grid gap-2">
             <Button onClick={tryAutoFetch} disabled={busy} className="gradient-primary text-primary-foreground h-12">
               {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> Working…</> : <><Sparkles className="h-4 w-4" /> Auto-fetch & process</>}
