@@ -1,1 +1,13 @@
 project_id = "ppvvcmoaloqxxprgzdin"
+
+[functions.search-anime]
+verify_jwt = true
+
+[functions.fetch-subtitles]
+verify_jwt = true
+
+[functions.process-episode]
+verify_jwt = true
+
+[functions.placement-quiz-generate]
+verify_jwt = true
