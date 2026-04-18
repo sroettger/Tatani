@@ -2,104 +2,111 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
-All colors MUST be HSL.
-*/
+/* Anime Japanese Trainer — design system. All colors HSL. Mobile-first dark anime/sakura theme. */
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --background: 240 18% 8%;
+    --foreground: 30 30% 96%;
 
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card: 240 16% 12%;
+    --card-foreground: 30 30% 96%;
 
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover: 240 18% 10%;
+    --popover-foreground: 30 30% 96%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    --primary: 340 82% 62%;            /* sakura pink */
+    --primary-foreground: 0 0% 100%;
+    --primary-glow: 340 90% 72%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 250 60% 60%;          /* indigo */
+    --secondary-foreground: 0 0% 100%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    --muted: 240 12% 18%;
+    --muted-foreground: 240 8% 65%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --accent: 200 80% 60%;             /* aqua */
+    --accent-foreground: 240 18% 8%;
 
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 0 75% 58%;
+    --destructive-foreground: 0 0% 100%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    --success: 145 65% 50%;
+    --success-foreground: 0 0% 100%;
 
-    --radius: 0.5rem;
+    --warning: 38 92% 60%;
+    --warning-foreground: 240 18% 8%;
 
-    --sidebar-background: 0 0% 98%;
+    --border: 240 12% 20%;
+    --input: 240 12% 18%;
+    --ring: 340 82% 62%;
 
-    --sidebar-foreground: 240 5.3% 26.1%;
+    --radius: 1rem;
 
-    --sidebar-primary: 240 5.9% 10%;
+    --gradient-primary: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--secondary)));
+    --gradient-card: linear-gradient(160deg, hsl(240 16% 14%), hsl(240 18% 10%));
+    --gradient-hero: radial-gradient(circle at 20% 0%, hsl(340 82% 62% / 0.25), transparent 60%),
+                     radial-gradient(circle at 90% 30%, hsl(200 80% 60% / 0.2), transparent 55%),
+                     hsl(var(--background));
 
-    --sidebar-primary-foreground: 0 0% 98%;
+    --shadow-elegant: 0 10px 40px -12px hsl(340 82% 50% / 0.4);
+    --shadow-card: 0 8px 30px -10px hsl(240 50% 4% / 0.6);
 
-    --sidebar-accent: 240 4.8% 95.9%;
-
-    --sidebar-accent-foreground: 240 5.9% 10%;
-
-    --sidebar-border: 220 13% 91%;
-
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-background: 240 18% 8%;
+    --sidebar-foreground: 30 30% 96%;
+    --sidebar-primary: 340 82% 62%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 12% 18%;
+    --sidebar-accent-foreground: 30 30% 96%;
+    --sidebar-border: 240 12% 20%;
+    --sidebar-ring: 340 82% 62%;
   }
 
-  .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+  /* Light mode — present but app defaults to dark feel */
+  .light {
+    --background: 30 25% 97%;
+    --foreground: 240 18% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 18% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 18% 12%;
+    --primary: 340 82% 55%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 250 50% 55%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 30 15% 92%;
+    --muted-foreground: 240 8% 40%;
+    --accent: 200 80% 50%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 75% 50%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 30 15% 88%;
+    --input: 30 15% 88%;
+    --ring: 340 82% 55%;
   }
 }
 
 @layer base {
-  * {
-    @apply border-border;
-  }
-
+  * { @apply border-border; }
+  html, body, #root { height: 100%; }
   body {
     @apply bg-background text-foreground;
+    font-feature-settings: "ss01", "cv11";
+    -webkit-font-smoothing: antialiased;
   }
+}
+
+@layer utilities {
+  .gradient-primary { background-image: var(--gradient-primary); }
+  .gradient-hero { background-image: var(--gradient-hero); }
+  .gradient-card { background-image: var(--gradient-card); }
+  .shadow-elegant { box-shadow: var(--shadow-elegant); }
+  .shadow-card { box-shadow: var(--shadow-card); }
+  .text-balance { text-wrap: balance; }
+
+  .flip-card { perspective: 1200px; }
+  .flip-inner { transition: transform 0.6s; transform-style: preserve-3d; position: relative; }
+  .flip-inner.flipped { transform: rotateY(180deg); }
+  .flip-face { backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+  .flip-back { transform: rotateY(180deg); position: absolute; inset: 0; }
 }
