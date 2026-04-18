@@ -133,8 +133,51 @@ export default function Home() {
                   </div>
                   <Progress value={pct} className="h-1.5 mt-2" />
                 </div>
-                <ChevronRight className="h-5 w-5 text-muted-foreground self-center" />
+                  <Progress value={pct} className="h-1.5 mt-2" />
+                </div>
+                <div className="flex flex-col items-center gap-1 self-center">
+                  <ChevronRight className="h-5 w-5 text-muted-foreground" />
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                    onClick={(e) => { e.stopPropagation(); setRemoveTarget(entry); }}
+                    aria-label="Remove anime"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
+            </Card>
+          );
+        })}
+      </div>
+
+      <AddAnimeDialog open={addOpen} onOpenChange={setAddOpen} onAdded={load} />
+
+      <AlertDialog open={!!removeTarget} onOpenChange={(o) => !o && setRemoveTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove from library?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {removeTarget && `"${removeTarget.anime.title_en ?? removeTarget.anime.title_romaji}" will be removed from your library. Your study progress and learned words are kept.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removing}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); removeAnime(); }}
+              disabled={removing}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {removing ? "Removing…" : "Remove"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
             </Card>
           );
         })}
