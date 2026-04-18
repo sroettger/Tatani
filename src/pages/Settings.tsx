@@ -61,6 +61,12 @@ export default function Settings() {
         </Card>
 
         <Card className="p-4 gradient-card border-border/50">
+          <h3 className="font-semibold mb-1">Reset study data <span className="text-xs text-muted-foreground font-normal">(dev)</span></h3>
+          <p className="text-xs text-muted-foreground mb-3">Wipes known words, quiz results, and study sessions, then sends you back to onboarding.</p>
+          <Button variant="outline" onClick={resetStudyData}><Trash2 className="h-4 w-4" /> Reset study data</Button>
+        </Card>
+
+        <Card className="p-4 gradient-card border-border/50">
           <h3 className="font-semibold mb-1">Sign out</h3>
           <p className="text-xs text-muted-foreground mb-3">You'll need to sign back in with Google.</p>
           <Button variant="destructive" onClick={async () => { await signOut(); navigate("/auth"); }}>
