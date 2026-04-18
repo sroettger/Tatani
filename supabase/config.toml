@@ -11,3 +11,6 @@ verify_jwt = false
 
 [functions.placement-quiz-generate]
 verify_jwt = false
+
+[functions.add-anime-to-library]
+verify_jwt = false
