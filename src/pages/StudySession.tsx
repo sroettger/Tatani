@@ -77,8 +77,16 @@ export default function StudySession() {
     })();
   }, [episodeId, user, profile?.jlpt_level]);
 
+  // Quiz only shows words the user hasn't already marked as known (either before
+  // this session or during the review tab). Review keeps the original list so users
+  // can still see/skip cards in order.
+  const quizVocab = useMemo(
+    () => vocab.filter(v => !knownWords.has(v.word)),
+    [vocab, knownWords],
+  );
+
   const reviewCard = vocab[reviewIdx];
-  const quizCard = vocab[quizIdx];
+  const quizCard = quizVocab[quizIdx];
 
   const recordWord = async (word: string, reading: string, jlpt: string, gotItRight: boolean) => {
     if (!user) return;
@@ -97,6 +105,15 @@ export default function StudySession() {
       state: newState, correct_streak: newStreak, last_reviewed_at: new Date().toISOString(),
     }, { onConflict: "user_id,word" });
     setStreaks(prev => ({ ...prev, [word]: newStreak }));
+    setKnownWords(prev => {
+      if (newState === "known" && !prev.has(word)) {
+        const next = new Set(prev); next.add(word); return next;
+      }
+      if (newState !== "known" && prev.has(word)) {
+        const next = new Set(prev); next.delete(word); return next;
+      }
+      return prev;
+    });
     return newState;
   };
 
@@ -119,11 +136,11 @@ export default function StudySession() {
 
   const distractors = useMemo(() => {
     if (!quizCard) return [];
-    const others = vocab.filter(v => v.word !== quizCard.word).map(v => v.meaning);
+    const others = quizVocab.filter(v => v.word !== quizCard.word).map(v => v.meaning);
     const shuffled = [...others].sort(() => Math.random() - 0.5).slice(0, 3);
     const all = [quizCard.meaning, ...shuffled];
     return all.sort(() => Math.random() - 0.5);
-  }, [quizCard, vocab]);
+  }, [quizCard, quizVocab]);
 
   const correctIndex = useMemo(() => distractors.indexOf(quizCard?.meaning ?? ""), [distractors, quizCard]);
 
@@ -141,7 +158,7 @@ export default function StudySession() {
     await recordWord(quizCard.word, quizCard.reading, quizCard.jlpt_level, correct);
     setTimeout(() => {
       setQuizChoice(null);
-      if (quizIdx + 1 < vocab.length) setQuizIdx(quizIdx + 1);
+      if (quizIdx + 1 < quizVocab.length) setQuizIdx(quizIdx + 1);
       else finish("quiz");
     }, 900);
   };
@@ -184,7 +201,7 @@ export default function StudySession() {
           <p className="text-sm text-muted-foreground mb-6">
             {done === "review"
               ? `You marked ${reviewedKnown} as known out of ${vocab.length}.`
-              : `You got ${quizCorrect} / ${vocab.length} correct.`}
+              : `You got ${quizCorrect} / ${quizVocab.length} correct.`}
           </p>
           <div className="grid gap-2">
             <Button onClick={() => navigate(`/episode/${episodeId}`)} className="gradient-primary text-primary-foreground">Back to episode</Button>
@@ -269,25 +286,33 @@ export default function StudySession() {
         </TabsContent>
 
         <TabsContent value="quiz">
-          <Progress value={(quizIdx / vocab.length) * 100} className="h-2 mb-4" />
-          <div className="text-xs text-muted-foreground text-center mb-4">{quizIdx + 1} / {vocab.length}</div>
+          {quizVocab.length === 0 ? (
+            <Card className="p-8 gradient-card border-border/50 text-center">
+              <p className="text-sm text-muted-foreground">
+                Nothing to quiz — you already know every word in this episode! 🎉
+              </p>
+            </Card>
+          ) : (
+            <>
+              <Progress value={(quizIdx / quizVocab.length) * 100} className="h-2 mb-4" />
+              <div className="text-xs text-muted-foreground text-center mb-4">{Math.min(quizIdx + 1, quizVocab.length)} / {quizVocab.length}</div>
 
-          <Card className="p-6 gradient-card border-border/50 shadow-card mb-4 text-center">
-            <div className="text-xs text-muted-foreground mb-2">What does this mean?</div>
-            {(() => {
-              const showKanji = !quizCard ? false : (streaks[quizCard.word] ?? 0) >= KANJI_THRESHOLD || quizCard.word === quizCard.reading;
-              return (
-                <>
-                  <div className="font-jp text-5xl font-bold mb-2">
-                    {showKanji ? quizCard?.word : quizCard?.reading}
-                  </div>
-                  {showKanji
-                    ? <div className="font-jp text-muted-foreground">{quizCard?.reading}</div>
-                    : quizCard && quizCard.word !== quizCard.reading && <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Hiragana mode</div>}
-                </>
-              );
-            })()}
-          </Card>
+              <Card className="p-6 gradient-card border-border/50 shadow-card mb-4 text-center">
+                <div className="text-xs text-muted-foreground mb-2">What does this mean?</div>
+                {(() => {
+                  const showKanji = !quizCard ? false : (streaks[quizCard.word] ?? 0) >= KANJI_THRESHOLD || quizCard.word === quizCard.reading;
+                  return (
+                    <>
+                      <div className="font-jp text-5xl font-bold mb-2">
+                        {showKanji ? quizCard?.word : quizCard?.reading}
+                      </div>
+                      {showKanji
+                        ? <div className="font-jp text-muted-foreground">{quizCard?.reading}</div>
+                        : quizCard && quizCard.word !== quizCard.reading && <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Hiragana mode</div>}
+                    </>
+                  );
+                })()}
+              </Card>
 
           <div className="grid gap-2">
             {distractors.map((d, i) => {
@@ -319,6 +344,8 @@ export default function StudySession() {
               I don't know
             </Button>
           </div>
+            </>
+          )}
         </TabsContent>
       </Tabs>
 
