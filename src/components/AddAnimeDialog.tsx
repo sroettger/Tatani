@@ -45,45 +45,9 @@ export function AddAnimeDialog({
 
   const add = async (r: SearchResult) => {
     if (!user) return;
-    // upsert anime catalog entry
-    const { data: existing } = await supabase.from("anime").select("id").eq("anilist_id", r.anilist_id).maybeSingle();
-    let animeId = existing?.id;
-    if (!animeId) {
-      const { data: ins, error } = await supabase
-        .from("anime")
-        .insert({
-          anilist_id: r.anilist_id,
-          mal_id: r.mal_id ?? null,
-          title_romaji: r.title_romaji,
-          title_en: r.title_en,
-          title_jp: r.title_jp,
-          cover_url: r.cover_url,
-          year: r.year,
-          season_count: 1,
-          episode_count: r.episode_count,
-          synopsis: r.synopsis,
-        })
-        .select("id").single();
-      if (error) { toast.error("Couldn't add", { description: error.message }); return; }
-      animeId = ins!.id;
-
-      // create season 1 + episodes
-      const { data: season } = await supabase
-        .from("seasons")
-        .insert({ anime_id: animeId, season_number: 1, episode_count: r.episode_count })
-        .select("id").single();
-      if (season && r.episode_count > 0) {
-        const eps = Array.from({ length: r.episode_count }, (_, i) => ({
-          season_id: season.id,
-          episode_number: i + 1,
-        }));
-        await supabase.from("episodes").insert(eps);
-      }
-    }
-
-    const { error: linkErr } = await supabase.from("user_anime").insert({ user_id: user.id, anime_id: animeId });
-    if (linkErr && !linkErr.message.includes("duplicate")) {
-      toast.error("Couldn't add to library", { description: linkErr.message });
+    const { data, error } = await supabase.functions.invoke("add-anime-to-library", { body: { anime: r } });
+    if (error || data?.error) {
+      toast.error("Couldn't add", { description: error?.message ?? data?.error });
       return;
     }
     toast.success("Added to your library");
