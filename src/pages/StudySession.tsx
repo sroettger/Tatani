@@ -80,6 +80,7 @@ export default function StudySession() {
       user_id: user.id, word, reading, jlpt_level: (jlpt as any) ?? null,
       state: newState, correct_streak: newStreak, last_reviewed_at: new Date().toISOString(),
     }, { onConflict: "user_id,word" });
+    setStreaks(prev => ({ ...prev, [word]: newStreak }));
     return newState;
   };
 
