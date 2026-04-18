@@ -131,15 +131,15 @@ Deno.serve(async (req) => {
     // Run the heavy AI extraction in the background so the request returns immediately.
     // The client polls `episodes.processing_status` (and `episode_vocab_cache`) for progress.
     const work = (async () => {
-      try {
+      const callAi = async (text: string, vocabTarget: string) => {
         const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
           method: "POST",
           headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             model: "google/gemini-2.5-flash",
             messages: [
-              { role: "system", content: "You are a Japanese language teacher creating a comprehensive study database from anime subtitles. Extract EVERY meaningful vocabulary word that appears in the subtitles — do not filter by difficulty or learner level. Include common words (N5/N4) AND advanced words (N1/N2) AND proper nouns and slang. Aim for 150-250 vocabulary entries, 15-25 grammar points, and 25-40 example sentences. Tag each word with its accurate JLPT level so individual learners can filter client-side. You MUST call the extract_japanese_learning_data function." },
-              { role: "user", content: `Extract ALL Japanese vocabulary from these subtitles. Be exhaustive — capture every meaningful word regardless of difficulty:\n\n${cleaned}` },
+              { role: "system", content: `You are a Japanese language teacher building a study database from anime subtitles. Extract EVERY meaningful vocabulary word that appears in the subtitles regardless of difficulty (N5 through N1, plus proper nouns and slang). Aim for ${vocabTarget} vocabulary entries, 10-20 grammar points, and 20-30 example sentences. Tag each word with its accurate JLPT level. You MUST call the extract_japanese_learning_data function and return valid JSON.` },
+              { role: "user", content: `Extract Japanese vocabulary from these subtitles:\n\n${text}` },
             ],
             tools: [EXTRACTION_TOOL],
             tool_choice: { type: "function", function: { name: "extract_japanese_learning_data" } },
@@ -147,23 +147,40 @@ Deno.serve(async (req) => {
         });
         if (!aiResp.ok) {
           const t = await aiResp.text();
-          console.error("AI gateway error", aiResp.status, t);
-          await supabase.from("episodes").update({ processing_status: "failed" }).eq("id", episode_id);
-          return;
+          throw new Error(`ai_gateway_${aiResp.status}: ${t.slice(0, 500)}`);
         }
-        const aiJson = await aiResp.json();
-        const call = aiJson?.choices?.[0]?.message?.tool_calls?.[0];
+        return await aiResp.json();
+      };
+
+      const tryParse = (aiJson: any) => {
+        const choice = aiJson?.choices?.[0];
+        const call = choice?.message?.tool_calls?.[0];
+        const finish = choice?.finish_reason;
         if (!call?.function?.arguments) {
-          console.error("no tool_call in AI response:", JSON.stringify(aiJson).slice(0, 2000));
-          await supabase.from("episodes").update({ processing_status: "failed" }).eq("id", episode_id);
-          return;
+          throw new Error(`no_tool_call (finish_reason=${finish}): ${JSON.stringify(aiJson).slice(0, 1500)}`);
         }
+        try {
+          return { parsed: JSON.parse(call.function.arguments), finish };
+        } catch (e) {
+          throw new Error(`parse_fail (finish_reason=${finish}, args_len=${call.function.arguments.length}): ${(e as Error).message}`);
+        }
+      };
+
+      try {
         let extracted: any;
-        try { extracted = JSON.parse(call.function.arguments); }
-        catch (e) {
-          console.error("parse fail", e);
-          await supabase.from("episodes").update({ processing_status: "failed" }).eq("id", episode_id);
-          return;
+        try {
+          const aiJson = await callAi(cleaned, "120-200");
+          const { parsed, finish } = tryParse(aiJson);
+          extracted = parsed;
+          console.log(`Episode ${episode_id} first pass ok (finish=${finish})`);
+        } catch (firstErr) {
+          console.warn(`Episode ${episode_id} first pass failed:`, (firstErr as Error).message);
+          // Retry with a smaller subtitle chunk + lower target so the tool_call arguments fit.
+          const shorter = cleaned.slice(0, 18000);
+          const aiJson2 = await callAi(shorter, "60-100");
+          const { parsed, finish } = tryParse(aiJson2);
+          extracted = parsed;
+          console.log(`Episode ${episode_id} retry ok (finish=${finish})`);
         }
         const payload = {
           episode_id,
@@ -175,7 +192,7 @@ Deno.serve(async (req) => {
         await supabase.from("episodes").update({ processing_status: "ready" }).eq("id", episode_id);
         console.log(`Episode ${episode_id} processed: ${payload.vocab.length} vocab, ${payload.grammar.length} grammar, ${payload.sentences.length} sentences`);
       } catch (e) {
-        console.error("background processing failed", e);
+        console.error(`Episode ${episode_id} background processing failed:`, e instanceof Error ? e.message : e);
         await supabase.from("episodes").update({ processing_status: "failed" }).eq("id", episode_id);
       }
     })();
