@@ -176,12 +176,3 @@ export default function Home() {
     </div>
   );
 }
-            </Card>
-          );
-        })}
-      </div>
-
-      <AddAnimeDialog open={addOpen} onOpenChange={setAddOpen} onAdded={load} />
-    </div>
-  );
-}
