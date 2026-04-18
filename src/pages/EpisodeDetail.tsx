@@ -3,10 +3,14 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ChevronLeft, Loader2, Upload, Sparkles, BookOpen, BrainCircuit, Volume2 } from "lucide-react";
+import { ChevronLeft, Loader2, Upload, Sparkles, BookOpen, BrainCircuit, Volume2, Plus } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
+
+// JLPT difficulty rank — higher number = harder. "none" treated as harder than N1
+// so unclassified/proper-noun vocab is never auto-skipped.
+const JLPT_RANK: Record<string, number> = { N5: 1, N4: 2, N3: 3, N2: 4, N1: 5, none: 6 };
 
 type VocabItem = {
   word: string;
@@ -22,13 +26,14 @@ type SentenceItem = { jp: string; en: string };
 export default function EpisodeDetail() {
   const { episodeId } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const fileRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<number | null>(null);
   const [episode, setEpisode] = useState<{ id: string; episode_number: number; processing_status: string; processing_chunks_total: number; processing_chunks_done: number } | null>(null);
   const [vocab, setVocab] = useState<VocabItem[]>([]);
   const [sentences, setSentences] = useState<SentenceItem[]>([]);
   const [knownWords, setKnownWords] = useState<Set<string>>(new Set());
+  const [addedBack, setAddedBack] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [progressStage, setProgressStage] = useState<string>("");
   const [showSkipped, setShowSkipped] = useState(false);
@@ -119,9 +124,39 @@ export default function EpisodeDetail() {
     speechSynthesis.speak(u);
   };
 
-  const newVocab = vocab.filter(v => !knownWords.has(v.word));
-  const skippedVocab = vocab.filter(v => knownWords.has(v.word));
+  // A word is "below my level" if its JLPT rank is strictly easier than my profile level.
+  // E.g. profile=N4 (rank 2) → N5 (rank 1) is auto-skipped, N4/N3/etc. stay.
+  const myLevel = profile?.jlpt_level && profile.jlpt_level !== "none" ? profile.jlpt_level : null;
+  const myRank = myLevel ? JLPT_RANK[myLevel] : 0;
+  const isBelowLevel = (lvl: string) => myRank > 0 && (JLPT_RANK[lvl] ?? 99) < myRank;
+
+  const newVocab = vocab.filter(v =>
+    !knownWords.has(v.word) && (!isBelowLevel(v.jlpt_level) || addedBack.has(v.word))
+  );
+  const skippedVocab = vocab.filter(v =>
+    !addedBack.has(v.word) && (knownWords.has(v.word) || isBelowLevel(v.jlpt_level))
+  );
   const masteryPct = vocab.length ? Math.round((skippedVocab.length / vocab.length) * 100) : 0;
+
+  const addBack = async (v: VocabItem) => {
+    if (!user) return;
+    setAddedBack(prev => new Set(prev).add(v.word));
+    // Persist as 'unknown' so it survives reloads and gets included in study.
+    await supabase.from("user_word_state").upsert({
+      user_id: user.id,
+      word: v.word,
+      reading: v.reading,
+      jlpt_level: (v.jlpt_level as any) ?? null,
+      state: "unknown" as const,
+    }, { onConflict: "user_id,word" });
+    // If this word was previously marked known, drop it from the local known set too.
+    setKnownWords(prev => {
+      const next = new Set(prev);
+      next.delete(v.word);
+      return next;
+    });
+    toast.success(`Added "${v.word}" to study`);
+  };
 
   return (
     <div className="max-w-2xl mx-auto px-5 pt-4 pb-10">
@@ -212,19 +247,28 @@ export default function EpisodeDetail() {
                 onClick={() => setShowSkipped(s => !s)}
                 className="text-sm text-muted-foreground hover:text-foreground"
               >
-                {showSkipped ? "Hide" : "Show"} {skippedVocab.length} skipped (already known)
+                {showSkipped ? "Hide" : "Show"} {skippedVocab.length} skipped (below your level or already known)
               </button>
               {showSkipped && (
                 <div className="grid gap-2 mt-3">
-                  {skippedVocab.map((v, i) => (
-                    <Card key={i} className="p-3 gradient-card border-border/50 flex items-center justify-between">
-                      <div>
-                        <div className="font-jp font-semibold">{v.word} <span className="text-muted-foreground text-xs">{v.reading}</span></div>
-                        <div className="text-xs text-muted-foreground">{v.meaning}</div>
-                      </div>
-                      <Badge variant="secondary" className="text-[10px]">{v.jlpt_level}</Badge>
-                    </Card>
-                  ))}
+                  {skippedVocab.map((v, i) => {
+                    const reason = knownWords.has(v.word) ? "known" : "below level";
+                    return (
+                      <Card key={i} className="p-3 gradient-card border-border/50 flex items-center justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-jp font-semibold truncate">{v.word} <span className="text-muted-foreground text-xs">{v.reading}</span></div>
+                          <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
+                          <div className="text-[10px] text-muted-foreground/70 mt-0.5">{reason}</div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <Badge variant="secondary" className="text-[10px]">{v.jlpt_level}</Badge>
+                          <Button size="sm" variant="outline" className="h-8 px-2" onClick={() => addBack(v)}>
+                            <Plus className="h-3 w-3" /> Add
+                          </Button>
+                        </div>
+                      </Card>
+                    );
+                  })}
                 </div>
               )}
             </div>
