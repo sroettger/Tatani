@@ -124,7 +124,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    await supabase.from("episodes").update({ processing_status: "processing" }).eq("id", episode_id);
+    await supabase.from("episodes").update({ processing_status: "processing", processing_chunks_done: 0, processing_chunks_total: 0 }).eq("id", episode_id);
 
     const cleaned = stripSubtitleFormatting(subtitle_text).slice(0, 60000);
 
@@ -185,6 +185,17 @@ Deno.serve(async (req) => {
         }
       };
 
+      let chunksDone = 0;
+      const bumpProgress = async () => {
+        chunksDone++;
+        // Fire and forget — the row update doesn't need to block the next chunk.
+        supabase
+          .from("episodes")
+          .update({ processing_chunks_done: chunksDone })
+          .eq("id", episode_id)
+          .then(({ error }) => { if (error) console.warn("progress update failed:", error.message); });
+      };
+
       const processChunk = async (text: string, idx: number) => {
         try {
           const aiJson = await callAi(text);
@@ -193,6 +204,8 @@ Deno.serve(async (req) => {
         } catch (e) {
           console.warn(`Episode ${episode_id} chunk ${idx} failed:`, (e as Error).message);
           return null;
+        } finally {
+          await bumpProgress();
         }
       };
 
@@ -214,6 +227,7 @@ Deno.serve(async (req) => {
       try {
         const chunks = chunkText(cleaned, CHUNK_SIZE);
         console.log(`Episode ${episode_id}: split into ${chunks.length} chunk(s), running with concurrency ${MAX_CONCURRENCY}`);
+        await supabase.from("episodes").update({ processing_chunks_total: chunks.length, processing_chunks_done: 0 }).eq("id", episode_id);
         const partials = await runWithConcurrency(chunks, MAX_CONCURRENCY, processChunk);
 
         const vocabMap = new Map<string, any>();

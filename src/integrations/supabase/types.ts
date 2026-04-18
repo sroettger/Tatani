@@ -105,6 +105,8 @@ export type Database = {
           created_at: string
           episode_number: number
           id: string
+          processing_chunks_done: number
+          processing_chunks_total: number
           processing_status: Database["public"]["Enums"]["episode_status"]
           season_id: string
           title_en: string | null
@@ -115,6 +117,8 @@ export type Database = {
           created_at?: string
           episode_number: number
           id?: string
+          processing_chunks_done?: number
+          processing_chunks_total?: number
           processing_status?: Database["public"]["Enums"]["episode_status"]
           season_id: string
           title_en?: string | null
@@ -125,6 +129,8 @@ export type Database = {
           created_at?: string
           episode_number?: number
           id?: string
+          processing_chunks_done?: number
+          processing_chunks_total?: number
           processing_status?: Database["public"]["Enums"]["episode_status"]
           season_id?: string
           title_en?: string | null
