@@ -7,9 +7,26 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
+const JLPT_LEVELS = ["N5", "N4", "N3", "N2", "N1"] as const;
+type JlptLevel = typeof JLPT_LEVELS[number];
+
 export default function Settings() {
   const { profile, signOut, refreshProfile, user } = useAuth();
   const navigate = useNavigate();
+
+  const setJlptLevel = async (level: JlptLevel) => {
+    if (!user || profile?.jlpt_level === level) return;
+    const { error } = await supabase
+      .from("profiles")
+      .update({ jlpt_level: level, placement_done: true })
+      .eq("user_id", user.id);
+    if (error) {
+      toast.error("Couldn't update level");
+      return;
+    }
+    await refreshProfile();
+    toast.success(`Level set to ${level}`);
+  };
 
   const retakePlacement = async () => {
     if (!user) return;
@@ -51,6 +68,23 @@ export default function Settings() {
               <div className="font-semibold">{profile?.display_name ?? "User"}</div>
               <div className="text-xs text-muted-foreground">JLPT {profile?.jlpt_level === "none" ? "—" : profile?.jlpt_level}</div>
             </div>
+          </div>
+        </Card>
+
+        <Card className="p-4 gradient-card border-border/50">
+          <h3 className="font-semibold mb-1">JLPT level</h3>
+          <p className="text-xs text-muted-foreground mb-3">Set your level manually. This controls which words are skipped by default.</p>
+          <div className="grid grid-cols-5 gap-2">
+            {JLPT_LEVELS.map((lvl) => (
+              <Button
+                key={lvl}
+                variant={profile?.jlpt_level === lvl ? "default" : "outline"}
+                onClick={() => setJlptLevel(lvl)}
+                className="h-10"
+              >
+                {lvl}
+              </Button>
+            ))}
           </div>
         </Card>
 
