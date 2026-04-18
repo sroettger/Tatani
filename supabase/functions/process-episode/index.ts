@@ -124,7 +124,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    await supabase.from("episodes").update({ processing_status: "processing" }).eq("id", episode_id);
+    await supabase.from("episodes").update({ processing_status: "processing", processing_chunks_done: 0, processing_chunks_total: 0 }).eq("id", episode_id);
 
     const cleaned = stripSubtitleFormatting(subtitle_text).slice(0, 60000);
 
