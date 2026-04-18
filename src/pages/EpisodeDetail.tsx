@@ -247,19 +247,28 @@ export default function EpisodeDetail() {
                 onClick={() => setShowSkipped(s => !s)}
                 className="text-sm text-muted-foreground hover:text-foreground"
               >
-                {showSkipped ? "Hide" : "Show"} {skippedVocab.length} skipped (already known)
+                {showSkipped ? "Hide" : "Show"} {skippedVocab.length} skipped (below your level or already known)
               </button>
               {showSkipped && (
                 <div className="grid gap-2 mt-3">
-                  {skippedVocab.map((v, i) => (
-                    <Card key={i} className="p-3 gradient-card border-border/50 flex items-center justify-between">
-                      <div>
-                        <div className="font-jp font-semibold">{v.word} <span className="text-muted-foreground text-xs">{v.reading}</span></div>
-                        <div className="text-xs text-muted-foreground">{v.meaning}</div>
-                      </div>
-                      <Badge variant="secondary" className="text-[10px]">{v.jlpt_level}</Badge>
-                    </Card>
-                  ))}
+                  {skippedVocab.map((v, i) => {
+                    const reason = knownWords.has(v.word) ? "known" : "below level";
+                    return (
+                      <Card key={i} className="p-3 gradient-card border-border/50 flex items-center justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-jp font-semibold truncate">{v.word} <span className="text-muted-foreground text-xs">{v.reading}</span></div>
+                          <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
+                          <div className="text-[10px] text-muted-foreground/70 mt-0.5">{reason}</div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <Badge variant="secondary" className="text-[10px]">{v.jlpt_level}</Badge>
+                          <Button size="sm" variant="outline" className="h-8 px-2" onClick={() => addBack(v)}>
+                            <Plus className="h-3 w-3" /> Add
+                          </Button>
+                        </div>
+                      </Card>
+                    );
+                  })}
                 </div>
               )}
             </div>
