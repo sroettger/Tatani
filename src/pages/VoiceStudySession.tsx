@@ -212,30 +212,39 @@ export default function VoiceStudySession() {
   // ---------- voice command handling ----------
   const handleVoiceInput = (transcripts: string[]) => {
     if (!runningRef.current) return;
-    const t = transcripts[0] ?? "";
-    if (!t) return;
+    if (transcripts.length === 0) return;
 
-    if (transcripts.some(matchesPause)) { pause(); return; }
-    if (transcripts.some(matchesResume)) { resume(); return; }
-    if (transcripts.some(matchesRepeat)) { repeatPrompt(); return; }
+    // tokenize every alternative into a single deduped token bag
+    const allTokens = Array.from(new Set(transcripts.flatMap(tokensOf)));
+    console.log("[voice] heard:", transcripts, "tokens:", allTokens, "awaiting:", awaitingRef.current);
+
+    if (matchesPause(allTokens)) { console.log("[voice] -> pause"); pause(); return; }
+    if (matchesResume(allTokens)) { console.log("[voice] -> resume"); resume(); return; }
 
     if (!awaitingRef.current) return;
     const c = vocabRef.current[idxRef.current];
     if (!c) return;
 
+    // "repeat" only valid while awaiting (otherwise it loops with TTS feedback)
+    if (matchesRepeat(allTokens) && !matchesYes(allTokens) && !matchesNo(allTokens)) {
+      console.log("[voice] -> repeat"); repeatPrompt(); return;
+    }
+
     if (modeRef.current === "review") {
-      if (transcripts.some(matchesMeaning)) { revealMeaning(c); return; }
-      if (transcripts.some(matchesYes)) { gradeReview(true); return; }
-      if (transcripts.some(matchesNo)) { gradeReview(false); return; }
+      if (matchesMeaning(allTokens)) { console.log("[voice] -> meaning"); revealMeaning(c); return; }
+      // YES wins ties (we want to be optimistic — user can say "skip" explicitly for no)
+      if (matchesYes(allTokens)) { console.log("[voice] -> known"); gradeReview(true); return; }
+      if (matchesNo(allTokens)) { console.log("[voice] -> learning"); gradeReview(false); return; }
+      console.log("[voice] no match for review");
     } else {
-      // quiz: check if any transcript matches any meaning variant
-      if (transcripts.some(matchesNo)) { gradeQuiz(false, c); return; }
+      if (matchesNo(allTokens)) { console.log("[voice] -> quiz wrong"); gradeQuiz(false, c); return; }
       const targets = meaningVariants(c.meaning);
-      const hit = transcripts.some(tr =>
-        targets.some(target => target && (tr === target || tr.includes(target) || target.includes(tr)))
-      );
-      if (hit) { gradeQuiz(true, c); return; }
-      // unknown utterance — just ignore, keep listening
+      const hit = transcripts.some(tr => {
+        const trN = normalize(tr);
+        return targets.some(target => target && (trN === target || trN.includes(target) || target.includes(trN)));
+      });
+      if (hit) { console.log("[voice] -> quiz correct"); gradeQuiz(true, c); return; }
+      console.log("[voice] no quiz match, targets:", targets);
     }
   };
 
