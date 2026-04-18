@@ -24,11 +24,13 @@ export default function EpisodeDetail() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const fileRef = useRef<HTMLInputElement>(null);
+  const pollRef = useRef<number | null>(null);
   const [episode, setEpisode] = useState<{ id: string; episode_number: number; processing_status: string } | null>(null);
   const [vocab, setVocab] = useState<VocabItem[]>([]);
   const [sentences, setSentences] = useState<SentenceItem[]>([]);
   const [knownWords, setKnownWords] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [progressStage, setProgressStage] = useState<string>("");
   const [showSkipped, setShowSkipped] = useState(false);
 
   const load = async () => {
@@ -40,30 +42,63 @@ export default function EpisodeDetail() {
     setSentences(((cache?.sentences ?? []) as SentenceItem[]));
     const { data: words } = await supabase.from("user_word_state").select("word,state").eq("user_id", user.id).eq("state", "known");
     setKnownWords(new Set((words ?? []).map((w: any) => w.word)));
+    return ep;
   };
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [episodeId, user]);
+  useEffect(() => {
+    load();
+    return () => { if (pollRef.current) window.clearInterval(pollRef.current); };
+    // eslint-disable-next-line
+  }, [episodeId, user]);
+
+  // Poll while processing
+  useEffect(() => {
+    if (episode?.processing_status === "processing" && !pollRef.current) {
+      setBusy(true);
+      setProgressStage("Extracting vocabulary with AI…");
+      pollRef.current = window.setInterval(async () => {
+        const ep = await load();
+        if ((ep as any)?.processing_status === "ready") {
+          if (pollRef.current) { window.clearInterval(pollRef.current); pollRef.current = null; }
+          setBusy(false); setProgressStage("");
+          toast.success("Episode processed!");
+        } else if ((ep as any)?.processing_status === "failed") {
+          if (pollRef.current) { window.clearInterval(pollRef.current); pollRef.current = null; }
+          setBusy(false); setProgressStage("");
+          toast.error("Processing failed", { description: "Please try again." });
+        }
+      }, 3000);
+    }
+  }, [episode?.processing_status]);
 
   const startProcess = async (subText: string) => {
     if (!episodeId) return;
     setBusy(true);
+    setProgressStage("Sending subtitles to AI…");
     const { data, error } = await supabase.functions.invoke("process-episode", {
       body: { episode_id: episodeId, subtitle_text: subText },
     });
-    setBusy(false);
-    if (error) { toast.error("Processing failed", { description: error.message }); return; }
-    if ((data as any)?.error) { toast.error("Processing failed", { description: (data as any).error }); return; }
-    toast.success((data as any)?.cached ? "Loaded from cache" : "Episode processed!");
-    load();
+    if (error) { setBusy(false); setProgressStage(""); toast.error("Processing failed", { description: error.message }); return; }
+    if ((data as any)?.error) { setBusy(false); setProgressStage(""); toast.error("Processing failed", { description: (data as any).error }); return; }
+    if ((data as any)?.cached) {
+      setBusy(false); setProgressStage("");
+      toast.success("Loaded from cache");
+      load();
+      return;
+    }
+    // Background processing started — switch to polling
+    setProgressStage("Extracting vocabulary with AI… (this can take 1–2 minutes)");
+    await load();
   };
 
   const tryAutoFetch = async () => {
     if (!episodeId) return;
     setBusy(true);
+    setProgressStage("Fetching Japanese subtitles…");
     const { data, error } = await supabase.functions.invoke("fetch-subtitles", { body: { episode_id: episodeId } });
-    if (error) { setBusy(false); toast.error("Subtitle fetch failed", { description: error.message }); return; }
+    if (error) { setBusy(false); setProgressStage(""); toast.error("Subtitle fetch failed", { description: error.message }); return; }
     if (!data?.found) {
-      setBusy(false);
+      setBusy(false); setProgressStage("");
       toast.message("No auto-subtitles found", { description: "Upload a .srt or .ass file to continue." });
       fileRef.current?.click();
       return;
