@@ -344,6 +344,8 @@ export default function StudySession() {
               I don't know
             </Button>
           </div>
+            </>
+          )}
         </TabsContent>
       </Tabs>
 
