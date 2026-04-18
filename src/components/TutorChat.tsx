@@ -52,11 +52,13 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
   }, [messages, loading]);
 
   // If focusWord changes while open, prefill input
+  // Reset conversation whenever the focused word changes so context stays accurate.
   useEffect(() => {
-    if (open && focusWord && messages.length === 0) {
-      setInput(`Tell me more about ${focusWord}`);
-    }
-  }, [focusWord, open]);
+    setMessages([]);
+    setInput(focusWord ? `Tell me more about ${focusWord}` : "");
+    abortRef.current?.abort();
+    setLoading(false);
+  }, [focusWord]);
 
   const markWordKnown = async (word: string) => {
     if (!user) return;
