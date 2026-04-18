@@ -201,7 +201,7 @@ export default function StudySession() {
           <p className="text-sm text-muted-foreground mb-6">
             {done === "review"
               ? `You marked ${reviewedKnown} as known out of ${vocab.length}.`
-              : `You got ${quizCorrect} / ${vocab.length} correct.`}
+              : `You got ${quizCorrect} / ${quizVocab.length} correct.`}
           </p>
           <div className="grid gap-2">
             <Button onClick={() => navigate(`/episode/${episodeId}`)} className="gradient-primary text-primary-foreground">Back to episode</Button>
