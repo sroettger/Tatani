@@ -26,13 +26,14 @@ type SentenceItem = { jp: string; en: string };
 export default function EpisodeDetail() {
   const { episodeId } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const fileRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<number | null>(null);
   const [episode, setEpisode] = useState<{ id: string; episode_number: number; processing_status: string; processing_chunks_total: number; processing_chunks_done: number } | null>(null);
   const [vocab, setVocab] = useState<VocabItem[]>([]);
   const [sentences, setSentences] = useState<SentenceItem[]>([]);
   const [knownWords, setKnownWords] = useState<Set<string>>(new Set());
+  const [addedBack, setAddedBack] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [progressStage, setProgressStage] = useState<string>("");
   const [showSkipped, setShowSkipped] = useState(false);
