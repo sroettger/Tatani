@@ -20,6 +20,9 @@ export default function StudySession() {
   const { user } = useAuth();
   const [vocab, setVocab] = useState<VocabItem[]>([]);
   const [knownWords, setKnownWords] = useState<Set<string>>(new Set());
+  // word -> current correct_streak; words at >=2 show kanji, otherwise hiragana
+  const [streaks, setStreaks] = useState<Record<string, number>>({});
+  const KANJI_THRESHOLD = 2;
   const [sessionId, setSessionId] = useState<string | null>(null);
 
   // review state
@@ -39,9 +42,15 @@ export default function StudySession() {
     (async () => {
       const { data: cache } = await supabase.from("episode_vocab_cache").select("vocab").eq("episode_id", episodeId).maybeSingle();
       const all = ((cache?.vocab ?? []) as VocabItem[]);
-      const { data: known } = await supabase.from("user_word_state").select("word").eq("user_id", user.id).eq("state", "known");
-      const knownSet = new Set((known ?? []).map((k: any) => k.word));
+      const { data: states } = await supabase
+        .from("user_word_state")
+        .select("word,state,correct_streak")
+        .eq("user_id", user.id);
+      const knownSet = new Set((states ?? []).filter((k: any) => k.state === "known").map((k: any) => k.word));
+      const streakMap: Record<string, number> = {};
+      (states ?? []).forEach((s: any) => { streakMap[s.word] = s.correct_streak ?? 0; });
       setKnownWords(knownSet);
+      setStreaks(streakMap);
       setVocab(all.filter(v => !knownSet.has(v.word)));
 
       const { data: sess } = await supabase
@@ -71,6 +80,7 @@ export default function StudySession() {
       user_id: user.id, word, reading, jlpt_level: (jlpt as any) ?? null,
       state: newState, correct_streak: newStreak, last_reviewed_at: new Date().toISOString(),
     }, { onConflict: "user_id,word" });
+    setStreaks(prev => ({ ...prev, [word]: newStreak }));
     return newState;
   };
 
@@ -193,8 +203,20 @@ export default function StudySession() {
             <div className={`flip-inner h-full ${flipped ? "flipped" : ""}`}>
               <Card className="flip-face absolute inset-0 gradient-card border-border/50 shadow-card grid place-items-center cursor-pointer">
                 <div className="text-center px-6">
-                  <div className="font-jp text-6xl font-bold mb-2">{reviewCard?.word}</div>
-                  <div className="text-xs text-muted-foreground">Tap to flip</div>
+                  {(() => {
+                    const showKanji = !reviewCard ? false : (streaks[reviewCard.word] ?? 0) >= KANJI_THRESHOLD || reviewCard.word === reviewCard.reading;
+                    return (
+                      <>
+                        <div className="font-jp text-6xl font-bold mb-2">
+                          {showKanji ? reviewCard?.word : reviewCard?.reading}
+                        </div>
+                        {!showKanji && reviewCard && reviewCard.word !== reviewCard.reading && (
+                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Hiragana mode</div>
+                        )}
+                        <div className="text-xs text-muted-foreground">Tap to flip</div>
+                      </>
+                    );
+                  })()}
                 </div>
               </Card>
               <Card className="flip-face flip-back gradient-card border-primary/30 shadow-elegant grid place-items-center cursor-pointer">
@@ -236,8 +258,19 @@ export default function StudySession() {
 
           <Card className="p-6 gradient-card border-border/50 shadow-card mb-4 text-center">
             <div className="text-xs text-muted-foreground mb-2">What does this mean?</div>
-            <div className="font-jp text-5xl font-bold mb-2">{quizCard?.word}</div>
-            <div className="font-jp text-muted-foreground">{quizCard?.reading}</div>
+            {(() => {
+              const showKanji = !quizCard ? false : (streaks[quizCard.word] ?? 0) >= KANJI_THRESHOLD || quizCard.word === quizCard.reading;
+              return (
+                <>
+                  <div className="font-jp text-5xl font-bold mb-2">
+                    {showKanji ? quizCard?.word : quizCard?.reading}
+                  </div>
+                  {showKanji
+                    ? <div className="font-jp text-muted-foreground">{quizCard?.reading}</div>
+                    : quizCard && quizCard.word !== quizCard.reading && <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Hiragana mode</div>}
+                </>
+              );
+            })()}
           </Card>
 
           <div className="grid gap-2">
