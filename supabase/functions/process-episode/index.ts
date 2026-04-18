@@ -126,7 +126,7 @@ Deno.serve(async (req) => {
 
     await supabase.from("episodes").update({ processing_status: "processing" }).eq("id", episode_id);
 
-    const cleaned = stripSubtitleFormatting(subtitle_text).slice(0, 18000);
+    const cleaned = stripSubtitleFormatting(subtitle_text).slice(0, 40000);
 
     const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
