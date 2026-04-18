@@ -124,9 +124,39 @@ export default function EpisodeDetail() {
     speechSynthesis.speak(u);
   };
 
-  const newVocab = vocab.filter(v => !knownWords.has(v.word));
-  const skippedVocab = vocab.filter(v => knownWords.has(v.word));
+  // A word is "below my level" if its JLPT rank is strictly easier than my profile level.
+  // E.g. profile=N4 (rank 2) → N5 (rank 1) is auto-skipped, N4/N3/etc. stay.
+  const myLevel = profile?.jlpt_level && profile.jlpt_level !== "none" ? profile.jlpt_level : null;
+  const myRank = myLevel ? JLPT_RANK[myLevel] : 0;
+  const isBelowLevel = (lvl: string) => myRank > 0 && (JLPT_RANK[lvl] ?? 99) < myRank;
+
+  const newVocab = vocab.filter(v =>
+    !knownWords.has(v.word) && (!isBelowLevel(v.jlpt_level) || addedBack.has(v.word))
+  );
+  const skippedVocab = vocab.filter(v =>
+    !addedBack.has(v.word) && (knownWords.has(v.word) || isBelowLevel(v.jlpt_level))
+  );
   const masteryPct = vocab.length ? Math.round((skippedVocab.length / vocab.length) * 100) : 0;
+
+  const addBack = async (v: VocabItem) => {
+    if (!user) return;
+    setAddedBack(prev => new Set(prev).add(v.word));
+    // Persist as 'unknown' so it survives reloads and gets included in study.
+    await supabase.from("user_word_state").upsert({
+      user_id: user.id,
+      word: v.word,
+      reading: v.reading,
+      jlpt_level: (v.jlpt_level as any) ?? null,
+      state: "unknown" as const,
+    }, { onConflict: "user_id,word" });
+    // If this word was previously marked known, drop it from the local known set too.
+    setKnownWords(prev => {
+      const next = new Set(prev);
+      next.delete(v.word);
+      return next;
+    });
+    toast.success(`Added "${v.word}" to study`);
+  };
 
   return (
     <div className="max-w-2xl mx-auto px-5 pt-4 pb-10">
