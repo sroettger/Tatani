@@ -7,6 +7,7 @@ import { ChevronLeft, Loader2, Upload, Sparkles, BookOpen, BrainCircuit, Volume2
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
+import { TutorChat } from "@/components/TutorChat";
 
 // JLPT difficulty rank — higher number = harder. "none" treated as harder than N1
 // so unclassified/proper-noun vocab is never auto-skipped.
