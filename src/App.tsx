@@ -12,6 +12,7 @@ import Home from "./pages/Home";
 import AnimeDetail from "./pages/AnimeDetail";
 import EpisodeDetail from "./pages/EpisodeDetail";
 import StudySession from "./pages/StudySession";
+import VoiceStudySession from "./pages/VoiceStudySession";
 import Study from "./pages/Study";
 import Stats from "./pages/Stats";
 import Settings from "./pages/Settings";
@@ -48,6 +49,7 @@ const App = () => (
               <Route path="/anime/:animeId" element={<AnimeDetail />} />
               <Route path="/episode/:episodeId" element={<EpisodeDetail />} />
               <Route path="/study/:episodeId" element={<StudySession />} />
+              <Route path="/study/:episodeId/voice" element={<VoiceStudySession />} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>

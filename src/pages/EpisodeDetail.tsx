@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ChevronLeft, Loader2, Upload, Sparkles, BookOpen, BrainCircuit, Volume2, Plus } from "lucide-react";
+import { ChevronLeft, Loader2, Upload, Sparkles, BookOpen, BrainCircuit, Volume2, Plus, Mic } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
@@ -220,13 +220,23 @@ export default function EpisodeDetail() {
             <StatBox label="Mastery" value={`${masteryPct}%`} accent="text-accent" />
           </div>
 
-          <Button
-            className="w-full h-12 gradient-primary text-primary-foreground mb-6"
-            onClick={() => navigate(`/study/${episodeId}`)}
-            disabled={newVocab.length === 0}
-          >
-            <BookOpen className="h-4 w-4" /> Study {newVocab.length} cards
-          </Button>
+          <div className="grid gap-2 mb-6">
+            <Button
+              className="w-full h-12 gradient-primary text-primary-foreground"
+              onClick={() => navigate(`/study/${episodeId}`)}
+              disabled={newVocab.length === 0}
+            >
+              <BookOpen className="h-4 w-4" /> Study {newVocab.length} cards
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full h-12"
+              onClick={() => navigate(`/study/${episodeId}/voice`)}
+              disabled={newVocab.length === 0}
+            >
+              <Mic className="h-4 w-4" /> Hands-free voice mode
+            </Button>
+          </div>
 
           <h3 className="font-semibold mb-2 flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-primary" /> Sentences</h3>
           <div className="grid gap-2 mb-6">
