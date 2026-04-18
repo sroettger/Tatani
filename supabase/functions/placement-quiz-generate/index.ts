@@ -1,5 +1,8 @@
 // Generate a JLPT placement quiz (~20 adaptive questions across N5→N1) via Lovable AI.
-import { corsHeaders } from "@supabase/supabase-js/cors";
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
 
 const TOOL = {
   type: "function",
