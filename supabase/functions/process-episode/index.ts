@@ -126,7 +126,7 @@ Deno.serve(async (req) => {
 
     await supabase.from("episodes").update({ processing_status: "processing" }).eq("id", episode_id);
 
-    const cleaned = stripSubtitleFormatting(subtitle_text).slice(0, 18000);
+    const cleaned = stripSubtitleFormatting(subtitle_text).slice(0, 40000);
 
     const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -134,8 +134,8 @@ Deno.serve(async (req) => {
       body: JSON.stringify({
         model: "google/gemini-2.5-flash",
         messages: [
-          { role: "system", content: "You are a Japanese language teacher creating study materials from anime subtitles. Extract the most useful vocabulary, grammar patterns, and example sentences for a learner. Return up to 60 vocabulary entries, 10 grammar points, and 20 sentences. You MUST call the extract_japanese_learning_data function." },
-          { role: "user", content: `Extract Japanese learning material from these subtitles:\n\n${cleaned}` },
+          { role: "system", content: "You are a Japanese language teacher creating a comprehensive study database from anime subtitles. Extract EVERY meaningful vocabulary word that appears in the subtitles — do not filter by difficulty or learner level. Include common words (N5/N4) AND advanced words (N1/N2) AND proper nouns and slang. Aim for 150-250 vocabulary entries, 15-25 grammar points, and 25-40 example sentences. Tag each word with its accurate JLPT level so individual learners can filter client-side. You MUST call the extract_japanese_learning_data function." },
+          { role: "user", content: `Extract ALL Japanese vocabulary from these subtitles. Be exhaustive — capture every meaningful word regardless of difficulty:\n\n${cleaned}` },
         ],
         tools: [EXTRACTION_TOOL],
         tool_choice: { type: "function", function: { name: "extract_japanese_learning_data" } },
