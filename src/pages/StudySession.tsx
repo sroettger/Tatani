@@ -20,6 +20,9 @@ export default function StudySession() {
   const { user } = useAuth();
   const [vocab, setVocab] = useState<VocabItem[]>([]);
   const [knownWords, setKnownWords] = useState<Set<string>>(new Set());
+  // word -> current correct_streak; words at >=2 show kanji, otherwise hiragana
+  const [streaks, setStreaks] = useState<Record<string, number>>({});
+  const KANJI_THRESHOLD = 2;
   const [sessionId, setSessionId] = useState<string | null>(null);
 
   // review state
