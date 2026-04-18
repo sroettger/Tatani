@@ -16,28 +16,31 @@ type VocabItem = {
 
 type Mode = "review" | "quiz";
 
-// Words that count as "I know it"
-const YES_WORDS = ["yes", "yeah", "yep", "know", "i know", "i know it", "got it", "knew it", "easy", "correct", "right"];
-// Words that count as "still learning"
-const NO_WORDS = ["no", "nope", "skip", "again", "dunno", "don't know", "do not know", "i don't know", "wrong", "pass", "next"];
-// Control words
-const REPEAT_WORDS = ["repeat", "say again", "again please"];
-const MEANING_WORDS = ["meaning", "what", "hint", "answer", "show", "what does it mean"];
-const PAUSE_WORDS = ["pause", "stop", "wait", "hold on"];
-const RESUME_WORDS = ["resume", "continue", "go", "start"];
+// Single-token keywords (any of these as a word in the transcript triggers the action)
+const YES_TOKENS = ["yes", "yeah", "yep", "yup", "ya", "know", "knew", "got", "easy", "correct", "right", "ok", "okay", "sure"];
+const NO_TOKENS = ["no", "nope", "nah", "skip", "again", "dunno", "wrong", "pass", "next", "dont", "don"];
+const REPEAT_TOKENS = ["repeat", "again"];
+const MEANING_TOKENS = ["meaning", "hint", "answer", "show", "translate", "translation"];
+const PAUSE_TOKENS = ["pause", "stop", "wait"];
+const RESUME_TOKENS = ["resume", "continue"];
 
 const normalize = (s: string) =>
   s.toLowerCase().normalize("NFKD").replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
 
+const tokensOf = (s: string) => normalize(s).split(" ").filter(Boolean);
+
 const meaningVariants = (meaning: string) =>
   meaning.split(/[,/;]| or | and /i).map(s => normalize(s)).filter(Boolean);
 
-const matchesYes = (t: string) => YES_WORDS.includes(t);
-const matchesNo = (t: string) => NO_WORDS.includes(t);
-const matchesRepeat = (t: string) => REPEAT_WORDS.includes(t);
-const matchesMeaning = (t: string) => MEANING_WORDS.includes(t);
-const matchesPause = (t: string) => PAUSE_WORDS.includes(t);
-const matchesResume = (t: string) => RESUME_WORDS.includes(t);
+const hasAny = (tokens: string[], keywords: string[]) =>
+  tokens.some(t => keywords.includes(t));
+
+const matchesYes = (tokens: string[]) => hasAny(tokens, YES_TOKENS);
+const matchesNo = (tokens: string[]) => hasAny(tokens, NO_TOKENS);
+const matchesRepeat = (tokens: string[]) => hasAny(tokens, REPEAT_TOKENS);
+const matchesMeaning = (tokens: string[]) => hasAny(tokens, MEANING_TOKENS);
+const matchesPause = (tokens: string[]) => hasAny(tokens, PAUSE_TOKENS);
+const matchesResume = (tokens: string[]) => hasAny(tokens, RESUME_TOKENS);
 
 const JLPT_RANK: Record<string, number> = { N5: 1, N4: 2, N3: 3, N2: 4, N1: 5, none: 6 };
 const KANJI_THRESHOLD = 2;
