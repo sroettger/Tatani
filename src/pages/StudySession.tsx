@@ -42,9 +42,15 @@ export default function StudySession() {
     (async () => {
       const { data: cache } = await supabase.from("episode_vocab_cache").select("vocab").eq("episode_id", episodeId).maybeSingle();
       const all = ((cache?.vocab ?? []) as VocabItem[]);
-      const { data: known } = await supabase.from("user_word_state").select("word").eq("user_id", user.id).eq("state", "known");
-      const knownSet = new Set((known ?? []).map((k: any) => k.word));
+      const { data: states } = await supabase
+        .from("user_word_state")
+        .select("word,state,correct_streak")
+        .eq("user_id", user.id);
+      const knownSet = new Set((states ?? []).filter((k: any) => k.state === "known").map((k: any) => k.word));
+      const streakMap: Record<string, number> = {};
+      (states ?? []).forEach((s: any) => { streakMap[s.word] = s.correct_streak ?? 0; });
       setKnownWords(knownSet);
+      setStreaks(streakMap);
       setVocab(all.filter(v => !knownSet.has(v.word)));
 
       const { data: sess } = await supabase
