@@ -65,6 +65,7 @@ export default function VoiceStudySession() {
   const [lastResult, setLastResult] = useState<"known" | "learning" | "correct" | "wrong" | null>(null);
   const [supported, setSupported] = useState<boolean>(true);
   const [permissionDenied, setPermissionDenied] = useState<boolean>(false);
+  const [recognitionError, setRecognitionError] = useState<string>("");
 
   // refs to keep latest values inside SpeechRecognition handlers
   const recognitionRef = useRef<any>(null);
@@ -143,6 +144,7 @@ export default function VoiceStudySession() {
     };
     r.onerror = (e: any) => {
       console.log("[voice] error:", e.error, e.message);
+      setRecognitionError(e.error || "recognition-error");
       if (e.error === "not-allowed" || e.error === "service-not-allowed") {
         setPermissionDenied(true);
         setRunning(false);
@@ -150,13 +152,12 @@ export default function VoiceStudySession() {
         toast.error("Microphone permission denied");
         return;
       }
-      // 'no-speech' / 'aborted' / 'audio-capture' — let onend handle restart
     };
     r.onend = () => {
       console.log("[voice] recognition ended; running:", runningRef.current, "awaiting:", awaitingRef.current);
       setListening(false);
       if (runningRef.current && awaitingRef.current) {
-        try { r.start(); setListening(true); } catch (err) { console.log("[voice] restart failed:", err); }
+        try { r.start(); } catch (err) { console.log("[voice] restart failed:", err); }
       }
     };
 
@@ -164,11 +165,11 @@ export default function VoiceStudySession() {
     return () => { try { r.stop(); } catch {} recognitionRef.current = null; };
   }, []);
 
-  // start/stop helpers that swallow "already started" errors
   const startRecognition = () => {
     const r = recognitionRef.current;
     if (!r) return;
-    try { r.start(); setListening(true); } catch { /* already running */ }
+    setRecognitionError("");
+    try { r.start(); } catch (err) { console.log("[voice] start failed:", err); }
   };
   const stopRecognition = () => {
     const r = recognitionRef.current;
@@ -458,6 +459,18 @@ export default function VoiceStudySession() {
         </Card>
       )}
 
+      {!!recognitionError && !permissionDenied && (
+        <Card className="p-4 mb-4 border-destructive/40 bg-destructive/5">
+          <div className="flex gap-2 items-start">
+            <AlertTriangle className="h-4 w-4 text-destructive mt-0.5" />
+            <div className="text-sm">
+              <div className="font-semibold mb-1">Voice recognition failed</div>
+              <div className="text-muted-foreground">The browser speech service returned: <span className="font-mono">{recognitionError}</span>.</div>
+            </div>
+          </div>
+        </Card>
+      )}
+
       <Tabs value={mode} onValueChange={(v) => switchMode(v as Mode)} className="w-full">
         <TabsList className="grid grid-cols-2 w-full mb-6">
           <TabsTrigger value="review">Review</TabsTrigger>
@@ -485,12 +498,12 @@ export default function VoiceStudySession() {
             </div>
           </Card>
 
-          <div className="flex items-center justify-center gap-2 mb-4 text-xs text-muted-foreground">
+          <div className="flex items-center justify-center gap-2 mb-4 text-xs text-muted-foreground flex-wrap">
             <span className={`inline-flex items-center gap-1 ${listening ? "text-primary" : ""}`}>
               {listening ? <Mic className="h-3.5 w-3.5" /> : <MicOff className="h-3.5 w-3.5" />}
               {listening ? "Listening" : "Mic off"}
             </span>
-            {heard && <span>• heard: "{heard}"</span>}
+            <span>• {heard ? `heard: "${heard}"` : "heard: nothing yet"}</span>
           </div>
 
           <div className="grid grid-cols-3 gap-2 mb-3">
