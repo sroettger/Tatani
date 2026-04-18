@@ -37,6 +37,9 @@ export default function StudySession() {
 
   const [done, setDone] = useState<"none" | "review" | "quiz">("none");
 
+  // JLPT difficulty rank — must match EpisodeDetail. "none" treated as harder than N1.
+  const JLPT_RANK: Record<string, number> = { N5: 1, N4: 2, N3: 3, N2: 4, N1: 5, none: 6 };
+
   useEffect(() => {
     if (!episodeId || !user) return;
     (async () => {
@@ -47,11 +50,23 @@ export default function StudySession() {
         .select("word,state,correct_streak")
         .eq("user_id", user.id);
       const knownSet = new Set((states ?? []).filter((k: any) => k.state === "known").map((k: any) => k.word));
+      // Words the user has explicitly interacted with (added back, learning, etc.) — never auto-skip these.
+      const trackedSet = new Set((states ?? []).map((k: any) => k.word));
       const streakMap: Record<string, number> = {};
       (states ?? []).forEach((s: any) => { streakMap[s.word] = s.correct_streak ?? 0; });
       setKnownWords(knownSet);
       setStreaks(streakMap);
-      setVocab(all.filter(v => !knownSet.has(v.word)));
+
+      // Apply same JLPT-level filter as EpisodeDetail: skip words below the user's level
+      // unless they were explicitly added back / are being tracked.
+      const myLevel = profile?.jlpt_level && profile.jlpt_level !== "none" ? profile.jlpt_level : null;
+      const myRank = myLevel ? JLPT_RANK[myLevel] : 0;
+      const isBelowLevel = (lvl: string) => myRank > 0 && (JLPT_RANK[lvl] ?? 99) < myRank;
+
+      setVocab(all.filter(v =>
+        !knownSet.has(v.word) &&
+        (!isBelowLevel(v.jlpt_level) || trackedSet.has(v.word))
+      ));
 
       const { data: sess } = await supabase
         .from("study_sessions")
@@ -59,7 +74,7 @@ export default function StudySession() {
         .select("id").single();
       if (sess) setSessionId(sess.id);
     })();
-  }, [episodeId, user]);
+  }, [episodeId, user, profile?.jlpt_level]);
 
   const reviewCard = vocab[reviewIdx];
   const quizCard = vocab[quizIdx];
