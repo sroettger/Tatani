@@ -493,7 +493,7 @@ export default function VoiceStudySession() {
             {heard && <span>• heard: "{heard}"</span>}
           </div>
 
-          <div className="grid grid-cols-3 gap-2 mb-4">
+          <div className="grid grid-cols-3 gap-2 mb-3">
             {!running ? (
               <Button onClick={start} className="col-span-3 h-12 gradient-primary text-primary-foreground">
                 <Play className="h-4 w-4" /> Start hands-free
@@ -512,6 +512,28 @@ export default function VoiceStudySession() {
               </>
             )}
           </div>
+
+          {/* Manual tap fallback — works even if voice recognition fails */}
+          {running && mode === "review" && (
+            <div className="grid grid-cols-2 gap-2 mb-4">
+              <Button variant="outline" onClick={() => gradeReview(false)} className="h-11">
+                Still learning
+              </Button>
+              <Button onClick={() => gradeReview(true)} className="h-11 bg-success text-success-foreground hover:bg-success/90">
+                I know this
+              </Button>
+            </div>
+          )}
+
+          {/* Hint for iframe contexts where mic is blocked by parent */}
+          {window.self !== window.top && (
+            <Card className="p-3 mb-4 border-accent/40 bg-accent/5 text-xs">
+              <div className="font-semibold mb-1">Tip for the Lovable preview</div>
+              <div className="text-muted-foreground">
+                The mic may be blocked inside the editor iframe. Open the preview URL in a new tab on your phone for full voice support.
+              </div>
+            </Card>
+          )}
 
           <Card className="p-3 gradient-card border-border/50 text-xs text-muted-foreground">
             <div className="font-semibold text-foreground mb-1">Voice commands</div>
