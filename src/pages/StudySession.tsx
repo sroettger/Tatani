@@ -17,7 +17,7 @@ type VocabItem = {
 export default function StudySession() {
   const { episodeId } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [vocab, setVocab] = useState<VocabItem[]>([]);
   const [knownWords, setKnownWords] = useState<Set<string>>(new Set());
   // word -> current correct_streak; words at >=2 show kanji, otherwise hiragana
