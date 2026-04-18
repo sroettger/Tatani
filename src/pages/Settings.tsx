@@ -72,6 +72,23 @@ export default function Settings() {
         </Card>
 
         <Card className="p-4 gradient-card border-border/50">
+          <h3 className="font-semibold mb-1">JLPT level</h3>
+          <p className="text-xs text-muted-foreground mb-3">Set your level manually. This controls which words are skipped by default.</p>
+          <div className="grid grid-cols-5 gap-2">
+            {JLPT_LEVELS.map((lvl) => (
+              <Button
+                key={lvl}
+                variant={profile?.jlpt_level === lvl ? "default" : "outline"}
+                onClick={() => setJlptLevel(lvl)}
+                className="h-10"
+              >
+                {lvl}
+              </Button>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="p-4 gradient-card border-border/50">
           <h3 className="font-semibold mb-1">Retake placement quiz</h3>
           <p className="text-xs text-muted-foreground mb-3">Generates a fresh quiz and re-seeds your known-word list.</p>
           <Button variant="outline" onClick={retakePlacement}><RotateCw className="h-4 w-4" /> Retake</Button>
