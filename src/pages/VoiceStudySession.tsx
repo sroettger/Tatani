@@ -125,8 +125,12 @@ export default function VoiceStudySession() {
     r.lang = "en-US";
     r.maxAlternatives = 5;
 
+    r.onstart = () => { console.log("[voice] recognition started"); setListening(true); };
+    r.onaudiostart = () => console.log("[voice] audio capture started");
+    r.onspeechstart = () => console.log("[voice] speech detected");
+    r.onspeechend = () => console.log("[voice] speech ended");
     r.onresult = (event: any) => {
-      // collect every alternative from every result
+      console.log("[voice] onresult fired, results:", event.results.length);
       const transcripts: string[] = [];
       for (let i = 0; i < event.results.length; i++) {
         const res = event.results[i];
@@ -138,6 +142,7 @@ export default function VoiceStudySession() {
       handleVoiceInput(transcripts);
     };
     r.onerror = (e: any) => {
+      console.log("[voice] error:", e.error, e.message);
       if (e.error === "not-allowed" || e.error === "service-not-allowed") {
         setPermissionDenied(true);
         setRunning(false);
@@ -148,10 +153,10 @@ export default function VoiceStudySession() {
       // 'no-speech' / 'aborted' / 'audio-capture' — let onend handle restart
     };
     r.onend = () => {
+      console.log("[voice] recognition ended; running:", runningRef.current, "awaiting:", awaitingRef.current);
       setListening(false);
-      // auto-restart only when running AND we're awaiting an answer
       if (runningRef.current && awaitingRef.current) {
-        try { r.start(); setListening(true); } catch { /* already started */ }
+        try { r.start(); setListening(true); } catch (err) { console.log("[voice] restart failed:", err); }
       }
     };
 
