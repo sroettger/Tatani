@@ -343,7 +343,7 @@ export default function VoiceStudySession() {
     setPermissionDenied(false);
     setRunning(true);
     runningRef.current = true;
-    try { recognitionRef.current?.start(); setListening(true); } catch { }
+    // speakCard will start the mic AFTER the prompt finishes
     const c = vocabRef.current[idxRef.current];
     if (c) await speakCard(c);
   };
@@ -353,14 +353,13 @@ export default function VoiceStudySession() {
     setRunning(false);
     awaitingRef.current = false;
     try { speechSynthesis.cancel(); } catch { }
-    try { recognitionRef.current?.stop(); } catch { }
+    stopRecognition();
   };
 
   const resume = async () => {
     if (vocab.length === 0 || done) return;
     setRunning(true);
     runningRef.current = true;
-    try { recognitionRef.current?.start(); setListening(true); } catch { }
     const c = vocabRef.current[idxRef.current];
     if (c) await speakCard(c);
   };
