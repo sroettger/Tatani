@@ -14,6 +14,20 @@ export default function Settings() {
   const { profile, signOut, refreshProfile, user } = useAuth();
   const navigate = useNavigate();
 
+  const setJlptLevel = async (level: JlptLevel) => {
+    if (!user || profile?.jlpt_level === level) return;
+    const { error } = await supabase
+      .from("profiles")
+      .update({ jlpt_level: level, placement_done: true })
+      .eq("user_id", user.id);
+    if (error) {
+      toast.error("Couldn't update level");
+      return;
+    }
+    await refreshProfile();
+    toast.success(`Level set to ${level}`);
+  };
+
   const retakePlacement = async () => {
     if (!user) return;
     await supabase.from("profiles").update({ placement_done: false, jlpt_level: "none" }).eq("user_id", user.id);
