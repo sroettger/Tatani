@@ -136,11 +136,11 @@ export default function StudySession() {
 
   const distractors = useMemo(() => {
     if (!quizCard) return [];
-    const others = vocab.filter(v => v.word !== quizCard.word).map(v => v.meaning);
+    const others = quizVocab.filter(v => v.word !== quizCard.word).map(v => v.meaning);
     const shuffled = [...others].sort(() => Math.random() - 0.5).slice(0, 3);
     const all = [quizCard.meaning, ...shuffled];
     return all.sort(() => Math.random() - 0.5);
-  }, [quizCard, vocab]);
+  }, [quizCard, quizVocab]);
 
   const correctIndex = useMemo(() => distractors.indexOf(quizCard?.meaning ?? ""), [distractors, quizCard]);
 
@@ -158,7 +158,7 @@ export default function StudySession() {
     await recordWord(quizCard.word, quizCard.reading, quizCard.jlpt_level, correct);
     setTimeout(() => {
       setQuizChoice(null);
-      if (quizIdx + 1 < vocab.length) setQuizIdx(quizIdx + 1);
+      if (quizIdx + 1 < quizVocab.length) setQuizIdx(quizIdx + 1);
       else finish("quiz");
     }, 900);
   };
