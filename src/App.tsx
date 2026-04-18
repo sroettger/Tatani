@@ -3,8 +3,19 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import Index from "./pages/Index.tsx";
-import NotFound from "./pages/NotFound.tsx";
+import { AuthProvider } from "@/context/AuthContext";
+import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { AppShell } from "@/components/AppShell";
+import Auth from "./pages/Auth";
+import Onboarding from "./pages/Onboarding";
+import Home from "./pages/Home";
+import AnimeDetail from "./pages/AnimeDetail";
+import EpisodeDetail from "./pages/EpisodeDetail";
+import StudySession from "./pages/StudySession";
+import Study from "./pages/Study";
+import Stats from "./pages/Stats";
+import Settings from "./pages/Settings";
+import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
@@ -12,16 +23,48 @@ const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <Toaster />
-      <Sonner />
+      <Sonner theme="dark" />
       <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Index />} />
-          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+        <AuthProvider>
+          <Routes>
+            <Route path="/auth" element={<Auth />} />
+            <Route
+              path="/onboarding"
+              element={
+                <RequireUser><Onboarding /></RequireUser>
+              }
+            />
+            <Route
+              element={
+                <ProtectedRoute>
+                  <AppShell />
+                </ProtectedRoute>
+              }
+            >
+              <Route path="/" element={<Home />} />
+              <Route path="/study" element={<Study />} />
+              <Route path="/stats" element={<Stats />} />
+              <Route path="/settings" element={<Settings />} />
+              <Route path="/anime/:animeId" element={<AnimeDetail />} />
+              <Route path="/episode/:episodeId" element={<EpisodeDetail />} />
+              <Route path="/study/:episodeId" element={<StudySession />} />
+            </Route>
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </AuthProvider>
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>
 );
+
+// onboarding only requires user (not placement_done)
+import { useAuth } from "@/context/AuthContext";
+import { Navigate } from "react-router-dom";
+function RequireUser({ children }: { children: JSX.Element }) {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="min-h-screen grid place-items-center text-muted-foreground">Loading…</div>;
+  if (!user) return <Navigate to="/auth" replace />;
+  return children;
+}
 
 export default App;
