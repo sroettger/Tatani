@@ -7,6 +7,9 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
+const JLPT_LEVELS = ["N5", "N4", "N3", "N2", "N1"] as const;
+type JlptLevel = typeof JLPT_LEVELS[number];
+
 export default function Settings() {
   const { profile, signOut, refreshProfile, user } = useAuth();
   const navigate = useNavigate();
