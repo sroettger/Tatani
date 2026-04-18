@@ -134,10 +134,22 @@ export default function EpisodeDetail() {
       {vocab.length === 0 ? (
         <Card className="p-6 text-center gradient-card border-border/50 shadow-card">
           <Sparkles className="h-10 w-10 mx-auto text-primary mb-3" />
-          <h2 className="text-lg font-semibold mb-1">Process this episode</h2>
+          <h2 className="text-lg font-semibold mb-1">
+            {busy ? "Processing episode…" : "Process this episode"}
+          </h2>
           <p className="text-sm text-muted-foreground mb-5">
-            We'll auto-fetch the Japanese subtitles, extract vocabulary with AI, and generate flashcards just for you.
+            {busy
+              ? (progressStage || "Working on it…")
+              : "We'll auto-fetch the Japanese subtitles, extract vocabulary with AI, and generate flashcards just for you."}
           </p>
+          {busy && (
+            <div className="mb-5">
+              <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                <div className="h-full w-1/3 gradient-primary animate-pulse" />
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">You can leave this page — processing continues in the background.</p>
+            </div>
+          )}
           <div className="grid gap-2">
             <Button onClick={tryAutoFetch} disabled={busy} className="gradient-primary text-primary-foreground h-12">
               {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> Working…</> : <><Sparkles className="h-4 w-4" /> Auto-fetch & process</>}
