@@ -280,7 +280,9 @@ export default function VoiceStudySession() {
       await new Promise(r => setTimeout(r, 250));
       await speak("What does it mean?", "en-US", 1);
     }
-    // Re-arm mic AFTER TTS so the answer is captured cleanly.
+    // Wait for Android to release the audio output session before opening the mic.
+    // Without this delay, recognition starts but immediately ends with no audio.
+    await new Promise(r => setTimeout(r, 400));
     awaitingRef.current = true;
     if (runningRef.current) startRecognition();
   };
