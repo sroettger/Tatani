@@ -132,9 +132,9 @@ Deno.serve(async (req) => {
       method: "POST",
       headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
+        model: "google/gemini-2.5-flash",
         messages: [
-          { role: "system", content: "You are a Japanese language teacher creating study materials from anime subtitles. Extract the most useful vocabulary, grammar patterns, and example sentences for a learner. Return up to 60 vocabulary entries, 10 grammar points, and 20 sentences." },
+          { role: "system", content: "You are a Japanese language teacher creating study materials from anime subtitles. Extract the most useful vocabulary, grammar patterns, and example sentences for a learner. Return up to 60 vocabulary entries, 10 grammar points, and 20 sentences. You MUST call the extract_japanese_learning_data function." },
           { role: "user", content: `Extract Japanese learning material from these subtitles:\n\n${cleaned}` },
         ],
         tools: [EXTRACTION_TOOL],
@@ -152,6 +152,7 @@ Deno.serve(async (req) => {
     const aiJson = await aiResp.json();
     const call = aiJson?.choices?.[0]?.message?.tool_calls?.[0];
     if (!call?.function?.arguments) {
+      console.error("no tool_call in AI response:", JSON.stringify(aiJson).slice(0, 2000));
       await supabase.from("episodes").update({ processing_status: "failed" }).eq("id", episode_id);
       return new Response(JSON.stringify({ error: "AI returned no extraction" }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
