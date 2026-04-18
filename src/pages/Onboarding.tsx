@@ -178,6 +178,13 @@ export default function Onboarding() {
               <span className="flex-1">{c}</span>
             </Button>
           ))}
+          <Button
+            variant="ghost"
+            className="h-12 mt-2 text-muted-foreground"
+            onClick={() => pickAnswer(-1)}
+          >
+            I don't know
+          </Button>
         </div>
       </div>
     </main>

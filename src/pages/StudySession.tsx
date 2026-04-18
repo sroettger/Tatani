@@ -261,6 +261,14 @@ export default function StudySession() {
                 </Button>
               );
             })}
+            <Button
+              variant="ghost"
+              onClick={() => onQuizAnswer(-1)}
+              disabled={quizChoice !== null}
+              className="h-12 mt-2 text-muted-foreground"
+            >
+              I don't know
+            </Button>
           </div>
         </TabsContent>
       </Tabs>
