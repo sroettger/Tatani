@@ -77,8 +77,16 @@ export default function StudySession() {
     })();
   }, [episodeId, user, profile?.jlpt_level]);
 
+  // Quiz only shows words the user hasn't already marked as known (either before
+  // this session or during the review tab). Review keeps the original list so users
+  // can still see/skip cards in order.
+  const quizVocab = useMemo(
+    () => vocab.filter(v => !knownWords.has(v.word)),
+    [vocab, knownWords],
+  );
+
   const reviewCard = vocab[reviewIdx];
-  const quizCard = vocab[quizIdx];
+  const quizCard = quizVocab[quizIdx];
 
   const recordWord = async (word: string, reading: string, jlpt: string, gotItRight: boolean) => {
     if (!user) return;
@@ -97,6 +105,15 @@ export default function StudySession() {
       state: newState, correct_streak: newStreak, last_reviewed_at: new Date().toISOString(),
     }, { onConflict: "user_id,word" });
     setStreaks(prev => ({ ...prev, [word]: newStreak }));
+    setKnownWords(prev => {
+      if (newState === "known" && !prev.has(word)) {
+        const next = new Set(prev); next.add(word); return next;
+      }
+      if (newState !== "known" && prev.has(word)) {
+        const next = new Set(prev); next.delete(word); return next;
+      }
+      return prev;
+    });
     return newState;
   };
 
