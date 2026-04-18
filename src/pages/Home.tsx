@@ -133,8 +133,6 @@ export default function Home() {
                   </div>
                   <Progress value={pct} className="h-1.5 mt-2" />
                 </div>
-                  <Progress value={pct} className="h-1.5 mt-2" />
-                </div>
                 <div className="flex flex-col items-center gap-1 self-center">
                   <ChevronRight className="h-5 w-5 text-muted-foreground" />
                   <Button
