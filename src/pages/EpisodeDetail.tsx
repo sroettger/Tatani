@@ -286,6 +286,12 @@ export default function EpisodeDetail() {
           )}
         </>
       )}
+
+      <TutorChat
+        vocab={vocab}
+        onStartQuiz={() => navigate(`/study/${episodeId}`)}
+        onWordMarkedKnown={(w) => setKnownWords((prev) => new Set([...prev, w]))}
+      />
     </div>
   );
 }
