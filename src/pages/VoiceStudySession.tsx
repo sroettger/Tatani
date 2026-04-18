@@ -118,33 +118,41 @@ export default function VoiceStudySession() {
     const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) { setSupported(false); return; }
     const r = new SR();
-    // continuous=false is more reliable across browsers — we manually re-arm
-    // after each TTS prompt so the mic is guaranteed to be open when the
-    // user answers.
-    r.continuous = false;
-    r.interimResults = false;
+    // continuous=true so the session stays open across silences;
+    // interimResults=true so we get partial transcripts the moment the user
+    // speaks (helps debug + makes the "heard" indicator feel live).
+    r.continuous = true;
+    r.interimResults = true;
     r.lang = "en-US";
-    r.maxAlternatives = 5;
+    r.maxAlternatives = 3;
 
     r.onstart = () => { console.log("[voice] recognition started"); setListening(true); };
     r.onaudiostart = () => console.log("[voice] audio capture started");
     r.onspeechstart = () => console.log("[voice] speech detected");
     r.onspeechend = () => console.log("[voice] speech ended");
     r.onresult = (event: any) => {
-      console.log("[voice] onresult fired, results:", event.results.length);
-      const transcripts: string[] = [];
-      for (let i = 0; i < event.results.length; i++) {
+      // Show interim transcripts immediately so the UI feels alive
+      const interim: string[] = [];
+      const finals: string[] = [];
+      for (let i = event.resultIndex; i < event.results.length; i++) {
         const res = event.results[i];
-        if (!res.isFinal) continue;
-        for (let j = 0; j < res.length; j++) transcripts.push(normalize(res[j].transcript));
+        for (let j = 0; j < res.length; j++) {
+          const t = normalize(res[j].transcript);
+          if (!t) continue;
+          (res.isFinal ? finals : interim).push(t);
+        }
       }
-      if (transcripts.length === 0) return;
-      setHeard(transcripts[0]);
-      handleVoiceInput(transcripts);
+      const display = finals[0] ?? interim[0];
+      if (display) setHeard(display);
+      console.log("[voice] onresult — interim:", interim, "finals:", finals);
+      if (finals.length > 0) handleVoiceInput(finals);
     };
     r.onerror = (e: any) => {
       console.log("[voice] error:", e.error, e.message);
-      setRecognitionError(e.error || "recognition-error");
+      // 'aborted' is normal when we call stop() — don't surface it
+      if (e.error !== "aborted" && e.error !== "no-speech") {
+        setRecognitionError(e.error || "recognition-error");
+      }
       if (e.error === "not-allowed" || e.error === "service-not-allowed") {
         setPermissionDenied(true);
         setRunning(false);
@@ -156,8 +164,14 @@ export default function VoiceStudySession() {
     r.onend = () => {
       console.log("[voice] recognition ended; running:", runningRef.current, "awaiting:", awaitingRef.current);
       setListening(false);
+      // Auto-restart with a small delay — Android Chrome can't restart
+      // immediately after end without aborting the next session.
       if (runningRef.current && awaitingRef.current) {
-        try { r.start(); } catch (err) { console.log("[voice] restart failed:", err); }
+        setTimeout(() => {
+          if (runningRef.current && awaitingRef.current) {
+            try { r.start(); } catch (err) { console.log("[voice] restart failed:", err); }
+          }
+        }, 300);
       }
     };
 
