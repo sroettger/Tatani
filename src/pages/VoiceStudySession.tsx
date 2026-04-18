@@ -239,16 +239,18 @@ export default function VoiceStudySession() {
   // ---------- flow ----------
   const speakCard = async (c: VocabItem) => {
     awaitingRef.current = false;
+    stopRecognition();
     await speak(showKanjiFor(c) ? c.word : c.reading);
     if (modeRef.current === "review") {
-      // brief pause then prompt
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, 250));
       await speak("Do you know it?", "en-US", 1);
     } else {
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, 250));
       await speak("What does it mean?", "en-US", 1);
     }
+    // Re-arm mic AFTER TTS so the answer is captured cleanly.
     awaitingRef.current = true;
+    if (runningRef.current) startRecognition();
   };
 
   const showKanjiFor = (c: VocabItem) =>
@@ -261,8 +263,10 @@ export default function VoiceStudySession() {
 
   const revealMeaning = async (c: VocabItem) => {
     awaitingRef.current = false;
-    await speak(c.reading + "。 " + c.meaning, "en-US", 1);
+    stopRecognition();
+    await speak(c.reading + ". " + c.meaning, "en-US", 1);
     awaitingRef.current = true;
+    if (runningRef.current) startRecognition();
   };
 
   const advance = async () => {
@@ -282,18 +286,19 @@ export default function VoiceStudySession() {
 
   const gradeReview = async (known: boolean) => {
     awaitingRef.current = false;
+    stopRecognition();
     const c = vocabRef.current[idxRef.current];
     if (!c) return;
     const newState = await recordWord(c.word, c.reading, c.jlpt_level, known);
     if (newState === "known") setReviewedKnown(k => k + 1);
     setLastResult(known ? "known" : "learning");
-    // confirm + speak meaning so they hear what it was
     await speak(`${known ? "Got it." : "Keep learning."} ${c.reading}, ${c.meaning}.`, "en-US", 1);
     await advance();
   };
 
   const gradeQuiz = async (correct: boolean, c: VocabItem) => {
     awaitingRef.current = false;
+    stopRecognition();
     if (correct) setQuizCorrect(n => n + 1);
     setLastResult(correct ? "correct" : "wrong");
     if (sessionId && user) {
