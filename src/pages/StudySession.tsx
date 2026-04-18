@@ -203,8 +203,20 @@ export default function StudySession() {
             <div className={`flip-inner h-full ${flipped ? "flipped" : ""}`}>
               <Card className="flip-face absolute inset-0 gradient-card border-border/50 shadow-card grid place-items-center cursor-pointer">
                 <div className="text-center px-6">
-                  <div className="font-jp text-6xl font-bold mb-2">{reviewCard?.word}</div>
-                  <div className="text-xs text-muted-foreground">Tap to flip</div>
+                  {(() => {
+                    const showKanji = !reviewCard ? false : (streaks[reviewCard.word] ?? 0) >= KANJI_THRESHOLD || reviewCard.word === reviewCard.reading;
+                    return (
+                      <>
+                        <div className="font-jp text-6xl font-bold mb-2">
+                          {showKanji ? reviewCard?.word : reviewCard?.reading}
+                        </div>
+                        {!showKanji && reviewCard && reviewCard.word !== reviewCard.reading && (
+                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Hiragana mode</div>
+                        )}
+                        <div className="text-xs text-muted-foreground">Tap to flip</div>
+                      </>
+                    );
+                  })()}
                 </div>
               </Card>
               <Card className="flip-face flip-back gradient-card border-primary/30 shadow-elegant grid place-items-center cursor-pointer">
