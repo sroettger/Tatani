@@ -19,6 +19,27 @@ export default function Settings() {
     navigate("/onboarding");
   };
 
+  const resetStudyData = async () => {
+    if (!user) return;
+    if (!confirm("Reset all study data? This wipes known words, quiz results, and study sessions, and resets your placement.")) return;
+    try {
+      await Promise.all([
+        supabase.from("user_word_state").delete().eq("user_id", user.id),
+        supabase.from("quiz_results").delete().eq("user_id", user.id),
+        supabase.from("study_sessions").delete().eq("user_id", user.id),
+      ]);
+      await supabase
+        .from("profiles")
+        .update({ placement_done: false, jlpt_level: "none", total_words_known: 0, study_streak: 0 })
+        .eq("user_id", user.id);
+      await refreshProfile();
+      toast.success("Study data reset");
+      navigate("/onboarding");
+    } catch (e) {
+      toast.error("Failed to reset study data");
+    }
+  };
+
   return (
     <div className="max-w-2xl mx-auto">
       <PageHeader title="Settings" subtitle="Account" icon={<SettingsIcon className="h-4 w-4" />} />
