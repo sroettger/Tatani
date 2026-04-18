@@ -3,11 +3,22 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { Plus, ChevronRight, Sparkles } from "lucide-react";
+import { Plus, ChevronRight, Sparkles, Trash2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import { AddAnimeDialog } from "@/components/AddAnimeDialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { toast } from "@/hooks/use-toast";
 
 type AnimeRow = {
   id: string;
@@ -26,6 +37,26 @@ export default function Home() {
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<LibraryEntry | null>(null);
+  const [removing, setRemoving] = useState(false);
+
+  const removeAnime = async () => {
+    if (!removeTarget || !user) return;
+    setRemoving(true);
+    const { error } = await supabase
+      .from("user_anime")
+      .delete()
+      .eq("id", removeTarget.id)
+      .eq("user_id", user.id);
+    setRemoving(false);
+    if (error) {
+      toast({ title: "Couldn't remove", description: error.message, variant: "destructive" });
+      return;
+    }
+    setLibrary(prev => prev.filter(e => e.id !== removeTarget.id));
+    toast({ title: "Removed", description: `${removeTarget.anime.title_en ?? removeTarget.anime.title_romaji} removed from your library.` });
+    setRemoveTarget(null);
+  };
 
   const load = async () => {
     if (!user) return;
@@ -102,7 +133,18 @@ export default function Home() {
                   </div>
                   <Progress value={pct} className="h-1.5 mt-2" />
                 </div>
-                <ChevronRight className="h-5 w-5 text-muted-foreground self-center" />
+                <div className="flex flex-col items-center gap-1 self-center">
+                  <ChevronRight className="h-5 w-5 text-muted-foreground" />
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                    onClick={(e) => { e.stopPropagation(); setRemoveTarget(entry); }}
+                    aria-label="Remove anime"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
             </Card>
           );
@@ -110,6 +152,27 @@ export default function Home() {
       </div>
 
       <AddAnimeDialog open={addOpen} onOpenChange={setAddOpen} onAdded={load} />
+
+      <AlertDialog open={!!removeTarget} onOpenChange={(o) => !o && setRemoveTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove from library?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {removeTarget && `"${removeTarget.anime.title_en ?? removeTarget.anime.title_romaji}" will be removed from your library. Your study progress and learned words are kept.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removing}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); removeAnime(); }}
+              disabled={removing}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {removing ? "Removing…" : "Remove"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
