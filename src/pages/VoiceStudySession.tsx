@@ -114,18 +114,24 @@ export default function VoiceStudySession() {
     const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) { setSupported(false); return; }
     const r = new SR();
-    r.continuous = true;
+    // continuous=false is more reliable across browsers — we manually re-arm
+    // after each TTS prompt so the mic is guaranteed to be open when the
+    // user answers.
+    r.continuous = false;
     r.interimResults = false;
     r.lang = "en-US";
-    r.maxAlternatives = 3;
+    r.maxAlternatives = 5;
 
     r.onresult = (event: any) => {
-      const last = event.results[event.results.length - 1];
-      if (!last.isFinal) return;
-      // gather all alternatives so we don't miss "no" being heard as "know"
+      // collect every alternative from every result
       const transcripts: string[] = [];
-      for (let i = 0; i < last.length; i++) transcripts.push(normalize(last[i].transcript));
-      setHeard(transcripts[0] ?? "");
+      for (let i = 0; i < event.results.length; i++) {
+        const res = event.results[i];
+        if (!res.isFinal) continue;
+        for (let j = 0; j < res.length; j++) transcripts.push(normalize(res[j].transcript));
+      }
+      if (transcripts.length === 0) return;
+      setHeard(transcripts[0]);
       handleVoiceInput(transcripts);
     };
     r.onerror = (e: any) => {
@@ -134,13 +140,14 @@ export default function VoiceStudySession() {
         setRunning(false);
         runningRef.current = false;
         toast.error("Microphone permission denied");
+        return;
       }
-      // 'no-speech' / 'aborted' are normal — recognizer will restart via onend
+      // 'no-speech' / 'aborted' / 'audio-capture' — let onend handle restart
     };
     r.onend = () => {
       setListening(false);
-      // auto-restart while session is active
-      if (runningRef.current) {
+      // auto-restart only when running AND we're awaiting an answer
+      if (runningRef.current && awaitingRef.current) {
         try { r.start(); setListening(true); } catch { /* already started */ }
       }
     };
@@ -148,6 +155,19 @@ export default function VoiceStudySession() {
     recognitionRef.current = r;
     return () => { try { r.stop(); } catch {} recognitionRef.current = null; };
   }, []);
+
+  // start/stop helpers that swallow "already started" errors
+  const startRecognition = () => {
+    const r = recognitionRef.current;
+    if (!r) return;
+    try { r.start(); setListening(true); } catch { /* already running */ }
+  };
+  const stopRecognition = () => {
+    const r = recognitionRef.current;
+    if (!r) return;
+    try { r.abort(); } catch {}
+    setListening(false);
+  };
 
   // ---------- TTS ----------
   const speak = (text: string, lang = "ja-JP", rate = 0.95) =>
@@ -219,16 +239,18 @@ export default function VoiceStudySession() {
   // ---------- flow ----------
   const speakCard = async (c: VocabItem) => {
     awaitingRef.current = false;
+    stopRecognition();
     await speak(showKanjiFor(c) ? c.word : c.reading);
     if (modeRef.current === "review") {
-      // brief pause then prompt
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, 250));
       await speak("Do you know it?", "en-US", 1);
     } else {
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, 250));
       await speak("What does it mean?", "en-US", 1);
     }
+    // Re-arm mic AFTER TTS so the answer is captured cleanly.
     awaitingRef.current = true;
+    if (runningRef.current) startRecognition();
   };
 
   const showKanjiFor = (c: VocabItem) =>
@@ -241,8 +263,10 @@ export default function VoiceStudySession() {
 
   const revealMeaning = async (c: VocabItem) => {
     awaitingRef.current = false;
-    await speak(c.reading + "。 " + c.meaning, "en-US", 1);
+    stopRecognition();
+    await speak(c.reading + ". " + c.meaning, "en-US", 1);
     awaitingRef.current = true;
+    if (runningRef.current) startRecognition();
   };
 
   const advance = async () => {
@@ -262,18 +286,19 @@ export default function VoiceStudySession() {
 
   const gradeReview = async (known: boolean) => {
     awaitingRef.current = false;
+    stopRecognition();
     const c = vocabRef.current[idxRef.current];
     if (!c) return;
     const newState = await recordWord(c.word, c.reading, c.jlpt_level, known);
     if (newState === "known") setReviewedKnown(k => k + 1);
     setLastResult(known ? "known" : "learning");
-    // confirm + speak meaning so they hear what it was
     await speak(`${known ? "Got it." : "Keep learning."} ${c.reading}, ${c.meaning}.`, "en-US", 1);
     await advance();
   };
 
   const gradeQuiz = async (correct: boolean, c: VocabItem) => {
     awaitingRef.current = false;
+    stopRecognition();
     if (correct) setQuizCorrect(n => n + 1);
     setLastResult(correct ? "correct" : "wrong");
     if (sessionId && user) {
@@ -318,7 +343,7 @@ export default function VoiceStudySession() {
     setPermissionDenied(false);
     setRunning(true);
     runningRef.current = true;
-    try { recognitionRef.current?.start(); setListening(true); } catch { }
+    // speakCard will start the mic AFTER the prompt finishes
     const c = vocabRef.current[idxRef.current];
     if (c) await speakCard(c);
   };
@@ -328,14 +353,13 @@ export default function VoiceStudySession() {
     setRunning(false);
     awaitingRef.current = false;
     try { speechSynthesis.cancel(); } catch { }
-    try { recognitionRef.current?.stop(); } catch { }
+    stopRecognition();
   };
 
   const resume = async () => {
     if (vocab.length === 0 || done) return;
     setRunning(true);
     runningRef.current = true;
-    try { recognitionRef.current?.start(); setListening(true); } catch { }
     const c = vocabRef.current[idxRef.current];
     if (c) await speakCard(c);
   };
