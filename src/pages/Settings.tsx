@@ -10,6 +10,18 @@ import { toast } from "sonner";
 const JLPT_LEVELS = ["N5", "N4", "N3", "N2", "N1"] as const;
 type JlptLevel = typeof JLPT_LEVELS[number];
 
+// Common countries for streaming-region filtering. Extendable.
+const COUNTRIES = [
+  { code: "CH", name: "Switzerland" },
+  { code: "US", name: "United States" },
+  { code: "JP", name: "Japan" },
+  { code: "GB", name: "United Kingdom" },
+  { code: "DE", name: "Germany" },
+  { code: "FR", name: "France" },
+  { code: "CA", name: "Canada" },
+  { code: "AU", name: "Australia" },
+] as const;
+
 export default function Settings() {
   const { profile, signOut, refreshProfile, user } = useAuth();
   const navigate = useNavigate();
@@ -26,6 +38,20 @@ export default function Settings() {
     }
     await refreshProfile();
     toast.success(`Level set to ${level}`);
+  };
+
+  const setCountry = async (code: string | null) => {
+    if (!user) return;
+    const { error } = await supabase
+      .from("profiles")
+      .update({ country: code })
+      .eq("user_id", user.id);
+    if (error) {
+      toast.error("Couldn't update country");
+      return;
+    }
+    await refreshProfile();
+    toast.success(code ? `Country set to ${code}` : "Country cleared");
   };
 
   const retakePlacement = async () => {
