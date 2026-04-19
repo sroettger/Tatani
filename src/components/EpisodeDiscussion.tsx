@@ -73,13 +73,18 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
     speechSynthesis.speak(u);
   };
 
-  const send = async (overrideText?: string) => {
+  const send = async (overrideText?: string, opts?: { autoStart?: boolean }) => {
+    const isAutoStart = !!opts?.autoStart;
     const text = (overrideText ?? input).trim();
-    if (!text || loading) return;
+    if (!isAutoStart && (!text || loading)) return;
+    if (isAutoStart && loading) return;
     setInput("");
-    const userMsg: Msg = { role: "user", content: text };
-    const next = [...messages, userMsg];
-    setMessages(next);
+    let next: Msg[] = messages;
+    if (!isAutoStart) {
+      const userMsg: Msg = { role: "user", content: text };
+      next = [...messages, userMsg];
+      setMessages(next);
+    }
     setLoading(true);
 
     let assistantSoFar = "";
@@ -107,7 +112,7 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
           Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
         },
         signal: controller.signal,
-        body: JSON.stringify({ episode_id: episodeId, messages: next }),
+        body: JSON.stringify({ episode_id: episodeId, messages: next, auto_start: isAutoStart }),
       });
 
       if (!resp.ok) {
