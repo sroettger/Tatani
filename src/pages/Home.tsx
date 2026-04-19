@@ -69,7 +69,7 @@ function SortableLibraryCard({
   };
 
   return (
-    <div ref={setNodeRef} style={style}>
+    <div ref={setNodeRef} style={style} className="min-w-0">
       <Card
         className="p-3 gradient-card border-border/50 cursor-pointer hover:border-primary/40 transition-all shadow-card overflow-hidden"
         onClick={onOpen}
@@ -214,7 +214,7 @@ export default function Home() {
         </Button>
       </div>
 
-      <div className="px-5 grid gap-3">
+      <div className="px-5 grid gap-3 min-w-0">
         {loading && <div className="text-muted-foreground text-sm">Loading…</div>}
         {!loading && library.length === 0 && (
           <Card className="p-8 text-center gradient-card border-border/50">
