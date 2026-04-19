@@ -162,6 +162,16 @@ Deno.serve(async (req) => {
         const allVocab = await extractVocabFromSubtitles(cleaned);
         console.log(`Episode ${episode_id}: tokenized → ${allVocab.length} unique words`);
 
+        // 1b. AI pass: detect common words written in unusual kana-only form
+        // (childish speech, stylization) that kuromoji splits into fragments.
+        const knownSurfaces = new Set(allVocab.map((v) => v.word));
+        const subtitleLines = cleaned.split("\n").filter((l) => l.trim().length > 0);
+        const extraKanaVocab = await detectUnusualKanaSpellings(cleaned, subtitleLines, knownSurfaces, LOVABLE_API_KEY);
+        if (extraKanaVocab.length > 0) {
+          console.log(`Episode ${episode_id}: +${extraKanaVocab.length} unusual-kana vocab merged`);
+          allVocab.push(...extraKanaVocab);
+        }
+
         // 2. Tag JLPT levels from official list (covers ~8000 most common words).
         const tagged = allVocab.map((v) => ({
           ...v,
