@@ -83,6 +83,20 @@ export default function Settings() {
     }
   };
 
+  const wipeAnimeData = async () => {
+    if (!user) return;
+    if (!confirm("Delete ALL anime data? This wipes the catalog (anime, episodes, subtitles, processed vocab) plus everyone's library and study chunks. Admin only.")) return;
+    try {
+      const { data, error } = await supabase.functions.invoke("wipe-anime-data", { body: {} });
+      if (error) throw error;
+      const counts = (data as any)?.counts ?? {};
+      const summary = Object.entries(counts).map(([k, v]) => `${k}: ${v}`).join(", ");
+      toast.success("Anime data deleted", { description: summary });
+    } catch (e: any) {
+      toast.error("Failed to delete anime data", { description: e?.message ?? "" });
+    }
+  };
+
   return (
     <div className="max-w-2xl mx-auto">
       <PageHeader title="Settings" subtitle="Account" icon={<SettingsIcon className="h-4 w-4" />} />
