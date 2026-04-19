@@ -63,7 +63,7 @@ function FormattedMsg({ text }: { text: string }) {
   return (
     <div className="space-y-2">
       {correctionLines.length > 0 && (
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs space-y-0.5">
+        <div className="rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-xs space-y-0.5">
           {correctionLines.map((l, i) => {
             const isEnglishNote = /^\s*\*\(.*\)\*\s*$/.test(l);
             const cleaned = isEnglishNote ? l.replace(/^\s*\*\(/, "").replace(/\)\*\s*$/, "") : l;
