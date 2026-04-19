@@ -115,6 +115,29 @@ export default function Settings() {
         </Card>
 
         <Card className="p-4 gradient-card border-border/50">
+          <h3 className="font-semibold mb-1">Country</h3>
+          <p className="text-xs text-muted-foreground mb-3">Used for region-aware streaming filters (e.g. Netflix availability).</p>
+          <div className="flex flex-wrap gap-2">
+            {COUNTRIES.map((c) => (
+              <Button
+                key={c.code}
+                size="sm"
+                variant={profile?.country === c.code ? "default" : "outline"}
+                onClick={() => setCountry(c.code)}
+                className="h-8"
+              >
+                {c.code} <span className="text-xs text-muted-foreground ml-1">{c.name}</span>
+              </Button>
+            ))}
+            {profile?.country && (
+              <Button size="sm" variant="ghost" onClick={() => setCountry(null)} className="h-8 text-xs">
+                Clear
+              </Button>
+            )}
+          </div>
+        </Card>
+
+        <Card className="p-4 gradient-card border-border/50">
           <h3 className="font-semibold mb-1">Retake placement quiz</h3>
           <p className="text-xs text-muted-foreground mb-3">Generates a fresh quiz and re-seeds your known-word list.</p>
           <Button variant="outline" onClick={retakePlacement}><RotateCw className="h-4 w-4" /> Retake</Button>
