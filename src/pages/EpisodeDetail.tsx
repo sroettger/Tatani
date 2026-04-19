@@ -3,7 +3,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ChevronLeft, Loader2, Upload, Sparkles, BookOpen, BrainCircuit, Volume2, Plus, Mic, Layers, Check, Type, CheckCircle2, RotateCw, Tv } from "lucide-react";
+import { ChevronLeft, Loader2, Upload, Sparkles, BookOpen, BrainCircuit, Volume2, Plus, Mic, Layers, Check, Type, CheckCircle2, RotateCw, Tv, GraduationCap, Repeat } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
@@ -14,6 +15,12 @@ import { cn } from "@/lib/utils";
 // so unclassified/proper-noun vocab is never auto-skipped.
 const JLPT_RANK: Record<string, number> = { N5: 1, N4: 2, N3: 3, N2: 4, N1: 5, none: 6 };
 const CHUNK_SIZE = 10;
+// SRS intervals in days (Leitner-style). Index = srs_level.
+const SRS_INTERVALS_DAYS = [1, 3, 7, 14, 30, 60, 120, 240, 480];
+const dueAtForLevel = (level: number) => {
+  const days = SRS_INTERVALS_DAYS[Math.min(level, SRS_INTERVALS_DAYS.length - 1)];
+  return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+};
 
 type VocabItem = {
   word: string;
@@ -27,7 +34,8 @@ type VocabItem = {
 type SentenceItem = { jp: string; en: string };
 type WordPref = "study" | "kanji_only" | "skip";
 type WordState = "unknown" | "learning" | "known";
-type WordRow = { word: string; state: WordState; preference: WordPref };
+type KnownSource = "prior" | "learned" | null;
+type WordRow = { word: string; state: WordState; preference: WordPref; known_source: KnownSource; srs_level: number; srs_due_at: string | null };
 
 export default function EpisodeDetail() {
   const { episodeId } = useParams();
@@ -54,9 +62,14 @@ export default function EpisodeDetail() {
     const { data: cache } = await supabase.from("episode_vocab_cache").select("vocab,sentences").eq("episode_id", episodeId).maybeSingle();
     setVocab(((cache?.vocab ?? []) as VocabItem[]));
     setSentences(((cache?.sentences ?? []) as SentenceItem[]));
-    const { data: words } = await supabase.from("user_word_state").select("word,state,preference").eq("user_id", user.id);
+    const { data: words } = await supabase.from("user_word_state").select("word,state,preference,known_source,srs_level,srs_due_at").eq("user_id", user.id);
     const map = new Map<string, WordRow>();
-    (words ?? []).forEach((w: any) => map.set(w.word, { word: w.word, state: w.state, preference: w.preference }));
+    (words ?? []).forEach((w: any) => map.set(w.word, {
+      word: w.word, state: w.state, preference: w.preference,
+      known_source: (w.known_source ?? null) as KnownSource,
+      srs_level: w.srs_level ?? 0,
+      srs_due_at: w.srs_due_at ?? null,
+    }));
     setWordStates(map);
     const { data: ch } = await supabase
       .from("study_chunks")
@@ -199,37 +212,124 @@ export default function EpisodeDetail() {
   const chunkedCount = chunks.reduce((s, c) => s + c.word_count, 0);
   const chunksStale = chunks.length > 0 && chunkedCount !== studyableCount;
 
-  const upsertWord = async (v: VocabItem, patch: Partial<Pick<WordRow, "state" | "preference">>) => {
+  const upsertWord = async (
+    v: VocabItem,
+    patch: Partial<Pick<WordRow, "state" | "preference" | "known_source" | "srs_level" | "srs_due_at">>,
+    extra?: { marked_known_at?: string | null }
+  ) => {
     if (!user) return;
     const prev = wordStates.get(v.word);
     const next: WordRow = {
       word: v.word,
       state: (patch.state ?? prev?.state ?? "unknown") as WordState,
       preference: (patch.preference ?? prev?.preference ?? "study") as WordPref,
+      known_source: (patch.known_source !== undefined ? patch.known_source : (prev?.known_source ?? null)) as KnownSource,
+      srs_level: patch.srs_level ?? prev?.srs_level ?? 0,
+      srs_due_at: patch.srs_due_at !== undefined ? patch.srs_due_at : (prev?.srs_due_at ?? null),
     };
     setWordStates(m => {
       const nm = new Map(m);
       nm.set(v.word, next);
       return nm;
     });
-    await supabase.from("user_word_state").upsert({
+    const payload: any = {
       user_id: user.id,
       word: v.word,
       reading: v.reading,
       jlpt_level: (v.jlpt_level as any) ?? null,
       state: next.state,
       preference: next.preference,
-    }, { onConflict: "user_id,word" });
+      known_source: next.known_source,
+      srs_level: next.srs_level,
+      srs_due_at: next.srs_due_at,
+    };
+    if (extra?.marked_known_at !== undefined) payload.marked_known_at = extra.marked_known_at;
+    await supabase.from("user_word_state").upsert(payload, { onConflict: "user_id,word" });
   };
 
-  const markKnown = (v: VocabItem) => upsertWord(v, { state: "known" });
-  const markNew = (v: VocabItem) => upsertWord(v, { state: "unknown" });
+  // Default "Known" action = "Learned it" (SRS-tracked, will resurface in future episodes).
+  const markKnownLearned = (v: VocabItem) =>
+    upsertWord(v, { state: "known", known_source: "learned", srs_level: 0, srs_due_at: dueAtForLevel(0) }, { marked_known_at: new Date().toISOString() });
+  // "Already knew it" = permanent, never resurfaces.
+  const markKnownPrior = (v: VocabItem) =>
+    upsertWord(v, { state: "known", known_source: "prior", srs_level: 0, srs_due_at: null }, { marked_known_at: new Date().toISOString() });
+  const markNew = (v: VocabItem) =>
+    upsertWord(v, { state: "unknown", known_source: null, srs_due_at: null });
   const togglePref = (v: VocabItem) => {
     const cur = prefOf(v.word);
     const hasKanji = v.word !== v.reading;
     if (!hasKanji) return;
     upsertWord(v, { preference: cur === "kanji_only" ? "study" : "kanji_only" });
   };
+
+  // Demote any "learned" known word that's now due back into the "learning" queue,
+  // bumping its SRS level. "prior" words are never demoted.
+  const demoteDueWords = async (words: VocabItem[]): Promise<number> => {
+    if (!user || words.length === 0) return 0;
+    const now = Date.now();
+    const due = words.filter(v => {
+      const s = wordStates.get(v.word);
+      if (!s || s.state !== "known" || s.known_source !== "learned") return false;
+      if (!s.srs_due_at) return false;
+      return new Date(s.srs_due_at).getTime() <= now;
+    });
+    if (due.length === 0) return 0;
+    const updates = due.map(v => {
+      const s = wordStates.get(v.word)!;
+      const newLevel = Math.min(s.srs_level + 1, SRS_INTERVALS_DAYS.length - 1);
+      return {
+        user_id: user.id,
+        word: v.word,
+        reading: v.reading,
+        jlpt_level: (v.jlpt_level as any) ?? null,
+        state: "learning" as WordState,
+        preference: s.preference,
+        known_source: "learned" as KnownSource,
+        srs_level: newLevel,
+        srs_due_at: dueAtForLevel(newLevel),
+        correct_streak: 0,
+      };
+    });
+    await supabase.from("user_word_state").upsert(updates as any, { onConflict: "user_id,word" });
+    setWordStates(m => {
+      const nm = new Map(m);
+      for (const u of updates) {
+        const prev = nm.get(u.word);
+        nm.set(u.word, {
+          word: u.word,
+          state: u.state,
+          preference: u.preference,
+          known_source: u.known_source,
+          srs_level: u.srs_level,
+          srs_due_at: u.srs_due_at,
+        });
+      }
+      return nm;
+    });
+    return due.length;
+  };
+
+  // Manual rewatch: re-evaluate this episode's vocab right now.
+  const [rewatching, setRewatching] = useState(false);
+  const handleRewatch = async () => {
+    setRewatching(true);
+    const n = await demoteDueWords(vocab);
+    setRewatching(false);
+    if (n > 0) toast.success(`${n} word${n === 1 ? "" : "s"} back in your queue`);
+    else toast.message("Nothing due yet", { description: "All learned words are still within their review interval." });
+  };
+
+  // Auto-demote on first open: only if user has never created chunks for this episode
+  // (i.e. truly first time viewing). This keeps already-opened episodes stable.
+  const autoDemoteRanRef = useRef(false);
+  useEffect(() => {
+    if (autoDemoteRanRef.current) return;
+    if (!user || vocab.length === 0) return;
+    if (chunks.length > 0) { autoDemoteRanRef.current = true; return; }
+    autoDemoteRanRef.current = true;
+    demoteDueWords(vocab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vocab, chunks, user]);
 
   const chunkify = async () => {
     if (!user || !episodeId) return;
@@ -272,7 +372,21 @@ export default function EpisodeDetail() {
       <div className="flex items-center justify-between mb-6">
         <Button variant="ghost" size="icon" onClick={() => navigate(-1)}><ChevronLeft className="h-5 w-5" /></Button>
         <div className="text-sm text-muted-foreground">Episode {episode?.episode_number}</div>
-        <div className="w-9" />
+        {vocab.length > 0 ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-9 px-2 text-xs gap-1"
+            onClick={handleRewatch}
+            disabled={rewatching}
+            title="Re-evaluate learned words: any past their review interval will return to your queue"
+          >
+            {rewatching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Repeat className="h-4 w-4" />}
+            Rewatch
+          </Button>
+        ) : (
+          <div className="w-9" />
+        )}
       </div>
 
       {vocab.length === 0 ? (
@@ -365,7 +479,7 @@ export default function EpisodeDetail() {
                 <div className="text-sm text-muted-foreground">Queue empty — you've mastered everything in this episode!</div>
               ) : (
                 <div className="grid gap-1 max-h-96 overflow-y-auto">
-                  {queueVocab.map((v) => renderQueueRow(v, prefOf, togglePref, markKnown, frequency.get(v.word) ?? 0))}
+                  {queueVocab.map((v) => renderQueueRow(v, prefOf, togglePref, markKnownLearned, markKnownPrior, frequency.get(v.word) ?? 0))}
                 </div>
               )}
             </Card>
@@ -392,7 +506,7 @@ export default function EpisodeDetail() {
                           <Plus className="h-3 w-3" /> New
                         </Button>
                       ) : (
-                        <Button size="sm" variant="ghost" className="h-7 px-2 shrink-0 hover:text-success" onClick={() => markKnown(v)}>
+                        <Button size="sm" variant="ghost" className="h-7 px-2 shrink-0 hover:text-success" onClick={() => markKnownLearned(v)}>
                           <CheckCircle2 className="h-3 w-3" /> Known
                         </Button>
                       )}
@@ -542,7 +656,14 @@ export default function EpisodeDetail() {
         onWordMarkedKnown={(w) => setWordStates(prev => {
           const next = new Map(prev);
           const existing = next.get(w);
-          next.set(w, { word: w, state: "known", preference: existing?.preference ?? "study" });
+          next.set(w, {
+            word: w,
+            state: "known",
+            preference: existing?.preference ?? "study",
+            known_source: existing?.known_source ?? "learned",
+            srs_level: existing?.srs_level ?? 0,
+            srs_due_at: existing?.srs_due_at ?? dueAtForLevel(0),
+          });
           return next;
         })}
       />
@@ -581,7 +702,8 @@ function renderQueueRow(
   v: VocabItem,
   prefOf: (w: string) => WordPref,
   togglePref: (v: VocabItem) => void,
-  markKnown: (v: VocabItem) => void,
+  markKnownLearned: (v: VocabItem) => void,
+  markKnownPrior: (v: VocabItem) => void,
   freq: number,
 ) {
   const pref = prefOf(v.word);
@@ -610,16 +732,35 @@ function renderQueueRow(
         >
           <Type className="h-3 w-3" /> Kanji
         </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 px-2 text-[11px] gap-1 hover:text-success"
-          onPointerDown={(e) => e.preventDefault()}
-          onClick={(e) => { markKnown(v); (e.currentTarget as HTMLButtonElement).blur(); }}
-          title="Mark as known"
-        >
-          <CheckCircle2 className="h-3 w-3" /> Known
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 text-[11px] gap-1 hover:text-success"
+              onPointerDown={(e) => e.preventDefault()}
+              title="Mark as known"
+            >
+              <CheckCircle2 className="h-3 w-3" /> Known
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuItem onClick={() => markKnownLearned(v)} className="gap-2">
+              <GraduationCap className="h-4 w-4 text-primary" />
+              <div className="flex flex-col">
+                <span className="text-xs font-medium">Learned it</span>
+                <span className="text-[10px] text-muted-foreground">Will resurface for review</span>
+              </div>
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => markKnownPrior(v)} className="gap-2">
+              <CheckCircle2 className="h-4 w-4 text-success" />
+              <div className="flex flex-col">
+                <span className="text-xs font-medium">Already knew it</span>
+                <span className="text-[10px] text-muted-foreground">Permanent — never resurfaces</span>
+              </div>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   );

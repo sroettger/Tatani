@@ -493,9 +493,13 @@ export type Database = {
           created_at: string
           id: string
           jlpt_level: Database["public"]["Enums"]["jlpt_level"] | null
+          known_source: string | null
           last_reviewed_at: string | null
+          marked_known_at: string | null
           preference: Database["public"]["Enums"]["word_preference"]
           reading: string | null
+          srs_due_at: string | null
+          srs_level: number
           state: Database["public"]["Enums"]["word_state"]
           updated_at: string
           user_id: string
@@ -506,9 +510,13 @@ export type Database = {
           created_at?: string
           id?: string
           jlpt_level?: Database["public"]["Enums"]["jlpt_level"] | null
+          known_source?: string | null
           last_reviewed_at?: string | null
+          marked_known_at?: string | null
           preference?: Database["public"]["Enums"]["word_preference"]
           reading?: string | null
+          srs_due_at?: string | null
+          srs_level?: number
           state?: Database["public"]["Enums"]["word_state"]
           updated_at?: string
           user_id: string
@@ -519,9 +527,13 @@ export type Database = {
           created_at?: string
           id?: string
           jlpt_level?: Database["public"]["Enums"]["jlpt_level"] | null
+          known_source?: string | null
           last_reviewed_at?: string | null
+          marked_known_at?: string | null
           preference?: Database["public"]["Enums"]["word_preference"]
           reading?: string | null
+          srs_due_at?: string | null
+          srs_level?: number
           state?: Database["public"]["Enums"]["word_state"]
           updated_at?: string
           user_id?: string
