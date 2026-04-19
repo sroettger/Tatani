@@ -340,11 +340,11 @@ export default function StudyChunk() {
           <ChevronLeft className="h-7 w-7" />
         </button>
 
-        {/* Right-side transparent skip-forward arrow */}
+        {/* Right-side transparent skip-forward arrow — leave space for furigana toggle */}
         <button
           onClick={(e) => { e.stopPropagation(); onSkipForward(); }}
           aria-label="Next word"
-          className="absolute top-0 right-0 h-full w-14 flex items-center justify-center rounded-r-lg bg-background/0 hover:bg-background/40 active:bg-background/60 transition text-muted-foreground hover:text-foreground"
+          className="absolute bottom-0 right-0 h-[calc(100%-3rem)] w-14 flex items-center justify-center rounded-br-lg bg-background/0 hover:bg-background/40 active:bg-background/60 transition text-muted-foreground hover:text-foreground"
         >
           <ChevronRight className="h-7 w-7" />
         </button>
