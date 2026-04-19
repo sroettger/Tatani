@@ -217,11 +217,74 @@ export default function EpisodeDetail() {
         </Card>
       ) : (
         <>
-          <div className="grid grid-cols-3 gap-2 mb-6">
-            <StatBox label="New" value={newVocab.length} accent="text-primary" />
-            <StatBox label="Known" value={skippedVocab.length} accent="text-success" />
+          <div className="grid grid-cols-3 gap-2 mb-4">
+            <StatBox
+              label="New"
+              value={newVocab.length}
+              accent="text-primary"
+              active={showNew}
+              onClick={() => { setShowNew(s => !s); setShowKnown(false); }}
+            />
+            <StatBox
+              label="Known"
+              value={skippedVocab.filter(v => knownWords.has(v.word)).length}
+              accent="text-success"
+              active={showKnown}
+              onClick={() => { setShowKnown(s => !s); setShowNew(false); }}
+            />
             <StatBox label="Mastery" value={`${masteryPct}%`} accent="text-accent" />
           </div>
+
+          {showNew && (
+            <Card className="p-3 mb-4 gradient-card border-border/50">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">New words ({newVocab.length})</div>
+              {newVocab.length === 0 ? (
+                <div className="text-sm text-muted-foreground">Nothing new — you've mastered them all.</div>
+              ) : (
+                <div className="grid gap-1.5 max-h-72 overflow-y-auto">
+                  {newVocab.map((v, i) => (
+                    <div key={i} className="flex items-center justify-between gap-2 py-1">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-jp text-sm truncate">
+                          {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
+                        </div>
+                        <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
+                      </div>
+                      <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+          )}
+
+          {showKnown && (() => {
+            const knownList = skippedVocab.filter(v => knownWords.has(v.word));
+            return (
+              <Card className="p-3 mb-4 gradient-card border-border/50">
+                <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Known words ({knownList.length})</div>
+                {knownList.length === 0 ? (
+                  <div className="text-sm text-muted-foreground">No words marked known yet for this episode.</div>
+                ) : (
+                  <div className="grid gap-1.5 max-h-72 overflow-y-auto">
+                    {knownList.map((v, i) => (
+                      <div key={i} className="flex items-center justify-between gap-2 py-1">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-jp text-sm truncate">
+                            {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
+                          </div>
+                          <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
+                        </div>
+                        <Button size="sm" variant="ghost" className="h-7 px-2 shrink-0" onClick={() => addBack(v)}>
+                          <Plus className="h-3 w-3" /> Re-add
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            );
+          })()}
 
           <div className="grid gap-2 mb-6">
             <Button
