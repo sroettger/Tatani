@@ -38,13 +38,7 @@ export default function StudySession() {
   const [quizChoice, setQuizChoice] = useState<number | null>(null);
 
   const [done, setDone] = useState<"none" | "review" | "quiz">("none");
-  const [showFurigana, setShowFurigana] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("furigana_on") === "1";
-  });
-  useEffect(() => {
-    if (typeof window !== "undefined") localStorage.setItem("furigana_on", showFurigana ? "1" : "0");
-  }, [showFurigana]);
+  const [showFurigana, setShowFurigana] = useState(false);
 
   // JLPT difficulty rank — must match EpisodeDetail. "none" treated as harder than N1.
   const JLPT_RANK: Record<string, number> = { N5: 1, N4: 2, N3: 3, N2: 4, N1: 5, none: 6 };
@@ -138,6 +132,7 @@ export default function StudySession() {
   };
   const nextReview = () => {
     setFlipped(false);
+    setShowFurigana(false);
     if (reviewIdx + 1 < vocab.length) setReviewIdx(reviewIdx + 1);
     else finish("review");
   };
