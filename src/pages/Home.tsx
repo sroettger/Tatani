@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { Plus, ChevronRight, Sparkles, Trash2 } from "lucide-react";
+import { Plus, ChevronRight, Sparkles, Trash2, GripVertical } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
@@ -19,6 +19,24 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  TouchSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 type AnimeRow = {
   id: string;
@@ -29,7 +47,74 @@ type AnimeRow = {
   year: number | null;
   episode_count: number;
 };
-type LibraryEntry = { id: string; added_at: string; anime: AnimeRow; processed: number };
+type LibraryEntry = { id: string; added_at: string; position: number; anime: AnimeRow; processed: number };
+
+function SortableLibraryCard({
+  entry,
+  onOpen,
+  onRemove,
+}: {
+  entry: LibraryEntry;
+  onOpen: () => void;
+  onRemove: (e: React.MouseEvent) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.id });
+  const total = entry.anime.episode_count || 0;
+  const pct = total > 0 ? Math.round((entry.processed / total) * 100) : 0;
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.6 : 1,
+    zIndex: isDragging ? 10 : "auto",
+  };
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <Card
+        className="p-3 gradient-card border-border/50 cursor-pointer hover:border-primary/40 transition-all shadow-card"
+        onClick={onOpen}
+      >
+        <div className="flex gap-3">
+          <button
+            type="button"
+            className="flex items-center justify-center -ml-1 px-1 text-muted-foreground hover:text-foreground touch-none cursor-grab active:cursor-grabbing"
+            aria-label="Drag to reorder"
+            onClick={(e) => e.stopPropagation()}
+            {...attributes}
+            {...listeners}
+          >
+            <GripVertical className="h-5 w-5" />
+          </button>
+          <div className="w-16 h-24 rounded-lg overflow-hidden bg-muted flex-shrink-0">
+            {entry.anime.cover_url ? (
+              <img src={entry.anime.cover_url} alt={entry.anime.title_romaji} className="w-full h-full object-cover" loading="lazy" />
+            ) : <div className="w-full h-full grid place-items-center text-muted-foreground text-xs">No cover</div>}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold truncate">{entry.anime.title_en ?? entry.anime.title_romaji}</div>
+            {entry.anime.title_jp && <div className="font-jp text-xs text-muted-foreground truncate">{entry.anime.title_jp}</div>}
+            <div className="text-xs text-muted-foreground mt-1">
+              {entry.processed} / {total || "?"} episodes ready
+            </div>
+            <Progress value={pct} className="h-1.5 mt-2" />
+          </div>
+          <div className="flex flex-col items-center gap-1 self-center">
+            <ChevronRight className="h-5 w-5 text-muted-foreground" />
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8 text-muted-foreground hover:text-destructive"
+              onClick={onRemove}
+              aria-label="Remove anime"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
 
 export default function Home() {
   const { user, profile } = useAuth();
@@ -39,6 +124,12 @@ export default function Home() {
   const [addOpen, setAddOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<LibraryEntry | null>(null);
   const [removing, setRemoving] = useState(false);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
   const removeAnime = async () => {
     if (!removeTarget || !user) return;
@@ -63,12 +154,12 @@ export default function Home() {
     setLoading(true);
     const { data } = await supabase
       .from("user_anime")
-      .select("id, added_at, anime:anime_id(id,title_romaji,title_en,title_jp,cover_url,year,episode_count)")
+      .select("id, added_at, position, anime:anime_id(id,title_romaji,title_en,title_jp,cover_url,year,episode_count)")
       .eq("user_id", user.id)
+      .order("position", { ascending: true })
       .order("added_at", { ascending: false });
 
     const rows = (data ?? []) as any[];
-    // count processed episodes per anime
     const enriched: LibraryEntry[] = await Promise.all(rows.map(async (r) => {
       const { count } = await supabase
         .from("episodes")
@@ -82,6 +173,31 @@ export default function Home() {
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [user]);
+
+  const onDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id || !user) return;
+    const oldIndex = library.findIndex(e => e.id === active.id);
+    const newIndex = library.findIndex(e => e.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+    const reordered = arrayMove(library, oldIndex, newIndex).map((e, i) => ({ ...e, position: i }));
+    setLibrary(reordered);
+
+    const updates = await Promise.all(
+      reordered.map((e) =>
+        supabase
+          .from("user_anime")
+          .update({ position: e.position })
+          .eq("id", e.id)
+          .eq("user_id", user.id),
+      ),
+    );
+    const failed = updates.find((r) => r.error);
+    if (failed?.error) {
+      toast({ title: "Couldn't save order", description: failed.error.message, variant: "destructive" });
+      load();
+    }
+  };
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -110,45 +226,18 @@ export default function Home() {
             </Button>
           </Card>
         )}
-        {library.map((entry) => {
-          const total = entry.anime.episode_count || 0;
-          const pct = total > 0 ? Math.round((entry.processed / total) * 100) : 0;
-          return (
-            <Card
-              key={entry.id}
-              className="p-3 gradient-card border-border/50 cursor-pointer hover:border-primary/40 transition-all shadow-card"
-              onClick={() => navigate(`/anime/${entry.anime.id}`)}
-            >
-              <div className="flex gap-3">
-                <div className="w-16 h-24 rounded-lg overflow-hidden bg-muted flex-shrink-0">
-                  {entry.anime.cover_url ? (
-                    <img src={entry.anime.cover_url} alt={entry.anime.title_romaji} className="w-full h-full object-cover" loading="lazy" />
-                  ) : <div className="w-full h-full grid place-items-center text-muted-foreground text-xs">No cover</div>}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold truncate">{entry.anime.title_en ?? entry.anime.title_romaji}</div>
-                  {entry.anime.title_jp && <div className="font-jp text-xs text-muted-foreground truncate">{entry.anime.title_jp}</div>}
-                  <div className="text-xs text-muted-foreground mt-1">
-                    {entry.processed} / {total || "?"} episodes ready
-                  </div>
-                  <Progress value={pct} className="h-1.5 mt-2" />
-                </div>
-                <div className="flex flex-col items-center gap-1 self-center">
-                  <ChevronRight className="h-5 w-5 text-muted-foreground" />
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                    onClick={(e) => { e.stopPropagation(); setRemoveTarget(entry); }}
-                    aria-label="Remove anime"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            </Card>
-          );
-        })}
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+          <SortableContext items={library.map(e => e.id)} strategy={verticalListSortingStrategy}>
+            {library.map((entry) => (
+              <SortableLibraryCard
+                key={entry.id}
+                entry={entry}
+                onOpen={() => navigate(`/anime/${entry.anime.id}`)}
+                onRemove={(e) => { e.stopPropagation(); setRemoveTarget(entry); }}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
       </div>
 
       <AddAnimeDialog open={addOpen} onOpenChange={setAddOpen} onAdded={load} />
