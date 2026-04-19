@@ -8,6 +8,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { TutorChat } from "@/components/TutorChat";
+import { Furigana } from "@/components/Furigana";
 
 type ChunkWord = {
   word: string; reading: string | null; meaning: string | null;
@@ -306,8 +307,8 @@ export default function StudyChunk() {
                 <div className="text-xs text-muted-foreground italic">{current?.part_of_speech} • {current?.jlpt_level}</div>
                 {current?.example_sentence_jp && (
                   <div className="mt-4 text-xs">
-                    <div className="font-jp">{current.example_sentence_jp}</div>
-                    <div className="text-muted-foreground">{current.example_sentence_en}</div>
+                    <Furigana text={current.example_sentence_jp} className="font-jp text-sm leading-loose" />
+                    <div className="text-muted-foreground mt-1">{current.example_sentence_en}</div>
                   </div>
                 )}
               </div>
