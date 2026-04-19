@@ -266,12 +266,7 @@ export default function EpisodeDetail() {
     upsertWord(v, { state: "known", known_source: "prior", srs_level: 0, srs_due_at: null }, { marked_known_at: new Date().toISOString() });
   const markNew = (v: VocabItem) =>
     upsertWord(v, { state: "unknown", known_source: null, srs_due_at: null });
-  const togglePref = (v: VocabItem) => {
-    const cur = prefOf(v.word);
-    const hasKanji = v.word !== v.reading;
-    if (!hasKanji) return;
-    upsertWord(v, { preference: cur === "kanji_only" ? "study" : "kanji_only" });
-  };
+  // (kanji-only feature removed)
 
   // Demote any "learned" known word that's now due back into the "learning" queue,
   // bumping its SRS level. "prior" words are never demoted.
@@ -474,7 +469,6 @@ export default function EpisodeDetail() {
                   )}
                 </div>
                 <div className="text-[10px] text-muted-foreground/80 flex items-center gap-2">
-                  <span className="inline-flex items-center gap-1"><Type className="h-3 w-3" />kanji-only</span>
                   <span className="inline-flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />known</span>
                 </div>
               </div>
@@ -482,7 +476,7 @@ export default function EpisodeDetail() {
                 <div className="text-sm text-muted-foreground">Queue empty — you've mastered everything in this episode!</div>
               ) : (
                 <div className="grid gap-1 max-h-96 overflow-y-auto">
-                  {queueVocab.map((v) => renderQueueRow(v, prefOf, togglePref, studiedWords.has(v.word) ? markKnownLearned : markKnownPrior, frequency.get(v.word) ?? 0))}
+                  {queueVocab.map((v) => renderQueueRow(v, studiedWords.has(v.word) ? markKnownLearned : markKnownPrior, frequency.get(v.word) ?? 0))}
                 </div>
               )}
             </Card>
