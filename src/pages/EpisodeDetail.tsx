@@ -47,6 +47,7 @@ export default function EpisodeDetail() {
   const [vocab, setVocab] = useState<VocabItem[]>([]);
   const [sentences, setSentences] = useState<SentenceItem[]>([]);
   const [wordStates, setWordStates] = useState<Map<string, WordRow>>(new Map());
+  const [studiedWords, setStudiedWords] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [progressStage, setProgressStage] = useState<string>("");
   const [showAll, setShowAll] = useState(false);
