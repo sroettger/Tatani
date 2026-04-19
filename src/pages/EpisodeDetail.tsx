@@ -422,6 +422,7 @@ export default function EpisodeDetail() {
                           <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
                           <div className="text-[10px] text-muted-foreground/70">{reason}</div>
                         </div>
+                        <FreqBadge freq={frequency.get(v.word) ?? 0} />
                         <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
                         <Button
                           size="sm"
