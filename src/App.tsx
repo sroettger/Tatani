@@ -45,7 +45,6 @@ const App = () => (
               }
             >
               <Route path="/" element={<Home />} />
-              <Route path="/study" element={<Study />} />
               <Route path="/stats" element={<Stats />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/anime/:animeId" element={<AnimeDetail />} />
