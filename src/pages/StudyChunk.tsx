@@ -315,6 +315,16 @@ export default function StudyChunk() {
           </div>
         </div>
 
+        {/* Left-side transparent skip-back arrow */}
+        <button
+          onClick={(e) => { e.stopPropagation(); onSkipBack(); }}
+          aria-label="Previous word"
+          disabled={history.length === 0}
+          className="absolute top-0 left-0 h-full w-14 flex items-center justify-center rounded-l-lg bg-background/0 hover:bg-background/40 active:bg-background/60 transition text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:hover:bg-background/0"
+        >
+          <ChevronLeft className="h-7 w-7" />
+        </button>
+
         {/* Right-side transparent skip-forward arrow */}
         <button
           onClick={(e) => { e.stopPropagation(); onSkipForward(); }}
