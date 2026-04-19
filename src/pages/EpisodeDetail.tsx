@@ -374,7 +374,7 @@ export default function EpisodeDetail() {
             <Card className="p-3 mb-4 gradient-card border-border/50">
               <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">All words ({vocab.length})</div>
               <div className="grid gap-1 max-h-96 overflow-y-auto">
-                {vocab.map((v) => {
+                {sortedVocab.map((v) => {
                   const bucket = bucketOf(v);
                   return (
                     <div key={`${v.word}-${v.reading}`} className="flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0">
