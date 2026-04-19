@@ -139,11 +139,6 @@ export default function EpisodeDetail() {
     await startProcess(data.content);
   };
 
-  const onUpload = async (file: File) => {
-    const text = await file.text();
-    await startProcess(text);
-  };
-
   const speak = (text: string) => {
     if (!("speechSynthesis" in window)) return;
     const u = new SpeechSynthesisUtterance(text);
