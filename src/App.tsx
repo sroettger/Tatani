@@ -15,7 +15,7 @@ import StudySession from "./pages/StudySession";
 import VoiceStudySession from "./pages/VoiceStudySession";
 import StudyChunk from "./pages/StudyChunk";
 import ChunkQuiz from "./pages/ChunkQuiz";
-import Study from "./pages/Study";
+
 import Stats from "./pages/Stats";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
