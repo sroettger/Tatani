@@ -9,9 +9,13 @@ function getTokenizer(): Promise<any> {
   tokenizerPromise = new Promise((resolve, reject) => {
     kuromoji.builder({ dicPath: "/dict" }).build((err: any, tk: any) => {
       if (err) {
+        console.error("[Furigana] tokenizer build failed", err);
         tokenizerPromise = null;
         reject(err);
-      } else resolve(tk);
+      } else {
+        console.log("[Furigana] tokenizer ready");
+        resolve(tk);
+      }
     });
   });
   return tokenizerPromise;
