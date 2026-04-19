@@ -14,12 +14,6 @@ type Props = {
   studiedWordCount: number;
 };
 
-const STARTERS_JP = [
-  "今日のエピソードはどう思った？",
-  "一番好きなキャラクターは誰？",
-  "次のエピソードで何が起こると思う？",
-];
-
 // Strip ** markers for TTS
 const stripMd = (s: string) => s.replace(/\*\*/g, "").replace(/\*\(English:[^)]*\)\*/g, "").trim();
 
@@ -79,13 +73,18 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
     speechSynthesis.speak(u);
   };
 
-  const send = async (overrideText?: string) => {
+  const send = async (overrideText?: string, opts?: { autoStart?: boolean }) => {
+    const isAutoStart = !!opts?.autoStart;
     const text = (overrideText ?? input).trim();
-    if (!text || loading) return;
+    if (!isAutoStart && (!text || loading)) return;
+    if (isAutoStart && loading) return;
     setInput("");
-    const userMsg: Msg = { role: "user", content: text };
-    const next = [...messages, userMsg];
-    setMessages(next);
+    let next: Msg[] = messages;
+    if (!isAutoStart) {
+      const userMsg: Msg = { role: "user", content: text };
+      next = [...messages, userMsg];
+      setMessages(next);
+    }
     setLoading(true);
 
     let assistantSoFar = "";
@@ -113,7 +112,7 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
           Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
         },
         signal: controller.signal,
-        body: JSON.stringify({ episode_id: episodeId, messages: next }),
+        body: JSON.stringify({ episode_id: episodeId, messages: next, auto_start: isAutoStart }),
       });
 
       if (!resp.ok) {
@@ -197,25 +196,18 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
       ) : (
         <>
           <div ref={scrollRef} className="max-h-80 overflow-y-auto space-y-2.5 mb-3">
-            {messages.length === 0 && (
-              <div className="text-xs text-muted-foreground mb-2">
-                Chat with an AI partner in Japanese about what you just watched. Pick a starter or write your own.
-              </div>
-            )}
-
-            {messages.length === 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {STARTERS_JP.map((s) => (
-                  <Button
-                    key={s}
-                    size="sm"
-                    variant="outline"
-                    className="h-auto py-1.5 px-2.5 font-jp text-xs whitespace-normal text-left"
-                    onClick={() => send(s)}
-                  >
-                    {s}
-                  </Button>
-                ))}
+            {messages.length === 0 && !loading && (
+              <div className="flex flex-col items-start gap-2">
+                <div className="text-xs text-muted-foreground">
+                  Chat in Japanese with an AI partner who watched this episode with you.
+                </div>
+                <Button
+                  size="sm"
+                  className="gradient-primary text-primary-foreground h-9"
+                  onClick={() => send(undefined, { autoStart: true })}
+                >
+                  <MessageCircle className="h-4 w-4" /> Start the conversation
+                </Button>
               </div>
             )}
 
@@ -252,7 +244,7 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
               </div>
             ))}
 
-            {loading && messages[messages.length - 1]?.role === "user" && (
+            {loading && messages[messages.length - 1]?.role !== "assistant" && (
               <div className="rounded-lg bg-muted/50 px-3 py-2 text-sm max-w-[88%]">
                 <span className="inline-flex gap-1">
                   <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground animate-pulse" />
