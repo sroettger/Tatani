@@ -11,6 +11,7 @@ type Profile = {
   placement_done: boolean;
   total_words_known: number;
   study_streak: number;
+  country: string | null;
 };
 
 type AuthCtx = {

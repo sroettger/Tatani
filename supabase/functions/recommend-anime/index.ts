@@ -19,6 +19,7 @@ query ($search: String) {
       seasonYear
       episodes
       description(asHtml: false)
+      externalLinks { site url language }
     }
   }
 }`;
@@ -33,6 +34,19 @@ const LEVEL_GUIDE: Record<string, string> = {
   N1: "Advanced. Complex dialogue, dense vocabulary, period pieces, politics, philosophy (e.g. Monogatari, Legend of the Galactic Heroes, Mushishi, Psycho-Pass).",
   none: "Unknown level — assume beginner-friendly slice-of-life with simple Japanese.",
 };
+
+// Map AniList externalLinks into normalized streaming platform tags.
+// AniList's externalLinks doesn't expose a reliable country code, so Netflix
+// regional availability is best-effort (presence of a Netflix link only).
+function extractStreaming(links: Array<{ site?: string; url?: string; language?: string }> | null | undefined) {
+  const out = new Set<string>();
+  for (const l of links ?? []) {
+    const site = (l?.site ?? "").toLowerCase();
+    if (site.includes("crunchyroll")) out.add("crunchyroll");
+    if (site.includes("netflix")) out.add("netflix");
+  }
+  return Array.from(out);
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -52,12 +66,24 @@ Deno.serve(async (req) => {
     }
     const userId = claims.claims.sub as string;
 
+    // Optional body: { streaming_filters: ["crunchyroll","netflix"] }
+    let streamingFilters: string[] = [];
+    try {
+      const body = await req.json();
+      if (Array.isArray(body?.streaming_filters)) {
+        streamingFilters = body.streaming_filters
+          .filter((s: unknown) => typeof s === "string")
+          .map((s: string) => s.toLowerCase());
+      }
+    } catch { /* no body */ }
+
     // Get profile + library
     const [{ data: profile }, { data: libRows }] = await Promise.all([
-      supa.from("profiles").select("jlpt_level").eq("user_id", userId).maybeSingle(),
+      supa.from("profiles").select("jlpt_level, country").eq("user_id", userId).maybeSingle(),
       supa.from("user_anime").select("anime:anime_id(title_romaji,title_en,title_jp)").eq("user_id", userId),
     ]);
     const level = (profile?.jlpt_level ?? "none") as string;
+    const country = (profile?.country ?? null) as string | null;
     const ownedTitles = (libRows ?? [])
       .map((r: any) => [r.anime?.title_en, r.anime?.title_romaji, r.anime?.title_jp].filter(Boolean))
       .flat();
@@ -68,7 +94,6 @@ Deno.serve(async (req) => {
     }
 
     const guide = LEVEL_GUIDE[level] ?? LEVEL_GUIDE.none;
-    // Group library titles by anime (en/romaji/jp variants per row)
     const libraryByAnime = (libRows ?? []).map((r: any) => {
       const a = r.anime ?? {};
       return [a.title_en, a.title_romaji, a.title_jp].filter(Boolean);
@@ -85,7 +110,10 @@ ${primaryTitles.map((t) => `- ${t}`).join("\n")}`
 ${libraryByAnime.map((titles) => `- ${titles.join(" / ")}`).join("\n")}`
       : "";
 
-    const prompt = `Recommend 8 anime to a Japanese learner at JLPT ${level}.
+    // Ask for more candidates when filtering, since some won't match the platform.
+    const wantCount = streamingFilters.length ? 16 : 8;
+
+    const prompt = `Recommend ${wantCount} anime to a Japanese learner at JLPT ${level}.
 Level guidance: ${guide}
 
 ${librarySection}
@@ -96,7 +124,7 @@ Recommendation rules:
 - Base picks on what the library reveals about the user's taste (genres, tone, themes, art style, era). If the library is mixed, cover the main threads.
 - Stay appropriate in linguistic difficulty for JLPT ${level}.
 - Prefer well-known anime easy to find on AniList (use the most common English or romaji title).
-- Vary picks: don't recommend 8 near-identical shows.
+- Vary picks: don't recommend ${wantCount} near-identical shows.
 
 For each pick, the "reason" must explicitly reference which library anime (or pattern across the library) inspired it AND note why it fits the user's level.
 
@@ -133,9 +161,9 @@ Return ONLY JSON in this exact shape: {"suggestions":[{"title":"...","reason":"o
     const content = aiData?.choices?.[0]?.message?.content ?? "{}";
     let parsed: { suggestions?: Suggestion[] } = {};
     try { parsed = JSON.parse(content); } catch { parsed = {}; }
-    const suggestions = (parsed.suggestions ?? []).slice(0, 8);
+    const suggestions = (parsed.suggestions ?? []).slice(0, wantCount);
 
-    // Lookup AniList for each title to enrich with cover/ids
+    // Lookup AniList for each title to enrich with cover/ids/streaming
     const ownedSet = new Set(ownedTitles.map((t: string) => t.toLowerCase()));
     const enriched = await Promise.all(
       suggestions.map(async (s) => {
@@ -150,6 +178,7 @@ Return ONLY JSON in this exact shape: {"suggestions":[{"title":"...","reason":"o
           if (!m) return null;
           const titles = [m.title?.english, m.title?.romaji, m.title?.native].filter(Boolean);
           if (titles.some((t: string) => ownedSet.has(t.toLowerCase()))) return null;
+          const streaming = extractStreaming(m.externalLinks);
           return {
             anilist_id: m.id,
             mal_id: m.idMal,
@@ -160,6 +189,7 @@ Return ONLY JSON in this exact shape: {"suggestions":[{"title":"...","reason":"o
             year: m.seasonYear ?? null,
             episode_count: m.episodes ?? 0,
             synopsis: m.description?.replace(/<[^>]+>/g, "") ?? null,
+            streaming,
             reason: s.reason,
           };
         } catch (e) {
@@ -169,8 +199,14 @@ Return ONLY JSON in this exact shape: {"suggestions":[{"title":"...","reason":"o
       }),
     );
 
-    const results = enriched.filter(Boolean);
-    return new Response(JSON.stringify({ results, level }), {
+    let results = enriched.filter(Boolean) as Array<{ streaming: string[] }>;
+    if (streamingFilters.length) {
+      results = results.filter((r) => streamingFilters.some((f) => r.streaming.includes(f)));
+    }
+    // Cap final results so UI stays manageable
+    results = results.slice(0, 8);
+
+    return new Response(JSON.stringify({ results, level, country }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {

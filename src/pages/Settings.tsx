@@ -10,6 +10,18 @@ import { toast } from "sonner";
 const JLPT_LEVELS = ["N5", "N4", "N3", "N2", "N1"] as const;
 type JlptLevel = typeof JLPT_LEVELS[number];
 
+// Common countries for streaming-region filtering. Extendable.
+const COUNTRIES = [
+  { code: "CH", name: "Switzerland" },
+  { code: "US", name: "United States" },
+  { code: "JP", name: "Japan" },
+  { code: "GB", name: "United Kingdom" },
+  { code: "DE", name: "Germany" },
+  { code: "FR", name: "France" },
+  { code: "CA", name: "Canada" },
+  { code: "AU", name: "Australia" },
+] as const;
+
 export default function Settings() {
   const { profile, signOut, refreshProfile, user } = useAuth();
   const navigate = useNavigate();
@@ -26,6 +38,20 @@ export default function Settings() {
     }
     await refreshProfile();
     toast.success(`Level set to ${level}`);
+  };
+
+  const setCountry = async (code: string | null) => {
+    if (!user) return;
+    const { error } = await supabase
+      .from("profiles")
+      .update({ country: code })
+      .eq("user_id", user.id);
+    if (error) {
+      toast.error("Couldn't update country");
+      return;
+    }
+    await refreshProfile();
+    toast.success(code ? `Country set to ${code}` : "Country cleared");
   };
 
   const retakePlacement = async () => {
@@ -85,6 +111,29 @@ export default function Settings() {
                 {lvl}
               </Button>
             ))}
+          </div>
+        </Card>
+
+        <Card className="p-4 gradient-card border-border/50">
+          <h3 className="font-semibold mb-1">Country</h3>
+          <p className="text-xs text-muted-foreground mb-3">Used for region-aware streaming filters (e.g. Netflix availability).</p>
+          <div className="flex flex-wrap gap-2">
+            {COUNTRIES.map((c) => (
+              <Button
+                key={c.code}
+                size="sm"
+                variant={profile?.country === c.code ? "default" : "outline"}
+                onClick={() => setCountry(c.code)}
+                className="h-8"
+              >
+                {c.code} <span className="text-xs text-muted-foreground ml-1">{c.name}</span>
+              </Button>
+            ))}
+            {profile?.country && (
+              <Button size="sm" variant="ghost" onClick={() => setCountry(null)} className="h-8 text-xs">
+                Clear
+              </Button>
+            )}
           </div>
         </Card>
 
