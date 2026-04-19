@@ -60,18 +60,30 @@ export default function WatchEpisode() {
     (async () => {
       if (!episodeId || !user) return;
       setLoading(true);
-      const [{ data: ep }, { data: cache }, { data: words }] = await Promise.all([
+      // Get all chunks the user has studied for this episode, then their words.
+      const [{ data: ep }, { data: cache }, { data: chunks }, { data: words }] = await Promise.all([
         supabase.from("episodes").select("episode_number").eq("id", episodeId).maybeSingle(),
         supabase.from("episode_vocab_cache").select("vocab").eq("episode_id", episodeId).maybeSingle(),
+        supabase.from("study_chunks").select("id").eq("episode_id", episodeId).eq("user_id", user.id).not("studied_at", "is", null),
         supabase.from("user_word_state").select("word,state,correct_streak,preference").eq("user_id", user.id),
       ]);
       setEpisode(ep as any);
       const epVocab = ((cache?.vocab ?? []) as VocabItem[]);
+      const chunkIds = (chunks ?? []).map((c: any) => c.id);
+      let studiedWordsSet = new Set<string>();
+      if (chunkIds.length > 0) {
+        const { data: chunkWords } = await supabase
+          .from("study_chunk_words")
+          .select("word")
+          .in("chunk_id", chunkIds);
+        (chunkWords ?? []).forEach((w: any) => studiedWordsSet.add(w.word));
+      }
       const stateMap = new Map<string, { state: string; correct_streak: number; preference: string }>();
       (words ?? []).forEach((w: any) => stateMap.set(w.word, w));
-      // Eligible = words user has interacted with, in "learning" state OR "known" with streak < 3
-      // Exclude "skip" preference. Exclude unknown (not yet learned).
+      // Eligible = words actually studied in a chunk for THIS episode,
+      // still in "learning" or "known" with streak < 3. Exclude "skip".
       const eligible = epVocab.filter(v => {
+        if (!studiedWordsSet.has(v.word)) return false;
         const s = stateMap.get(v.word);
         if (!s) return false;
         if (s.preference === "skip") return false;
