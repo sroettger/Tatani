@@ -228,8 +228,7 @@ export default function EpisodeDetail() {
   const sortedVocab = useMemo(() => [...vocab].sort(byImportance), [vocab, importance]);
   const newVocab = useMemo(() => sortedVocab.filter(v => bucketOf(v) === "new"), [sortedVocab, wordStates, myRank]);
   const knownVocab = useMemo(() => sortedVocab.filter(v => bucketOf(v) === "known"), [sortedVocab, wordStates, myRank]);
-  // Queue = up to 30 most-important words to learn next (study/kanji_only preference, not skipped).
-  const QUEUE_SIZE = 30;
+  // Queue = up to QUEUE_SIZE most-important words to learn next (study/kanji_only preference, not skipped).
   const queueVocab = useMemo(
     () => newVocab.filter(v => prefOf(v.word) !== "skip").slice(0, QUEUE_SIZE),
     [newVocab, wordStates]
