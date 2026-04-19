@@ -324,7 +324,7 @@ export default function EpisodeDetail() {
                     const hasKanji = v.word !== v.reading;
                     const kanjiOnly = pref === "kanji_only";
                     return (
-                      <div key={i} className="flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0">
+                      <div key={i} className="flex flex-wrap items-center gap-2 py-2 border-b border-border/30 last:border-0">
                         <div className="min-w-0 flex-1">
                           <div className="font-jp text-sm truncate">
                             {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
@@ -333,25 +333,27 @@ export default function EpisodeDetail() {
                           <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
                         </div>
                         <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
-                        <Button
-                          size="icon"
-                          variant={kanjiOnly ? "default" : "ghost"}
-                          className={cn("h-7 w-7 shrink-0", !hasKanji && "opacity-30")}
-                          disabled={!hasKanji}
-                          onClick={() => togglePref(v)}
-                          title={hasKanji ? (kanjiOnly ? "Studying kanji only" : "Switch to kanji-only") : "No kanji in this word"}
-                        >
-                          <Type className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 shrink-0 text-muted-foreground hover:text-success"
-                          onClick={() => markKnown(v)}
-                          title="Mark as known"
-                        >
-                          <CheckCircle2 className="h-3.5 w-3.5" />
-                        </Button>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <Button
+                            size="sm"
+                            variant={kanjiOnly ? "default" : "outline"}
+                            className={cn("h-7 px-2 text-[11px] gap-1", !hasKanji && "opacity-30")}
+                            disabled={!hasKanji}
+                            onClick={() => togglePref(v)}
+                            title={hasKanji ? (kanjiOnly ? "Studying kanji only" : "Switch to kanji-only") : "No kanji in this word"}
+                          >
+                            <Type className="h-3 w-3" /> Kanji
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2 text-[11px] gap-1 hover:text-success"
+                            onClick={() => markKnown(v)}
+                            title="Mark as known"
+                          >
+                            <CheckCircle2 className="h-3 w-3" /> Known
+                          </Button>
+                        </div>
                       </div>
                     );
                   })}
