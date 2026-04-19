@@ -288,15 +288,6 @@ export default function StudyChunk() {
         </Button>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 mb-3">
-        <Button variant="outline" onClick={onLearning} className="h-12">
-          <X className="h-4 w-4" /> Still learning
-        </Button>
-        <Button onClick={onKnow} className="h-12 bg-success text-success-foreground hover:bg-success/90">
-          <Check className="h-4 w-4" /> I know this
-        </Button>
-      </div>
-
       <div className="flex justify-center">
         <Button variant="ghost" size="sm" onClick={onDoneForSession} className="text-xs text-muted-foreground">
           Done with this word for now
