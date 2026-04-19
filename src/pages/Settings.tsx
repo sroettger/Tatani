@@ -2,7 +2,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/PageHeader";
 import { useAuth } from "@/context/AuthContext";
-import { Settings as SettingsIcon, LogOut, RotateCw, Trash2 } from "lucide-react";
+import { Settings as SettingsIcon, LogOut, RotateCw, Trash2, Film } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -83,6 +83,20 @@ export default function Settings() {
     }
   };
 
+  const wipeAnimeData = async () => {
+    if (!user) return;
+    if (!confirm("Delete ALL anime data? This wipes the catalog (anime, episodes, subtitles, processed vocab) plus everyone's library and study chunks. Admin only.")) return;
+    try {
+      const { data, error } = await supabase.functions.invoke("wipe-anime-data", { body: {} });
+      if (error) throw error;
+      const counts = (data as any)?.counts ?? {};
+      const summary = Object.entries(counts).map(([k, v]) => `${k}: ${v}`).join(", ");
+      toast.success("Anime data deleted", { description: summary });
+    } catch (e: any) {
+      toast.error("Failed to delete anime data", { description: e?.message ?? "" });
+    }
+  };
+
   return (
     <div className="max-w-2xl mx-auto">
       <PageHeader title="Settings" subtitle="Account" icon={<SettingsIcon className="h-4 w-4" />} />
@@ -147,6 +161,12 @@ export default function Settings() {
           <h3 className="font-semibold mb-1">Reset study data <span className="text-xs text-muted-foreground font-normal">(dev)</span></h3>
           <p className="text-xs text-muted-foreground mb-3">Wipes known words, quiz results, and study sessions, then sends you back to onboarding.</p>
           <Button variant="outline" onClick={resetStudyData}><Trash2 className="h-4 w-4" /> Reset study data</Button>
+        </Card>
+
+        <Card className="p-4 gradient-card border-border/50">
+          <h3 className="font-semibold mb-1">Delete anime data <span className="text-xs text-muted-foreground font-normal">(admin)</span></h3>
+          <p className="text-xs text-muted-foreground mb-3">Wipes the entire anime catalog (anime, episodes, subtitles, processed vocab) and everyone's libraries + study chunks. Profiles and known words are kept.</p>
+          <Button variant="outline" onClick={wipeAnimeData}><Film className="h-4 w-4" /> Delete anime data</Button>
         </Card>
 
         <Card className="p-4 gradient-card border-border/50">
