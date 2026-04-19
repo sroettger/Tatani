@@ -719,16 +719,25 @@ function renderQueueRow(
         >
           <Type className="h-3 w-3" /> Kanji
         </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 px-2 text-[11px] gap-1 hover:text-success"
+          onClick={() => markKnownLearned(v)}
+          title="Mark as learned"
+        >
+          <CheckCircle2 className="h-3 w-3" /> Known
+        </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               size="sm"
               variant="outline"
-              className="h-7 px-2 text-[11px] gap-1 hover:text-success"
-              onPointerDown={(e) => e.preventDefault()}
-              title="Mark as known"
+              className="h-7 w-7 shrink-0 px-0 text-[11px]"
+              title="More known options"
+              aria-label="More known options"
             >
-              <CheckCircle2 className="h-3 w-3" /> Known
+              ···
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
