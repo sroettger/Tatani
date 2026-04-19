@@ -114,10 +114,12 @@ export function Furigana({ text, className }: { text: string; className?: string
         }
 
         return (
-          <ruby key={i}>
-            {surface}
-            <rt className="text-[0.55em] text-muted-foreground font-normal">{reading}</rt>
-          </ruby>
+          <span key={i} className="inline-flex flex-col items-center align-middle mx-[0.04em]">
+            <span className="text-[0.55em] leading-none text-muted-foreground font-normal mb-0.5">
+              {reading}
+            </span>
+            <span className="leading-none">{surface}</span>
+          </span>
         );
       })}
     </span>
