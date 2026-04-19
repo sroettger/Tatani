@@ -210,7 +210,7 @@ export default function StudySession() {
         <div className="w-9" />
       </div>
 
-      <Tabs defaultValue="review" className="w-full">
+      <Tabs defaultValue="quiz" className="w-full">
         <TabsList className="grid grid-cols-2 w-full mb-6">
           <TabsTrigger value="review">Review</TabsTrigger>
           <TabsTrigger value="quiz">Quiz</TabsTrigger>
