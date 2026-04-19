@@ -31,6 +31,7 @@ type VocabItem = {
   jlpt_level: string;
   example_sentence_jp: string;
   example_sentence_en: string;
+  frequency?: number;
 };
 type SentenceItem = { jp: string; en: string };
 type WordPref = "study" | "kanji_only" | "skip";
@@ -205,11 +206,15 @@ export default function EpisodeDetail() {
     const score = new Map<string, number>();
     const freqMap = new Map<string, number>();
     for (const v of vocab) {
-      const w = v.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      let freq = 0;
-      if (w) {
-        const re = new RegExp(w, "g");
-        freq = (corpus.match(re) ?? []).length;
+      // Prefer the tokenizer's true subtitle frequency; fall back to corpus regex match
+      // for older cached entries that don't carry `frequency`.
+      let freq = typeof v.frequency === "number" ? v.frequency : 0;
+      if (!freq) {
+        const w = v.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        if (w) {
+          const re = new RegExp(w, "g");
+          freq = (corpus.match(re) ?? []).length;
+        }
       }
       freqMap.set(v.word, freq);
       score.set(v.word, freq * 10 + (JLPT_COMMONNESS[v.jlpt_level] ?? 0));
@@ -709,13 +714,16 @@ function StatBox({ label, value, accent, active, onClick }: { label: string; val
 }
 
 function FreqBadge({ freq }: { freq: number }) {
-  if (freq <= 0) return null;
-  // Visual heat: 1 = subtle, 2 = warm, 3+ = hot.
-  const tone = freq >= 3 ? "bg-primary/15 text-primary" : freq === 2 ? "bg-accent/15 text-accent" : "bg-muted text-muted-foreground";
+  // Visual heat: 0 = neutral, 1 = subtle, 2 = warm, 3+ = hot.
+  const tone =
+    freq >= 3 ? "bg-primary/15 text-primary"
+    : freq === 2 ? "bg-accent/15 text-accent"
+    : freq === 1 ? "bg-muted text-muted-foreground"
+    : "bg-muted/50 text-muted-foreground/70";
   return (
     <span
       className={cn("text-[10px] px-1.5 py-0.5 rounded-full shrink-0 tabular-nums", tone)}
-      title={`Appears ${freq}× in this episode's example sentences`}
+      title={`Appears ${freq}× in this episode`}
     >
       ×{freq}
     </span>
