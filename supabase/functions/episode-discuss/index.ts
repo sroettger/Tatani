@@ -27,7 +27,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    const { episode_id, messages } = await req.json();
+    const { episode_id, messages, auto_start } = await req.json();
     if (!episode_id || !Array.isArray(messages)) {
       return new Response(JSON.stringify({ error: "episode_id and messages required" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -53,11 +53,12 @@ Deno.serve(async (req) => {
     }
 
     const jlpt = profile?.jlpt_level && profile.jlpt_level !== "none" ? profile.jlpt_level : "N5";
-    const sentences = ((cache?.sentences ?? []) as any[]).slice(0, 25);
+    // Use as many cached sentences as we can — these ARE the episode's plot for the AI.
+    const allSentences = ((cache?.sentences ?? []) as any[]);
+    const sentenceContext = allSentences.map((s: any, i: number) => `[${i + 1}] JP: ${s.jp}\n    EN: ${s.en}`).join("\n");
     const wordList = studiedWords.length
       ? studiedWords.map(w => `- ${w.word}（${w.reading}）= ${w.meaning}`).join("\n")
       : "(none yet)";
-    const sentenceContext = sentences.map((s: any) => `JP: ${s.jp}\nEN: ${s.en}`).join("\n\n");
 
     const systemPrompt = `あなたはユーザーが今見たアニメのエピソードについて、日本語で楽しく話し合う会話パートナーです。
 
@@ -67,19 +68,29 @@ EPISODE: ${ep?.episode_number ?? "?"}${ep?.title_en ? ` — ${ep.title_en}` : ""
 YOUR ROLE:
 - Always reply in Japanese (日本語のみ).
 - Match the learner's level (${jlpt}). Use simple grammar and vocabulary they can understand.
+- You HAVE WATCHED THIS EPISODE — the numbered subtitle lines below ARE the actual dialogue. Refer to specific moments, characters' lines, and events from those subtitles. Do NOT make up plot points that aren't supported by the subtitles.
+- Ask SPECIFIC, CONCRETE questions about things that actually happened in this episode (a particular line a character said, a specific event, an emotional moment), not generic questions like "did you like it?".
 - Prefer using the learner's RECENTLY STUDIED WORDS below when they fit naturally — this reinforces their learning.
-- Ask engaging follow-up questions about characters, plot, feelings, predictions, favorite moments, etc.
 - Keep responses SHORT (2-4 sentences max) so it feels like a real conversation.
-- If the learner writes in English, gently encourage Japanese: respond mostly in Japanese with a small bracketed English hint if needed.
+- If the learner writes in English, gently encourage Japanese: respond mostly in Japanese.
 - After your Japanese reply, on a NEW LINE, add an English translation in italics like: *(English: ...)* — this helps the learner check understanding without breaking the Japanese flow.
 - If you use a vocabulary word from their studied list, you may bold it with **word** so the UI can highlight it.
-- Be warm, curious, and fun — like a friend chatting about an anime episode together.
+- Be warm, curious, and fun — like a friend who just watched the episode with them.
 
 LEARNER'S RECENTLY STUDIED WORDS (use these when natural):
 ${wordList}
 
-EPISODE PLOT CONTEXT (for your reference, don't quote directly):
-${sentenceContext}`;
+ACTUAL EPISODE DIALOGUE (numbered subtitle lines from this episode — your source of truth):
+${sentenceContext || "(no subtitles available — ask general questions instead)"}`;
+
+    // Auto-start: model has no user input yet — instruct it to open the conversation
+    // with a specific plot question grounded in the subtitles above.
+    const finalMessages = auto_start && messages.length === 0
+      ? [{
+          role: "user",
+          content: "Start our conversation. Greet me briefly, then ask ONE specific, concrete question in Japanese about something that actually happened in this episode (reference a specific moment, line, or event from the subtitles). Keep it short and inviting.",
+        }]
+      : messages;
 
     const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
