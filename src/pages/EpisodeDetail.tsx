@@ -385,6 +385,7 @@ export default function EpisodeDetail() {
                         </div>
                         <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
                       </div>
+                      <FreqBadge freq={frequency.get(v.word) ?? 0} />
                       <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
                       {bucket === "known" ? (
                         <Button size="sm" variant="ghost" className="h-7 px-2 shrink-0" onClick={() => markNew(v)}>
