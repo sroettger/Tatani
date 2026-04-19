@@ -259,8 +259,92 @@ export type Database = {
           },
         ]
       }
+      study_chunk_words: {
+        Row: {
+          chunk_id: string
+          created_at: string
+          example_sentence_en: string | null
+          example_sentence_jp: string | null
+          id: string
+          jlpt_level: Database["public"]["Enums"]["jlpt_level"] | null
+          meaning: string | null
+          part_of_speech: string | null
+          position: number
+          reading: string | null
+          word: string
+        }
+        Insert: {
+          chunk_id: string
+          created_at?: string
+          example_sentence_en?: string | null
+          example_sentence_jp?: string | null
+          id?: string
+          jlpt_level?: Database["public"]["Enums"]["jlpt_level"] | null
+          meaning?: string | null
+          part_of_speech?: string | null
+          position: number
+          reading?: string | null
+          word: string
+        }
+        Update: {
+          chunk_id?: string
+          created_at?: string
+          example_sentence_en?: string | null
+          example_sentence_jp?: string | null
+          id?: string
+          jlpt_level?: Database["public"]["Enums"]["jlpt_level"] | null
+          meaning?: string | null
+          part_of_speech?: string | null
+          position?: number
+          reading?: string | null
+          word?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "study_chunk_words_chunk_id_fkey"
+            columns: ["chunk_id"]
+            isOneToOne: false
+            referencedRelation: "study_chunks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      study_chunks: {
+        Row: {
+          chunk_index: number
+          created_at: string
+          episode_id: string
+          id: string
+          studied_at: string | null
+          updated_at: string
+          user_id: string
+          word_count: number
+        }
+        Insert: {
+          chunk_index: number
+          created_at?: string
+          episode_id: string
+          id?: string
+          studied_at?: string | null
+          updated_at?: string
+          user_id: string
+          word_count?: number
+        }
+        Update: {
+          chunk_index?: number
+          created_at?: string
+          episode_id?: string
+          id?: string
+          studied_at?: string | null
+          updated_at?: string
+          user_id?: string
+          word_count?: number
+        }
+        Relationships: []
+      }
       study_sessions: {
         Row: {
+          chunk_id: string | null
           episode_id: string | null
           finished_at: string | null
           id: string
@@ -271,6 +355,7 @@ export type Database = {
           words_studied: number
         }
         Insert: {
+          chunk_id?: string | null
           episode_id?: string | null
           finished_at?: string | null
           id?: string
@@ -281,6 +366,7 @@ export type Database = {
           words_studied?: number
         }
         Update: {
+          chunk_id?: string | null
           episode_id?: string | null
           finished_at?: string | null
           id?: string
@@ -291,6 +377,13 @@ export type Database = {
           words_studied?: number
         }
         Relationships: [
+          {
+            foreignKeyName: "study_sessions_chunk_id_fkey"
+            columns: ["chunk_id"]
+            isOneToOne: false
+            referencedRelation: "study_chunks"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "study_sessions_episode_id_fkey"
             columns: ["episode_id"]
@@ -398,6 +491,7 @@ export type Database = {
           id: string
           jlpt_level: Database["public"]["Enums"]["jlpt_level"] | null
           last_reviewed_at: string | null
+          preference: Database["public"]["Enums"]["word_preference"]
           reading: string | null
           state: Database["public"]["Enums"]["word_state"]
           updated_at: string
@@ -410,6 +504,7 @@ export type Database = {
           id?: string
           jlpt_level?: Database["public"]["Enums"]["jlpt_level"] | null
           last_reviewed_at?: string | null
+          preference?: Database["public"]["Enums"]["word_preference"]
           reading?: string | null
           state?: Database["public"]["Enums"]["word_state"]
           updated_at?: string
@@ -422,6 +517,7 @@ export type Database = {
           id?: string
           jlpt_level?: Database["public"]["Enums"]["jlpt_level"] | null
           last_reviewed_at?: string | null
+          preference?: Database["public"]["Enums"]["word_preference"]
           reading?: string | null
           state?: Database["public"]["Enums"]["word_state"]
           updated_at?: string
@@ -450,6 +546,7 @@ export type Database = {
       quiz_type: "jp_to_meaning" | "meaning_to_jp" | "fill_blank"
       study_mode: "review" | "quiz"
       subtitle_source: "auto" | "upload"
+      word_preference: "study" | "kanji_only" | "skip"
       word_state: "unknown" | "learning" | "known"
     }
     CompositeTypes: {
@@ -584,6 +681,7 @@ export const Constants = {
       quiz_type: ["jp_to_meaning", "meaning_to_jp", "fill_blank"],
       study_mode: ["review", "quiz"],
       subtitle_source: ["auto", "upload"],
+      word_preference: ["study", "kanji_only", "skip"],
       word_state: ["unknown", "learning", "known"],
     },
   },
