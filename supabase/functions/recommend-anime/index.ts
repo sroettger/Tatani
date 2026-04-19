@@ -68,18 +68,39 @@ Deno.serve(async (req) => {
     }
 
     const guide = LEVEL_GUIDE[level] ?? LEVEL_GUIDE.none;
+    // Group library titles by anime (en/romaji/jp variants per row)
+    const libraryByAnime = (libRows ?? []).map((r: any) => {
+      const a = r.anime ?? {};
+      return [a.title_en, a.title_romaji, a.title_jp].filter(Boolean);
+    });
+    const primaryTitles = libraryByAnime.map((t) => t[0]).filter(Boolean);
+
+    const librarySection = primaryTitles.length
+      ? `The user's current library (use these as the PRIMARY signal for taste — genre, tone, themes, era, studios):
+${primaryTitles.map((t) => `- ${t}`).join("\n")}`
+      : `The user has no anime in their library yet — recommend broadly appealing, level-appropriate starter anime.`;
+
+    const exclusionSection = libraryByAnime.length
+      ? `Do NOT recommend any of these (already owned), nor direct sequels/prequels/spinoffs of them:
+${libraryByAnime.map((titles) => `- ${titles.join(" / ")}`).join("\n")}`
+      : "";
+
     const prompt = `Recommend 8 anime to a Japanese learner at JLPT ${level}.
 Level guidance: ${guide}
 
-The user already has these in their library — DO NOT recommend them or any season/spinoff of them:
-${ownedTitles.length ? ownedTitles.map(t => `- ${t}`).join("\n") : "(none yet)"}
+${librarySection}
 
-Pick well-known anime that are:
-- Appropriate in linguistic difficulty for the user's level
-- Diverse in genre when possible
-- Easy to find on AniList (use the most common English or romaji title)
+${exclusionSection}
 
-Return ONLY JSON in this exact shape: {"suggestions":[{"title":"...","reason":"one short sentence why it suits this level"}]}.`;
+Recommendation rules:
+- Base picks on what the library reveals about the user's taste (genres, tone, themes, art style, era). If the library is mixed, cover the main threads.
+- Stay appropriate in linguistic difficulty for JLPT ${level}.
+- Prefer well-known anime easy to find on AniList (use the most common English or romaji title).
+- Vary picks: don't recommend 8 near-identical shows.
+
+For each pick, the "reason" must explicitly reference which library anime (or pattern across the library) inspired it AND note why it fits the user's level.
+
+Return ONLY JSON in this exact shape: {"suggestions":[{"title":"...","reason":"one short sentence connecting it to their library and level"}]}.`;
 
     const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
