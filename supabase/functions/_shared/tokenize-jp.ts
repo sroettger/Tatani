@@ -45,6 +45,42 @@ function katakanaToHiragana(s: string): string {
   return s.replace(/[\u30A1-\u30F6]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
 }
 
+const KANA_RE = /[\u3040-\u309F\u30A0-\u30FFー]/;
+
+// Count trailing kana chars in a (possibly mixed kanji+kana) string.
+function trailingKanaCount(s: string): number {
+  let n = 0;
+  for (let i = s.length - 1; i >= 0; i--) {
+    if (KANA_RE.test(s[i])) n++;
+    else break;
+  }
+  return n;
+}
+
+// Get the trailing kana portion of a string.
+function trailingKana(s: string): string {
+  return s.slice(s.length - trailingKanaCount(s));
+}
+
+/**
+ * Convert a surface-form reading into the dictionary-form reading.
+ * Kuromoji gives `reading` for the inflected `surface_form`, but we store
+ * `basic_form` as the word — without this fix, 殴る shows as なぐっ, 助ける as たすけ.
+ *
+ * Strategy: strip the trailing-kana portion of the surface from the reading,
+ * then append the trailing-kana portion of the dictionary form.
+ */
+function dictionaryFormReading(surface: string, basic: string, surfaceReading: string): string {
+  if (!surfaceReading) return "";
+  if (surface === basic) return surfaceReading;
+  const surfaceTailLen = trailingKanaCount(surface);
+  const basicTail = trailingKana(basic);
+  // Reading should end with the surface's trailing kana — strip that many chars,
+  // then append the dictionary form's trailing kana.
+  const stem = surfaceReading.slice(0, Math.max(0, surfaceReading.length - surfaceTailLen));
+  return stem + basicTail;
+}
+
 export type VocabEntry = {
   word: string;       // dictionary form (basic_form)
   reading: string;    // hiragana
@@ -89,7 +125,10 @@ export async function extractVocabFromSubtitles(text: string): Promise<VocabEntr
       const isAllKana = /^[\u3040-\u309F\u30A0-\u30FFー]+$/.test(word);
       if (isAllKana && word.length <= 2) continue;
 
-      const reading = t.reading ? katakanaToHiragana(t.reading) : "";
+      const surfaceReading = t.reading ? katakanaToHiragana(t.reading) : "";
+      // Kuromoji's `reading` matches the inflected surface_form. Convert it
+      // to the dictionary-form reading so cards display 殴る/なぐる, not 殴る/なぐっ.
+      const reading = dictionaryFormReading(t.surface_form, word, surfaceReading);
       const cur = map.get(word);
       if (cur) {
         cur.count++;

@@ -1,0 +1,2 @@
+DELETE FROM public.episode_vocab_cache WHERE episode_id = 'c9202aec-bb38-45aa-92c2-1da037845204';
+UPDATE public.episodes SET processing_status = 'not_processed', processing_chunks_done = 0, processing_chunks_total = 0 WHERE id = 'c9202aec-bb38-45aa-92c2-1da037845204';
