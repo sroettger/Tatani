@@ -513,15 +513,17 @@ export default function EpisodeDetail() {
                 {sortedVocab.filter((v) => matchesQuery(v, allQuery)).map((v) => {
                   const bucket = bucketOf(v);
                   return (
-                    <div key={`${v.word}-${v.reading}`} className="flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0">
+                    <div key={`${v.word}-${v.reading}`} className="flex items-start gap-2 py-1.5 border-b border-border/30 last:border-0">
                       <div className="min-w-0 flex-1">
                         <div className="font-jp text-sm truncate">
                           {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
                         </div>
                         <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
+                        <div className="flex items-center gap-1.5 mt-1">
+                          <FreqBadge freq={frequency.get(v.word) ?? 0} />
+                          <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
+                        </div>
                       </div>
-                      <FreqBadge freq={frequency.get(v.word) ?? 0} />
-                      <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
                       {bucket === "known" ? (
                         <Button size="sm" variant="ghost" className="h-7 px-2 shrink-0" onClick={() => markNew(v)}>
                           <Plus className="h-3 w-3" /> New
@@ -556,16 +558,18 @@ export default function EpisodeDetail() {
                       const s = wordStates.get(v.word);
                       const reason = s?.state === "known" ? "known" : "below your level";
                       return (
-                        <div key={`${v.word}-${v.reading}`} className="flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0">
+                        <div key={`${v.word}-${v.reading}`} className="flex items-start gap-2 py-1.5 border-b border-border/30 last:border-0">
                           <div className="min-w-0 flex-1">
                             <div className="font-jp text-sm truncate">
                               {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
                             </div>
                             <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
-                            <div className="text-[10px] text-muted-foreground/70">{reason}</div>
+                            <div className="flex items-center gap-1.5 mt-1">
+                              <FreqBadge freq={frequency.get(v.word) ?? 0} />
+                              <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
+                              <span className="text-[10px] text-muted-foreground/70">{reason}</span>
+                            </div>
                           </div>
-                          <FreqBadge freq={frequency.get(v.word) ?? 0} />
-                          <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
                           <Button
                             size="sm"
                             variant="ghost"
