@@ -16,6 +16,11 @@ type ChunkWord = {
   example_sentence_jp: string | null; example_sentence_en: string | null;
 };
 
+type EpisodeVocabWord = {
+  word: string;
+  reading?: string | null;
+};
+
 const KANJI_THRESHOLD = 2;
 const REQUIRED_KNOWN = 2; // mark as "session-done" after 2 consecutive "I know this"
 
@@ -47,14 +52,21 @@ export default function StudyChunk() {
     if (!chunkId || !user) return;
     (async () => {
       setLoading(true);
-      const [{ data: chunk }, { data: words }] = await Promise.all([
+      const [{ data: chunk }, { data: words }, { data: cache }] = await Promise.all([
         supabase.from("study_chunks").select("id,episode_id,chunk_index").eq("id", chunkId).maybeSingle(),
         supabase.from("study_chunk_words").select("*").eq("chunk_id", chunkId).order("position"),
+        supabase.from("episode_vocab_cache").select("vocab").eq("episode_id", chunkId).maybeSingle(),
       ]);
       if (!chunk) { toast.error("Chunk not found"); navigate(-1); return; }
       setEpisodeId(chunk.episode_id);
       setChunkIndex(chunk.chunk_index);
-      const list = (words ?? []) as ChunkWord[];
+      const latestReadings = new Map(
+        (((cache?.vocab ?? []) as EpisodeVocabWord[]).map((item) => [item.word, item.reading ?? null]))
+      );
+      const list = ((words ?? []) as ChunkWord[]).map((item) => ({
+        ...item,
+        reading: latestReadings.get(item.word) ?? item.reading,
+      }));
       setAllWords(list);
 
       // Pull persistent state for these words
