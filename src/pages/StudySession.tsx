@@ -9,6 +9,7 @@ import { useAuth } from "@/context/AuthContext";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { TutorChat } from "@/components/TutorChat";
+import { Furigana } from "@/components/Furigana";
 
 type VocabItem = {
   word: string; reading: string; meaning: string; part_of_speech: string;
@@ -260,8 +261,8 @@ export default function StudySession() {
                   <div className="text-xs text-muted-foreground italic">{reviewCard?.part_of_speech} • {reviewCard?.jlpt_level}</div>
                   {reviewCard?.example_sentence_jp && (
                     <div className="mt-4 text-xs">
-                      <div className="font-jp">{reviewCard.example_sentence_jp}</div>
-                      <div className="text-muted-foreground">{reviewCard.example_sentence_en}</div>
+                      <Furigana text={reviewCard.example_sentence_jp} className="font-jp text-sm leading-loose" />
+                      <div className="text-muted-foreground mt-1">{reviewCard.example_sentence_en}</div>
                     </div>
                   )}
                 </div>
