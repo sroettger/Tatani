@@ -212,21 +212,16 @@ export default function VoiceStudySession() {
   const recordWord = async (word: string, reading: string, jlpt: string, gotItRight: boolean) => {
     if (!user) return;
     const { data: existing } = await supabase
-      .from("user_word_state").select("state,correct_streak").eq("user_id", user.id).eq("word", word).maybeSingle();
+      .from("user_word_state").select("correct_streak").eq("user_id", user.id).eq("word", word).maybeSingle();
     const prevStreak = existing?.correct_streak ?? 0;
-    const prevState = existing?.state ?? "unknown";
     const newStreak = gotItRight ? prevStreak + 1 : 0;
-    let newState: "unknown" | "learning" | "known" = prevState as any;
-    if (gotItRight && newStreak >= 3) newState = "known";
-    else if (gotItRight) newState = newState === "unknown" ? "learning" : newState;
-    else newState = "learning";
 
+    // Note: state is only changed via manual marking on the episode page.
     await supabase.from("user_word_state").upsert({
       user_id: user.id, word, reading, jlpt_level: (jlpt as any) ?? null,
-      state: newState, correct_streak: newStreak, last_reviewed_at: new Date().toISOString(),
+      correct_streak: newStreak, last_reviewed_at: new Date().toISOString(),
     }, { onConflict: "user_id,word" });
     setStreaks(prev => ({ ...prev, [word]: newStreak }));
-    return newState;
   };
 
   // ---------- voice command handling ----------
