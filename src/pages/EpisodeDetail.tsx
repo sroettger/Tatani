@@ -498,8 +498,14 @@ export default function EpisodeDetail() {
           {showAll && (
             <Card className="p-3 mb-4 gradient-card border-border/50">
               <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">All words ({vocab.length})</div>
+              <Input
+                value={allQuery}
+                onChange={(e) => setAllQuery(e.target.value)}
+                placeholder="Search Japanese or English…"
+                className="h-8 mb-2"
+              />
               <div className="grid gap-1 max-h-96 overflow-y-auto">
-                {sortedVocab.map((v) => {
+                {sortedVocab.filter((v) => matchesQuery(v, allQuery)).map((v) => {
                   const bucket = bucketOf(v);
                   return (
                     <div key={`${v.word}-${v.reading}`} className="flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0">
