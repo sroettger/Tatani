@@ -59,7 +59,33 @@ Deno.serve(async (req) => {
       const { data: season } = await admin.from("seasons").insert({ anime_id: animeId, season_number: 1, episode_count: r.episode_count ?? 0 }).select("id").single();
       const epCount = Math.min(r.episode_count ?? 0, 200);
       if (season && epCount > 0) {
-        const eps = Array.from({ length: epCount }, (_, i) => ({ season_id: season.id, episode_number: i + 1 }));
+        // Try to fetch per-episode titles from Jikan (MAL) — paginated, 100 per page
+        const titles: Record<number, { en: string | null; jp: string | null }> = {};
+        if (r.mal_id) {
+          try {
+            const pages = Math.ceil(epCount / 100);
+            for (let p = 1; p <= pages; p++) {
+              const jr = await fetch(`https://api.jikan.moe/v4/anime/${r.mal_id}/episodes?page=${p}`);
+              if (!jr.ok) break;
+              const jd = await jr.json();
+              for (const e of jd?.data ?? []) {
+                if (typeof e?.mal_id === "number") {
+                  titles[e.mal_id] = { en: e.title ?? null, jp: e.title_japanese ?? null };
+                }
+              }
+              // Jikan rate limit: ~3 req/s
+              if (p < pages) await new Promise(res => setTimeout(res, 400));
+            }
+          } catch (err) {
+            console.warn("Jikan episode title fetch failed", err);
+          }
+        }
+        const eps = Array.from({ length: epCount }, (_, i) => ({
+          season_id: season.id,
+          episode_number: i + 1,
+          title_en: titles[i + 1]?.en ?? null,
+          title_jp: titles[i + 1]?.jp ?? null,
+        }));
         await admin.from("episodes").insert(eps);
       }
     }
