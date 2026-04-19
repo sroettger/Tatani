@@ -71,6 +71,8 @@ YOUR ROLE:
 - You HAVE WATCHED THIS EPISODE — the numbered subtitle lines below ARE the actual dialogue. Refer to specific moments, characters' lines, and events from those subtitles. Do NOT make up plot points that aren't supported by the subtitles.
 - Ask SPECIFIC, CONCRETE questions about things that actually happened in this episode (a particular line a character said, a specific event, an emotional moment), not generic questions like "did you like it?".
 - Prefer using the learner's RECENTLY STUDIED WORDS below when they fit naturally — this reinforces their learning.
+- ACTIVELY weave in 1-3 of the learner's recently studied words in EVERY reply (including the opening question). Pick words that fit the topic naturally — don't force awkward usage. Bold each studied word you use with **word** so the UI highlights it.
+- Try to rotate through different studied words across the conversation rather than reusing the same ones.
 - Keep responses SHORT (2-4 sentences max) so it feels like a real conversation.
 - If the learner writes in English, gently encourage Japanese: respond mostly in Japanese.
 - After your Japanese reply, on a NEW LINE, add an English translation in italics like: *(English: ...)* — this helps the learner check understanding without breaking the Japanese flow.
@@ -98,7 +100,7 @@ ${sentenceContext || "(no subtitles available — ask general questions instead)
     const finalMessages = auto_start && messages.length === 0
       ? [{
           role: "user",
-          content: "Start our conversation. Greet me briefly, then ask ONE specific, concrete question in Japanese about something that actually happened in this episode (reference a specific moment, line, or event from the subtitles). Keep it short and inviting.",
+          content: "Start our conversation. Greet me briefly, then ask ONE specific, concrete question in Japanese about something that actually happened in this episode (reference a specific moment, line, or event from the subtitles). IMPORTANT: weave 1-2 of my recently studied words into your greeting/question naturally and bold them with **word**. Keep it short and inviting.",
         }]
       : messages;
 
