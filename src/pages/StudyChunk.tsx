@@ -305,9 +305,11 @@ export default function StudyChunk() {
                 variant={showFurigana ? "default" : "ghost"}
                 size="sm"
                 onClick={(e) => { e.stopPropagation(); setShowFurigana(v => !v); }}
+                onPointerDown={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
                 aria-pressed={showFurigana}
                 title="Toggle furigana"
-                className="absolute top-2 right-2 h-8 gap-1 px-2 z-10"
+                className="absolute top-2 right-2 h-8 gap-1 px-2 z-20"
               >
                 <Languages className="h-3.5 w-3.5" />
                 <span className="font-jp text-[11px]">あ</span>
