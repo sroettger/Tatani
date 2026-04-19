@@ -26,10 +26,6 @@ Deno.serve(async (req) => {
     }
 
     const admin = createClient(SUPABASE_URL, SERVICE);
-    const { data: isAdmin } = await admin.rpc("has_role", { _user_id: userId, _role: "admin" });
-    if (!isAdmin) {
-      return new Response(JSON.stringify({ error: "Forbidden" }), { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
 
     // Find anime with missing episode titles
     const { data: anime } = await admin.from("anime").select("id, title_romaji, mal_id").not("mal_id", "is", null);
