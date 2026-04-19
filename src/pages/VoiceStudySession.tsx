@@ -318,8 +318,7 @@ export default function VoiceStudySession() {
     stopRecognition();
     const c = vocabRef.current[idxRef.current];
     if (!c) return;
-    const newState = await recordWord(c.word, c.reading, c.jlpt_level, known);
-    if (newState === "known") setReviewedKnown(k => k + 1);
+    await recordWord(c.word, c.reading, c.jlpt_level, known);
     setLastResult(known ? "known" : "learning");
     await speak(`${known ? "Got it." : "Keep learning."} ${c.reading}, ${c.meaning}.`, "en-US", 1);
     await advance();
