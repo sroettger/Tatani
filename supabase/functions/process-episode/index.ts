@@ -1,5 +1,6 @@
 // Process an episode's subtitles via Lovable AI (Gemini), cache result.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { getOfficialJlptLevel } from "../_shared/jlpt-lookup.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
