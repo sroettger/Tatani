@@ -41,7 +41,7 @@ export default function EpisodeDetail() {
   const { episodeId } = useParams();
   const navigate = useNavigate();
   const { user, profile } = useAuth();
-  const fileRef = useRef<HTMLInputElement>(null);
+  
   const pollRef = useRef<number | null>(null);
   const [episode, setEpisode] = useState<{ id: string; episode_number: number; processing_status: string; processing_chunks_total: number; processing_chunks_done: number } | null>(null);
   const [vocab, setVocab] = useState<VocabItem[]>([]);
@@ -133,16 +133,10 @@ export default function EpisodeDetail() {
     if (error) { setBusy(false); setProgressStage(""); toast.error("Subtitle fetch failed", { description: error.message }); return; }
     if (!data?.found) {
       setBusy(false); setProgressStage("");
-      toast.message("No auto-subtitles found", { description: "Upload a .srt or .ass file to continue." });
-      fileRef.current?.click();
+      toast.error("No subtitles found", { description: "Try again later." });
       return;
     }
     await startProcess(data.content);
-  };
-
-  const onUpload = async (file: File) => {
-    const text = await file.text();
-    await startProcess(text);
   };
 
   const speak = (text: string) => {
@@ -425,14 +419,6 @@ export default function EpisodeDetail() {
             <Button onClick={tryAutoFetch} disabled={busy} className="gradient-primary text-primary-foreground h-12">
               {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> Working…</> : <><Sparkles className="h-4 w-4" /> Auto-fetch & process</>}
             </Button>
-            <Button variant="outline" onClick={() => fileRef.current?.click()} disabled={busy} className="h-12">
-              <Upload className="h-4 w-4" /> Upload subtitle file
-            </Button>
-            <input
-              ref={fileRef} type="file" accept=".srt,.ass,.ssa,.vtt,.txt"
-              className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); }}
-            />
           </div>
         </Card>
       ) : (
