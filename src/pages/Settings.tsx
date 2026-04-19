@@ -1,11 +1,22 @@
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/PageHeader";
 import { useAuth } from "@/context/AuthContext";
-import { Settings as SettingsIcon, LogOut, RotateCw, Trash2, Film } from "lucide-react";
+import { Settings as SettingsIcon, LogOut, RotateCw, Trash2, Film, Layers } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import {
+  useStudyPrefs,
+  CHUNK_SIZE_MIN,
+  CHUNK_SIZE_MAX,
+  QUEUE_SIZE_MIN,
+  QUEUE_SIZE_MAX,
+  DEFAULT_CHUNK_SIZE,
+  DEFAULT_QUEUE_SIZE,
+} from "@/hooks/use-study-prefs";
 
 const JLPT_LEVELS = ["N5", "N4", "N3", "N2", "N1"] as const;
 type JlptLevel = typeof JLPT_LEVELS[number];
