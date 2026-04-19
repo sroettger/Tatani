@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Tokenizer from "@sglkc/kuromoji/src/Tokenizer";
 import DynamicDictionaries from "@sglkc/kuromoji/src/dict/DynamicDictionaries";
 
