@@ -11,11 +11,11 @@ import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { TutorChat } from "@/components/TutorChat";
 import { cn } from "@/lib/utils";
+import { useStudyPrefs } from "@/hooks/use-study-prefs";
 
 // JLPT difficulty rank — higher number = harder. "none" treated as harder than N1
 // so unclassified/proper-noun vocab is never auto-skipped.
 const JLPT_RANK: Record<string, number> = { N5: 1, N4: 2, N3: 3, N2: 4, N1: 5, none: 6 };
-const CHUNK_SIZE = 10;
 // SRS intervals in days (Leitner-style). Index = srs_level.
 const SRS_INTERVALS_DAYS = [1, 3, 7, 14, 30, 60, 120, 240, 480];
 const dueAtForLevel = (level: number) => {
@@ -43,7 +43,7 @@ export default function EpisodeDetail() {
   const { episodeId } = useParams();
   const navigate = useNavigate();
   const { user, profile } = useAuth();
-  
+  const { chunkSize: CHUNK_SIZE, queueSize: QUEUE_SIZE } = useStudyPrefs();
   const pollRef = useRef<number | null>(null);
   const [episode, setEpisode] = useState<{ id: string; episode_number: number; processing_status: string; processing_chunks_total: number; processing_chunks_done: number } | null>(null);
   const [vocab, setVocab] = useState<VocabItem[]>([]);
@@ -228,8 +228,7 @@ export default function EpisodeDetail() {
   const sortedVocab = useMemo(() => [...vocab].sort(byImportance), [vocab, importance]);
   const newVocab = useMemo(() => sortedVocab.filter(v => bucketOf(v) === "new"), [sortedVocab, wordStates, myRank]);
   const knownVocab = useMemo(() => sortedVocab.filter(v => bucketOf(v) === "known"), [sortedVocab, wordStates, myRank]);
-  // Queue = up to 30 most-important words to learn next (study/kanji_only preference, not skipped).
-  const QUEUE_SIZE = 30;
+  // Queue = up to QUEUE_SIZE most-important words to learn next (study/kanji_only preference, not skipped).
   const queueVocab = useMemo(
     () => newVocab.filter(v => prefOf(v.word) !== "skip").slice(0, QUEUE_SIZE),
     [newVocab, wordStates]

@@ -1,11 +1,22 @@
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/PageHeader";
 import { useAuth } from "@/context/AuthContext";
-import { Settings as SettingsIcon, LogOut, RotateCw, Trash2, Film } from "lucide-react";
+import { Settings as SettingsIcon, LogOut, RotateCw, Trash2, Film, Layers } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import {
+  useStudyPrefs,
+  CHUNK_SIZE_MIN,
+  CHUNK_SIZE_MAX,
+  QUEUE_SIZE_MIN,
+  QUEUE_SIZE_MAX,
+  DEFAULT_CHUNK_SIZE,
+  DEFAULT_QUEUE_SIZE,
+} from "@/hooks/use-study-prefs";
 
 const JLPT_LEVELS = ["N5", "N4", "N3", "N2", "N1"] as const;
 type JlptLevel = typeof JLPT_LEVELS[number];
@@ -25,6 +36,7 @@ const COUNTRIES = [
 export default function Settings() {
   const { profile, signOut, refreshProfile, user } = useAuth();
   const navigate = useNavigate();
+  const { chunkSize, queueSize, setChunkSize, setQueueSize } = useStudyPrefs();
 
   const setJlptLevel = async (level: JlptLevel) => {
     if (!user || profile?.jlpt_level === level) return;
@@ -148,6 +160,61 @@ export default function Settings() {
                 Clear
               </Button>
             )}
+          </div>
+        </Card>
+
+        <Card className="p-4 gradient-card border-border/50">
+          <h3 className="font-semibold mb-1 flex items-center gap-2"><Layers className="h-4 w-4" /> Study batches</h3>
+          <p className="text-xs text-muted-foreground mb-3">
+            Tweak how many words you tackle per episode and per flashcard chunk.
+          </p>
+          <div className="grid gap-3">
+            <div>
+              <Label htmlFor="queue-size" className="text-xs">
+                "To learn" batch size
+                <span className="ml-1 text-muted-foreground/70 font-normal">
+                  ({QUEUE_SIZE_MIN}–{QUEUE_SIZE_MAX}, default {DEFAULT_QUEUE_SIZE})
+                </span>
+              </Label>
+              <Input
+                id="queue-size"
+                type="number"
+                min={QUEUE_SIZE_MIN}
+                max={QUEUE_SIZE_MAX}
+                value={queueSize}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (Number.isFinite(n)) setQueueSize(n);
+                }}
+                className="mt-1 h-9 w-28"
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Max words queued from each episode for the "to learn" list.
+              </p>
+            </div>
+            <div>
+              <Label htmlFor="chunk-size" className="text-xs">
+                Flashcard chunk size
+                <span className="ml-1 text-muted-foreground/70 font-normal">
+                  ({CHUNK_SIZE_MIN}–{CHUNK_SIZE_MAX}, default {DEFAULT_CHUNK_SIZE})
+                </span>
+              </Label>
+              <Input
+                id="chunk-size"
+                type="number"
+                min={CHUNK_SIZE_MIN}
+                max={CHUNK_SIZE_MAX}
+                value={chunkSize}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (Number.isFinite(n)) setChunkSize(n);
+                }}
+                className="mt-1 h-9 w-28"
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Words per study chunk. Re-chunkify an episode after changing this.
+              </p>
+            </div>
           </div>
         </Card>
 
