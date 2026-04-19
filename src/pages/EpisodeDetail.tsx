@@ -34,7 +34,8 @@ type VocabItem = {
 type SentenceItem = { jp: string; en: string };
 type WordPref = "study" | "kanji_only" | "skip";
 type WordState = "unknown" | "learning" | "known";
-type WordRow = { word: string; state: WordState; preference: WordPref };
+type KnownSource = "prior" | "learned" | null;
+type WordRow = { word: string; state: WordState; preference: WordPref; known_source: KnownSource; srs_level: number; srs_due_at: string | null };
 
 export default function EpisodeDetail() {
   const { episodeId } = useParams();
