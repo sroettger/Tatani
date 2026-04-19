@@ -133,8 +133,7 @@ export default function EpisodeDetail() {
     if (error) { setBusy(false); setProgressStage(""); toast.error("Subtitle fetch failed", { description: error.message }); return; }
     if (!data?.found) {
       setBusy(false); setProgressStage("");
-      toast.message("No auto-subtitles found", { description: "Upload a .srt or .ass file to continue." });
-      fileRef.current?.click();
+      toast.error("No subtitles found", { description: "Try again later." });
       return;
     }
     await startProcess(data.content);
