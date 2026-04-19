@@ -323,7 +323,7 @@ export default function StudySession() {
                 <Button
                   key={i}
                   variant="outline"
-                  onClick={() => onQuizAnswer(i)}
+                  onClick={(e) => { e.currentTarget.blur(); onQuizAnswer(i); }}
                   disabled={quizChoice !== null}
                   className={`h-auto min-h-12 py-3 text-left justify-start whitespace-normal ${
                     showState && isCorrect ? "border-success bg-success/10" :
