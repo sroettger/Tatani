@@ -30,7 +30,7 @@ export default function ChunkQuiz() {
   // quiz state
   const [words, setWords] = useState<ChunkWord[]>([]);
   const [persistStreak, setPersistStreak] = useState<Record<string, number>>({});
-  const [kanjiOnly, setKanjiOnly] = useState<Record<string, boolean>>({});
+  
   const [idx, setIdx] = useState(0);
   const [correct, setCorrect] = useState(0);
   const [choice, setChoice] = useState<number | null>(null);
@@ -81,15 +81,12 @@ export default function ChunkQuiz() {
 
     const wordKeys = shuffled.map(w => w.word);
     const { data: states } = await supabase
-      .from("user_word_state").select("word,correct_streak,preference").in("word", wordKeys).eq("user_id", user.id);
+      .from("user_word_state").select("word,correct_streak").in("word", wordKeys).eq("user_id", user.id);
     const pStreak: Record<string, number> = {};
-    const pref: Record<string, boolean> = {};
     (states ?? []).forEach((s: any) => {
       pStreak[s.word] = s.correct_streak ?? 0;
-      if (s.preference === "kanji_only") pref[s.word] = true;
     });
     setPersistStreak(pStreak);
-    setKanjiOnly(pref);
     setWords(shuffled);
     setIdx(0); setCorrect(0); setChoice(null);
 
@@ -116,9 +113,8 @@ export default function ChunkQuiz() {
   const showKanji = useMemo(() => {
     if (!card) return false;
     if (card.word === card.reading) return true;
-    if (kanjiOnly[card.word]) return true;
     return (persistStreak[card.word] ?? 0) >= KANJI_THRESHOLD;
-  }, [card, kanjiOnly, persistStreak]);
+  }, [card, persistStreak]);
 
   const onAnswer = async (i: number) => {
     if (!card || choice !== null) return;
@@ -264,9 +260,7 @@ export default function ChunkQuiz() {
         {showKanji
           ? card?.reading && card.reading !== card.word && <div className="font-jp text-muted-foreground">{card.reading}</div>
           : card && card.word !== card.reading && (
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              {kanjiOnly[card.word] ? "Kanji only" : "Hiragana mode"}
-            </div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Hiragana mode</div>
           )}
       </Card>
 
