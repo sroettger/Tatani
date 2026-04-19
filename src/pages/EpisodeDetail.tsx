@@ -62,9 +62,14 @@ export default function EpisodeDetail() {
     const { data: cache } = await supabase.from("episode_vocab_cache").select("vocab,sentences").eq("episode_id", episodeId).maybeSingle();
     setVocab(((cache?.vocab ?? []) as VocabItem[]));
     setSentences(((cache?.sentences ?? []) as SentenceItem[]));
-    const { data: words } = await supabase.from("user_word_state").select("word,state,preference").eq("user_id", user.id);
+    const { data: words } = await supabase.from("user_word_state").select("word,state,preference,known_source,srs_level,srs_due_at").eq("user_id", user.id);
     const map = new Map<string, WordRow>();
-    (words ?? []).forEach((w: any) => map.set(w.word, { word: w.word, state: w.state, preference: w.preference }));
+    (words ?? []).forEach((w: any) => map.set(w.word, {
+      word: w.word, state: w.state, preference: w.preference,
+      known_source: (w.known_source ?? null) as KnownSource,
+      srs_level: w.srs_level ?? 0,
+      srs_due_at: w.srs_due_at ?? null,
+    }));
     setWordStates(map);
     const { data: ch } = await supabase
       .from("study_chunks")
