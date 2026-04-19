@@ -361,9 +361,13 @@ export default function EpisodeDetail() {
   );
 }
 
-function StatBox({ label, value, accent }: { label: string; value: string | number; accent: string }) {
+function StatBox({ label, value, accent, active, onClick }: { label: string; value: string | number; accent: string; active?: boolean; onClick?: () => void }) {
+  const clickable = !!onClick;
   return (
-    <Card className="p-3 text-center gradient-card border-border/50">
+    <Card
+      onClick={onClick}
+      className={`p-3 text-center gradient-card border-border/50 transition ${clickable ? "cursor-pointer hover:border-primary/40" : ""} ${active ? "border-primary/60 ring-1 ring-primary/30" : ""}`}
+    >
       <div className={`text-xl font-bold ${accent}`}>{value}</div>
       <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
     </Card>
