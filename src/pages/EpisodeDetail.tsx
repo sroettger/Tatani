@@ -689,8 +689,7 @@ function renderQueueRow(
   v: VocabItem,
   prefOf: (w: string) => WordPref,
   togglePref: (v: VocabItem) => void,
-  markKnownLearned: (v: VocabItem) => void,
-  markKnownPrior: (v: VocabItem) => void,
+  markKnown: (v: VocabItem) => void,
   freq: number,
 ) {
   const pref = prefOf(v.word);
@@ -713,7 +712,6 @@ function renderQueueRow(
           variant={kanjiOnly ? "default" : "outline"}
           className={cn("h-7 px-2 text-[11px] gap-1", !hasKanji && "opacity-30")}
           disabled={!hasKanji}
-          onPointerDown={(e) => e.preventDefault()}
           onClick={(e) => { togglePref(v); (e.currentTarget as HTMLButtonElement).blur(); }}
           title={hasKanji ? (kanjiOnly ? "Studying kanji only" : "Switch to kanji-only") : "No kanji in this word"}
         >
@@ -723,40 +721,11 @@ function renderQueueRow(
           size="sm"
           variant="outline"
           className="h-7 px-2 text-[11px] gap-1 hover:text-success"
-          onClick={() => markKnownLearned(v)}
-          title="Mark as learned"
+          onClick={() => markKnown(v)}
+          title="Mark as known"
         >
           <CheckCircle2 className="h-3 w-3" /> Known
         </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 w-7 shrink-0 px-0 text-[11px]"
-              title="More known options"
-              aria-label="More known options"
-            >
-              ···
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuItem onClick={() => markKnownLearned(v)} className="gap-2">
-              <GraduationCap className="h-4 w-4 text-primary" />
-              <div className="flex flex-col">
-                <span className="text-xs font-medium">Learned it</span>
-                <span className="text-[10px] text-muted-foreground">Will resurface for review</span>
-              </div>
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => markKnownPrior(v)} className="gap-2">
-              <CheckCircle2 className="h-4 w-4 text-success" />
-              <div className="flex flex-col">
-                <span className="text-xs font-medium">Already knew it</span>
-                <span className="text-[10px] text-muted-foreground">Permanent — never resurfaces</span>
-              </div>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
       </div>
     </div>
   );
