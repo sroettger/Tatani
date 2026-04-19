@@ -1,10 +1,9 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Home, BookOpen, BarChart3, Settings as SettingsIcon } from "lucide-react";
+import { Home, BarChart3, Settings as SettingsIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const tabs = [
   { to: "/", label: "Home", Icon: Home },
-  { to: "/study", label: "Study", Icon: BookOpen },
   { to: "/stats", label: "Stats", Icon: BarChart3 },
   { to: "/settings", label: "Settings", Icon: SettingsIcon },
 ];
