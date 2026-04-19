@@ -293,23 +293,69 @@ export default function EpisodeDetail() {
             );
           })()}
 
-          <div className="grid gap-2 mb-6">
-            <Button
-              className="w-full h-12 gradient-primary text-primary-foreground"
-              onClick={() => navigate(`/study/${episodeId}`)}
-              disabled={newVocab.length === 0}
-            >
-              <BookOpen className="h-4 w-4" /> Study {newVocab.length} cards
-            </Button>
-            <Button
-              variant="outline"
-              className="w-full h-12"
-              onClick={() => navigate(`/study/${episodeId}/voice`)}
-              disabled={newVocab.length === 0}
-            >
-              <Mic className="h-4 w-4" /> Hands-free voice mode
-            </Button>
-          </div>
+          {/* Chunks list / pre-review CTA */}
+          {chunks.length === 0 ? (
+            <div className="grid gap-2 mb-6">
+              <Button
+                className="w-full h-12 gradient-primary text-primary-foreground"
+                onClick={() => navigate(`/episode/${episodeId}/prereview`)}
+                disabled={newVocab.length === 0}
+              >
+                <ListChecks className="h-4 w-4" /> Pre-review & create chunks
+              </Button>
+              <Button
+                variant="outline"
+                className="w-full h-12"
+                onClick={() => navigate(`/study/${episodeId}/voice`)}
+                disabled={newVocab.length === 0}
+              >
+                <Mic className="h-4 w-4" /> Hands-free voice mode
+              </Button>
+            </div>
+          ) : (
+            <div className="mb-6">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="font-semibold flex items-center gap-2">
+                  <Layers className="h-4 w-4 text-primary" /> Study chunks
+                </h3>
+                <button
+                  onClick={() => navigate(`/episode/${episodeId}/prereview`)}
+                  className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+                >
+                  <RotateCw className="h-3 w-3" /> Re-do pre-review
+                </button>
+              </div>
+              <div className="grid gap-2 mb-3">
+                {chunks.map(c => (
+                  <Card
+                    key={c.id}
+                    onClick={() => navigate(`/study/chunk/${c.id}`)}
+                    className="p-3 gradient-card border-border/50 cursor-pointer hover:border-primary/40 transition flex items-center justify-between"
+                  >
+                    <div>
+                      <div className="font-medium text-sm flex items-center gap-2">
+                        Chunk {c.chunk_index}
+                        {c.studied_at && <Check className="h-3.5 w-3.5 text-success" />}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {c.word_count} word{c.word_count === 1 ? "" : "s"}
+                        {c.studied_at ? " · Studied" : " · Not yet"}
+                      </div>
+                    </div>
+                    <BookOpen className="h-4 w-4 text-muted-foreground" />
+                  </Card>
+                ))}
+              </div>
+              <Button
+                variant="outline"
+                className="w-full h-11"
+                onClick={() => navigate(`/episode/${episodeId}/quiz`)}
+                disabled={!chunks.some(c => c.studied_at)}
+              >
+                <BrainCircuit className="h-4 w-4" /> Quiz studied chunks
+              </Button>
+            </div>
+          )}
 
           <h3 className="font-semibold mb-2 flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-primary" /> Sentences</h3>
           <div className="grid gap-2 mb-6">
