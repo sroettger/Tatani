@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { ChevronLeft, ChevronRight, Volume2, Check, X, Loader2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Volume2, Check, X, Loader2, Languages } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
@@ -43,6 +43,13 @@ export default function StudyChunk() {
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   // Stack of previous queue snapshots so the user can step back.
   const [history, setHistory] = useState<ChunkWord[][]>([]);
+  const [showFurigana, setShowFurigana] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("furigana_on") === "1";
+  });
+  useEffect(() => {
+    if (typeof window !== "undefined") localStorage.setItem("furigana_on", showFurigana ? "1" : "0");
+  }, [showFurigana]);
 
   useEffect(() => {
     if (!chunkId || !user) return;
@@ -268,7 +275,17 @@ export default function StudyChunk() {
       <div className="flex items-center justify-between mb-4">
         <Button variant="ghost" size="icon" onClick={() => navigate(-1)}><ChevronLeft className="h-5 w-5" /></Button>
         <div className="text-sm text-muted-foreground">Chunk {chunkIndex}</div>
-        <div className="w-9" />
+        <Button
+          variant={showFurigana ? "default" : "ghost"}
+          size="sm"
+          onClick={() => setShowFurigana(v => !v)}
+          aria-pressed={showFurigana}
+          title="Toggle furigana"
+          className="h-9 gap-1 px-2"
+        >
+          <Languages className="h-4 w-4" />
+          <span className="font-jp text-xs">あ</span>
+        </Button>
       </div>
 
       <Progress value={progress} className="h-2 mb-2" />
@@ -307,7 +324,7 @@ export default function StudyChunk() {
                 <div className="text-xs text-muted-foreground italic">{current?.part_of_speech} • {current?.jlpt_level}</div>
                 {current?.example_sentence_jp && (
                   <div className="mt-4 text-xs">
-                    <Furigana text={current.example_sentence_jp} className="font-jp text-sm leading-loose" />
+                    <Furigana text={current.example_sentence_jp} show={showFurigana} className="font-jp text-sm leading-loose" />
                     <div className="text-muted-foreground mt-1">{current.example_sentence_en}</div>
                   </div>
                 )}

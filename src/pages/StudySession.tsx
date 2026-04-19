@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { ChevronLeft, Volume2, Check, X, RotateCw } from "lucide-react";
+import { ChevronLeft, Volume2, Check, X, RotateCw, Languages } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -38,6 +38,13 @@ export default function StudySession() {
   const [quizChoice, setQuizChoice] = useState<number | null>(null);
 
   const [done, setDone] = useState<"none" | "review" | "quiz">("none");
+  const [showFurigana, setShowFurigana] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("furigana_on") === "1";
+  });
+  useEffect(() => {
+    if (typeof window !== "undefined") localStorage.setItem("furigana_on", showFurigana ? "1" : "0");
+  }, [showFurigana]);
 
   // JLPT difficulty rank — must match EpisodeDetail. "none" treated as harder than N1.
   const JLPT_RANK: Record<string, number> = { N5: 1, N4: 2, N3: 3, N2: 4, N1: 5, none: 6 };
@@ -220,7 +227,17 @@ export default function StudySession() {
       <div className="flex items-center justify-between mb-4">
         <Button variant="ghost" size="icon" onClick={() => navigate(-1)}><ChevronLeft className="h-5 w-5" /></Button>
         <div className="text-sm text-muted-foreground">Study</div>
-        <div className="w-9" />
+        <Button
+          variant={showFurigana ? "default" : "ghost"}
+          size="sm"
+          onClick={() => setShowFurigana(v => !v)}
+          aria-pressed={showFurigana}
+          title="Toggle furigana"
+          className="h-9 gap-1 px-2"
+        >
+          <Languages className="h-4 w-4" />
+          <span className="font-jp text-xs">あ</span>
+        </Button>
       </div>
 
       <Tabs defaultValue="review" className="w-full">
@@ -255,13 +272,13 @@ export default function StudySession() {
               </Card>
               <Card className="flip-face flip-back gradient-card border-primary/30 shadow-elegant grid place-items-center cursor-pointer">
                 <div className="text-center px-6">
-                  <Furigana text={reviewCard?.word ?? ""} className="font-jp text-3xl font-bold mb-3 inline-block" />
+                  <Furigana text={reviewCard?.word ?? ""} show={showFurigana} className="font-jp text-3xl font-bold mb-3 inline-block" />
                   {reviewCard?.reading === reviewCard?.word && <div className="sr-only">{reviewCard?.reading}</div>}
                   <div className="text-lg font-semibold mb-3">{reviewCard?.meaning}</div>
                   <div className="text-xs text-muted-foreground italic">{reviewCard?.part_of_speech} • {reviewCard?.jlpt_level}</div>
                   {reviewCard?.example_sentence_jp && (
                     <div className="mt-4 text-xs">
-                      <Furigana text={reviewCard.example_sentence_jp} className="font-jp text-sm leading-loose" />
+                      <Furigana text={reviewCard.example_sentence_jp} show={showFurigana} className="font-jp text-sm leading-loose" />
                       <div className="text-muted-foreground mt-1">{reviewCard.example_sentence_en}</div>
                     </div>
                   )}

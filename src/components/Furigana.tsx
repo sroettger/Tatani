@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Tokenizer from "@sglkc/kuromoji/src/Tokenizer";
 import DynamicDictionaries from "@sglkc/kuromoji/src/dict/DynamicDictionaries";
 
@@ -60,81 +60,36 @@ const kataToHira = (s: string) =>
 
 const hasKanji = (s: string) => /[\u4E00-\u9FFF\u3400-\u4DBF]/.test(s);
 
-const LONG_PRESS_MS = 350;
-
 export function Furigana({
   text,
   className,
-  alwaysOn = false,
+  show = false,
 }: {
   text: string;
   className?: string;
-  alwaysOn?: boolean;
+  /** When true, render furigana above kanji. When false, render plain text. */
+  show?: boolean;
 }) {
   const [tokens, setTokens] = useState<Token[] | null>(null);
   const [failed, setFailed] = useState(false);
-  const [revealed, setRevealed] = useState(false);
-  const timerRef = useRef<number | null>(null);
 
-  // Lazily load + tokenize only when revealed (or alwaysOn)
   useEffect(() => {
-    if (!text) return;
-    if (!revealed && !alwaysOn) return;
-    if (tokens) return;
+    if (!text || !show || tokens) return;
     let cancelled = false;
     getTokenizer()
       .then((tk) => { if (!cancelled) setTokens(tk.tokenize(text)); })
       .catch(() => { if (!cancelled) setFailed(true); });
     return () => { cancelled = true; };
-  }, [text, revealed, alwaysOn, tokens]);
+  }, [text, show, tokens]);
 
-  const clearTimer = () => {
-    if (timerRef.current != null) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-  };
-
-  const startPress = (e: React.PointerEvent) => {
-    if (alwaysOn) return;
-    e.preventDefault();
-    clearTimer();
-    timerRef.current = window.setTimeout(() => setRevealed(true), LONG_PRESS_MS);
-  };
-  const endPress = () => {
-    if (alwaysOn) return;
-    clearTimer();
-    setRevealed(false);
-  };
-
-  useEffect(() => () => clearTimer(), []);
-
-  const showFurigana = (alwaysOn || revealed) && tokens && !failed;
-  const hint = !alwaysOn && hasKanji(text);
+  const showFurigana = show && tokens && !failed;
 
   if (!showFurigana) {
-    return (
-      <span
-        className={`${className ?? ""} ${hint ? "underline decoration-dotted decoration-muted-foreground/40 underline-offset-4 select-none touch-none" : ""}`}
-        onPointerDown={hint ? startPress : undefined}
-        onPointerUp={hint ? endPress : undefined}
-        onPointerLeave={hint ? endPress : undefined}
-        onPointerCancel={hint ? endPress : undefined}
-        onContextMenu={hint ? (e) => e.preventDefault() : undefined}
-        title={hint ? "Long-press to show furigana" : undefined}
-      >
-        {text}
-      </span>
-    );
+    return <span className={className}>{text}</span>;
   }
 
   return (
-    <span
-      className={`${className ?? ""} select-none touch-none`}
-      onPointerUp={endPress}
-      onPointerLeave={endPress}
-      onPointerCancel={endPress}
-    >
+    <span className={className}>
       {tokens!.map((t, i) => {
         const surface = t.surface_form;
         const reading = t.reading ? kataToHira(t.reading) : "";
