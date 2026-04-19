@@ -9,6 +9,40 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// AI tool: find common Japanese words written in unusual kana-only form (childish speech, stylization)
+// that morphological tokenizers like kuromoji split into meaningless fragments.
+const UNUSUAL_KANA_TOOL = {
+  type: "function",
+  function: {
+    name: "report_unusual_kana_spellings",
+    description: "Report common Japanese vocabulary words that appear in the subtitle text written in unusual kana-only form (e.g. じなん for 次男, ぱぱ for パパ) which morphological tokenizers typically fail to recognize as a single word.",
+    parameters: {
+      type: "object",
+      properties: {
+        words: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              kana_surface: { type: "string", description: "EXACT kana substring as it appears in the subtitle text (e.g. じなん)" },
+              canonical_word: { type: "string", description: "Standard dictionary form, usually with kanji (e.g. 次男)" },
+              reading: { type: "string", description: "Hiragana reading of the canonical word" },
+              meaning: { type: "string", description: "Concise English meaning" },
+              part_of_speech: { type: "string", description: "Japanese POS tag like 名詞, 動詞, 形容詞" },
+              example_sentence_jp: { type: "string", description: "MUST be an actual line from the supplied subtitle text containing kana_surface" },
+              example_sentence_en: { type: "string", description: "Natural English translation of that sentence" },
+            },
+            required: ["kana_surface", "canonical_word", "reading", "meaning", "part_of_speech", "example_sentence_jp", "example_sentence_en"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["words"],
+      additionalProperties: false,
+    },
+  },
+};
+
 // AI tool: translate a batch of vocab + extract grammar from the supplied example sentences.
 const TRANSLATE_TOOL = {
   type: "function",
