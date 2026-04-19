@@ -161,23 +161,24 @@ export default function EpisodeDetail() {
   // (b) JLPT commonness (lower JLPT level = more common Japanese word = more likely to recur).
   // Higher = more important.
   const JLPT_COMMONNESS: Record<string, number> = { N5: 5, N4: 4, N3: 3, N2: 2, N1: 1, none: 0 };
-  const importance = useMemo(() => {
+  const { importance, frequency } = useMemo(() => {
     const corpus = [
       ...vocab.flatMap(v => [v.example_sentence_jp ?? ""]),
       ...sentences.map(s => s.jp ?? ""),
     ].join("\n");
     const score = new Map<string, number>();
+    const freqMap = new Map<string, number>();
     for (const v of vocab) {
-      // Count occurrences of the surface form. Escape regex special chars.
       const w = v.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       let freq = 0;
       if (w) {
         const re = new RegExp(w, "g");
         freq = (corpus.match(re) ?? []).length;
       }
+      freqMap.set(v.word, freq);
       score.set(v.word, freq * 10 + (JLPT_COMMONNESS[v.jlpt_level] ?? 0));
     }
-    return score;
+    return { importance: score, frequency: freqMap };
   }, [vocab, sentences]);
 
   const byImportance = (a: VocabItem, b: VocabItem) =>
