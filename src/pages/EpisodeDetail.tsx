@@ -11,11 +11,11 @@ import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { TutorChat } from "@/components/TutorChat";
 import { cn } from "@/lib/utils";
+import { useStudyPrefs } from "@/hooks/use-study-prefs";
 
 // JLPT difficulty rank — higher number = harder. "none" treated as harder than N1
 // so unclassified/proper-noun vocab is never auto-skipped.
 const JLPT_RANK: Record<string, number> = { N5: 1, N4: 2, N3: 3, N2: 4, N1: 5, none: 6 };
-const CHUNK_SIZE = 10;
 // SRS intervals in days (Leitner-style). Index = srs_level.
 const SRS_INTERVALS_DAYS = [1, 3, 7, 14, 30, 60, 120, 240, 480];
 const dueAtForLevel = (level: number) => {
