@@ -14,34 +14,74 @@ type Props = {
   studiedWordCount: number;
 };
 
-// Strip ** markers for TTS
-const stripMd = (s: string) => s.replace(/\*\*/g, "").replace(/\*\(English:[^)]*\)\*/g, "").trim();
+// Strip markers + meta lines for TTS (don't read corrections or English aloud)
+const stripMd = (s: string) =>
+  s
+    .split("\n")
+    .filter((l) => !l.trim().startsWith(">") && !/^\s*\*\(English:/.test(l))
+    .join("\n")
+    .replace(/\*\*/g, "")
+    .trim();
 
-// Render text: highlight **word** chunks, italicize *(English: ...)* lines.
+// Render text: extract correction block (leading lines starting with >),
+// highlight **word**, and italicize *(English: ...)* line.
 function FormattedMsg({ text }: { text: string }) {
-  // Split out the English line first
-  const englishMatch = text.match(/\*\(English:([^)]*)\)\*\s*$/);
-  const main = englishMatch ? text.slice(0, englishMatch.index).trim() : text;
+  const lines = text.split("\n");
+  const correctionLines: string[] = [];
+  const bodyLines: string[] = [];
+  let inCorrection = true;
+  for (const line of lines) {
+    if (inCorrection && line.trim().startsWith(">")) {
+      correctionLines.push(line.replace(/^\s*>\s?/, ""));
+    } else if (inCorrection && line.trim() === "" && correctionLines.length > 0) {
+      inCorrection = false; // blank line ends correction block
+    } else {
+      inCorrection = false;
+      bodyLines.push(line);
+    }
+  }
+  const body = bodyLines.join("\n").trim();
+
+  const englishMatch = body.match(/\*\(English:([^)]*)\)\*\s*$/);
+  const main = englishMatch ? body.slice(0, englishMatch.index).trim() : body;
   const english = englishMatch?.[1]?.trim();
 
-  const parts = main.split(/(\*\*[^*]+\*\*)/g);
+  const renderInline = (s: string, keyPrefix: string) => {
+    const parts = s.split(/(\*\*[^*]+\*\*)/g);
+    return parts.map((p, i) => {
+      if (p.startsWith("**") && p.endsWith("**")) {
+        return (
+          <span key={`${keyPrefix}-${i}`} className="px-1 py-0.5 rounded bg-primary/15 text-primary font-medium">
+            {p.slice(2, -2)}
+          </span>
+        );
+      }
+      return <span key={`${keyPrefix}-${i}`}>{p}</span>;
+    });
+  };
+
   return (
-    <div>
-      <p className="font-jp text-sm leading-relaxed">
-        {parts.map((p, i) => {
-          if (p.startsWith("**") && p.endsWith("**")) {
+    <div className="space-y-2">
+      {correctionLines.length > 0 && (
+        <div className="rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-xs space-y-0.5">
+          {correctionLines.map((l, i) => {
+            const isEnglishNote = /^\s*\*\(.*\)\*\s*$/.test(l);
+            const cleaned = isEnglishNote ? l.replace(/^\s*\*\(/, "").replace(/\)\*\s*$/, "") : l;
             return (
-              <span key={i} className="px-1 py-0.5 rounded bg-primary/15 text-primary font-medium">
-                {p.slice(2, -2)}
-              </span>
+              <p
+                key={i}
+                className={cn(
+                  isEnglishNote ? "text-muted-foreground italic" : "font-jp text-foreground",
+                )}
+              >
+                {renderInline(cleaned, `c${i}`)}
+              </p>
             );
-          }
-          return <span key={i}>{p}</span>;
-        })}
-      </p>
-      {english && (
-        <p className="text-xs text-muted-foreground italic mt-1.5">{english}</p>
+          })}
+        </div>
       )}
+      {main && <p className="font-jp text-sm leading-relaxed">{renderInline(main, "m")}</p>}
+      {english && <p className="text-xs text-muted-foreground italic mt-1.5">{english}</p>}
     </div>
   );
 }
