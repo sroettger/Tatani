@@ -233,7 +233,7 @@ export default function EpisodeDetail() {
 
   const chunkify = async () => {
     if (!user || !episodeId) return;
-    const studyable = newVocab.filter(v => prefOf(v.word) !== "skip");
+    const studyable = queueVocab;
     if (studyable.length === 0) {
       toast.error("No words to chunkify");
       return;
