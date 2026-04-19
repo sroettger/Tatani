@@ -365,7 +365,7 @@ export default function EpisodeDetail() {
                 <div className="text-sm text-muted-foreground">Queue empty — you've mastered everything in this episode!</div>
               ) : (
                 <div className="grid gap-1 max-h-96 overflow-y-auto">
-                  {queueVocab.map((v) => renderQueueRow(v, prefOf, togglePref, markKnown))}
+                  {queueVocab.map((v) => renderQueueRow(v, prefOf, togglePref, markKnown, frequency.get(v.word) ?? 0))}
                 </div>
               )}
             </Card>
