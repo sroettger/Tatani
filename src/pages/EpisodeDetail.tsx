@@ -372,7 +372,21 @@ export default function EpisodeDetail() {
       <div className="flex items-center justify-between mb-6">
         <Button variant="ghost" size="icon" onClick={() => navigate(-1)}><ChevronLeft className="h-5 w-5" /></Button>
         <div className="text-sm text-muted-foreground">Episode {episode?.episode_number}</div>
-        <div className="w-9" />
+        {vocab.length > 0 ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-9 px-2 text-xs gap-1"
+            onClick={handleRewatch}
+            disabled={rewatching}
+            title="Re-evaluate learned words: any past their review interval will return to your queue"
+          >
+            {rewatching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Repeat className="h-4 w-4" />}
+            Rewatch
+          </Button>
+        ) : (
+          <div className="w-9" />
+        )}
       </div>
 
       {vocab.length === 0 ? (
