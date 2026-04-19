@@ -156,9 +156,37 @@ export default function EpisodeDetail() {
 
   const prefOf = (word: string): WordPref => wordStates.get(word)?.preference ?? "study";
 
-  const newVocab = useMemo(() => vocab.filter(v => bucketOf(v) === "new"), [vocab, wordStates, myRank]);
-  const knownVocab = useMemo(() => vocab.filter(v => bucketOf(v) === "known"), [vocab, wordStates, myRank]);
-  // Queue = up to 30 words to learn next (study/kanji_only preference, not skipped).
+  // Importance score: how central is this word to the episode's story.
+  // Signals: (a) how often it appears across the AI-extracted example sentences for THIS episode,
+  // (b) JLPT commonness (lower JLPT level = more common Japanese word = more likely to recur).
+  // Higher = more important.
+  const JLPT_COMMONNESS: Record<string, number> = { N5: 5, N4: 4, N3: 3, N2: 2, N1: 1, none: 0 };
+  const importance = useMemo(() => {
+    const corpus = [
+      ...vocab.flatMap(v => [v.example_sentence_jp ?? ""]),
+      ...sentences.map(s => s.jp ?? ""),
+    ].join("\n");
+    const score = new Map<string, number>();
+    for (const v of vocab) {
+      // Count occurrences of the surface form. Escape regex special chars.
+      const w = v.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      let freq = 0;
+      if (w) {
+        const re = new RegExp(w, "g");
+        freq = (corpus.match(re) ?? []).length;
+      }
+      score.set(v.word, freq * 10 + (JLPT_COMMONNESS[v.jlpt_level] ?? 0));
+    }
+    return score;
+  }, [vocab, sentences]);
+
+  const byImportance = (a: VocabItem, b: VocabItem) =>
+    (importance.get(b.word) ?? 0) - (importance.get(a.word) ?? 0);
+
+  const sortedVocab = useMemo(() => [...vocab].sort(byImportance), [vocab, importance]);
+  const newVocab = useMemo(() => sortedVocab.filter(v => bucketOf(v) === "new"), [sortedVocab, wordStates, myRank]);
+  const knownVocab = useMemo(() => sortedVocab.filter(v => bucketOf(v) === "known"), [sortedVocab, wordStates, myRank]);
+  // Queue = up to 30 most-important words to learn next (study/kanji_only preference, not skipped).
   const QUEUE_SIZE = 30;
   const queueVocab = useMemo(
     () => newVocab.filter(v => prefOf(v.word) !== "skip").slice(0, QUEUE_SIZE),
