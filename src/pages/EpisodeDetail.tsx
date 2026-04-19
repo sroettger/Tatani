@@ -339,6 +339,7 @@ export default function EpisodeDetail() {
                             variant={kanjiOnly ? "default" : "outline"}
                             className={cn("h-7 px-2 text-[11px] gap-1", !hasKanji && "opacity-30")}
                             disabled={!hasKanji}
+                            onPointerDown={(e) => e.preventDefault()}
                             onClick={(e) => { togglePref(v); (e.currentTarget as HTMLButtonElement).blur(); }}
                             title={hasKanji ? (kanjiOnly ? "Studying kanji only" : "Switch to kanji-only") : "No kanji in this word"}
                           >
@@ -348,6 +349,7 @@ export default function EpisodeDetail() {
                             size="sm"
                             variant="outline"
                             className="h-7 px-2 text-[11px] gap-1 hover:text-success"
+                            onPointerDown={(e) => e.preventDefault()}
                             onClick={(e) => { markKnown(v); (e.currentTarget as HTMLButtonElement).blur(); }}
                             title="Mark as known"
                           >
