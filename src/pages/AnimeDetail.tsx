@@ -11,7 +11,7 @@ type Anime = {
   cover_url: string | null; year: number | null; synopsis: string | null;
 };
 type Season = { id: string; season_number: number; episode_count: number };
-type Episode = { id: string; episode_number: number; processing_status: string };
+type Episode = { id: string; episode_number: number; processing_status: string; title_en: string | null; title_jp: string | null };
 
 export default function AnimeDetail() {
   const { animeId } = useParams();
@@ -31,7 +31,7 @@ export default function AnimeDetail() {
       for (const season of s ?? []) {
         const { data: eps } = await supabase
           .from("episodes")
-          .select("id,episode_number,processing_status")
+          .select("id,episode_number,processing_status,title_en,title_jp")
           .eq("season_id", season.id)
           .order("episode_number");
         map[season.id] = (eps ?? []) as Episode[];
@@ -82,12 +82,17 @@ export default function AnimeDetail() {
                   className="p-3 gradient-card border-border/50 flex items-center justify-between cursor-pointer hover:border-primary/40 transition"
                   onClick={() => navigate(`/episode/${ep.id}`)}
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-muted grid place-items-center text-sm font-semibold">
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <div className="w-10 h-10 rounded-lg bg-muted grid place-items-center text-sm font-semibold flex-shrink-0">
                       {ep.episode_number}
                     </div>
-                    <div>
-                      <div className="font-medium text-sm">Episode {ep.episode_number}</div>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium text-sm truncate">
+                        {ep.title_en ?? `Episode ${ep.episode_number}`}
+                      </div>
+                      {ep.title_jp && (
+                        <div className="font-jp text-[11px] text-muted-foreground truncate">{ep.title_jp}</div>
+                      )}
                       <StatusBadge status={ep.processing_status} />
                     </div>
                   </div>
