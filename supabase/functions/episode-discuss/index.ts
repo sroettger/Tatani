@@ -100,7 +100,7 @@ ${sentenceContext || "(no subtitles available — ask general questions instead)
     const finalMessages = auto_start && messages.length === 0
       ? [{
           role: "user",
-          content: "Start our conversation. Greet me briefly, then ask ONE specific, concrete question in Japanese about something that actually happened in this episode (reference a specific moment, line, or event from the subtitles). Keep it short and inviting.",
+          content: "Start our conversation. Greet me briefly, then ask ONE specific, concrete question in Japanese about something that actually happened in this episode (reference a specific moment, line, or event from the subtitles). IMPORTANT: weave 1-2 of my recently studied words into your greeting/question naturally and bold them with **word**. Keep it short and inviting.",
         }]
       : messages;
 
