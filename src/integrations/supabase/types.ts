@@ -62,6 +62,39 @@ export type Database = {
         }
         Relationships: []
       }
+      episode_summaries: {
+        Row: {
+          created_at: string
+          episode_id: string
+          id: string
+          summary_en: string
+          summary_jp: string
+          updated_at: string
+          used_words: Json
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          episode_id: string
+          id?: string
+          summary_en: string
+          summary_jp: string
+          updated_at?: string
+          used_words?: Json
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          episode_id?: string
+          id?: string
+          summary_en?: string
+          summary_jp?: string
+          updated_at?: string
+          used_words?: Json
+          user_id?: string
+        }
+        Relationships: []
+      }
       episode_vocab_cache: {
         Row: {
           created_at: string
