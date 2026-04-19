@@ -181,10 +181,28 @@ export default function StudyChunk() {
 
   const speak = (text: string) => {
     if (!("speechSynthesis" in window)) return;
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = "ja-JP";
-    speechSynthesis.cancel();
-    speechSynthesis.speak(u);
+    try {
+      speechSynthesis.cancel();
+      const speakNow = () => {
+        const u = new SpeechSynthesisUtterance(text);
+        u.lang = "ja-JP";
+        const voices = speechSynthesis.getVoices();
+        const jp = voices.find(v => v.lang?.toLowerCase().startsWith("ja"));
+        if (jp) u.voice = jp;
+        u.rate = 0.95;
+        speechSynthesis.speak(u);
+      };
+      // Some browsers need a tick after cancel(); also voices may load async.
+      if (speechSynthesis.getVoices().length === 0) {
+        speechSynthesis.onvoiceschanged = () => { speakNow(); speechSynthesis.onvoiceschanged = null; };
+        // Fallback in case the event never fires
+        setTimeout(speakNow, 250);
+      } else {
+        setTimeout(speakNow, 50);
+      }
+    } catch (e) {
+      console.error("speech failed", e);
+    }
   };
 
   if (loading) {
