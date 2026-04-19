@@ -240,9 +240,14 @@ export default function StudyChunk() {
                 <div className="font-jp text-6xl font-bold mb-2">
                   {showKanji ? current?.word : current?.reading}
                 </div>
-                {!showKnown(showKanji, current) && (
+                {current && !showKanji && current.word !== current.reading && (
                   <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
-                    {kanjiOnly[current?.word ?? ""] ? "Kanji only" : "Hiragana mode"}
+                    Hiragana mode
+                  </div>
+                )}
+                {current && kanjiOnly[current.word] && showKanji && current.word !== current.reading && (
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+                    Kanji only
                   </div>
                 )}
                 <div className="text-xs text-muted-foreground">Tap to flip</div>
@@ -311,10 +316,3 @@ export default function StudyChunk() {
   );
 }
 
-function showKnown(showKanji: boolean, current: ChunkWord | null) {
-  // Helper: returns true if there's no "mode" hint to show (i.e., kanji and reading are identical or we're already showing kanji)
-  if (!current) return true;
-  if (showKanji) return true;
-  if (current.word === current.reading) return true;
-  return false;
-}
