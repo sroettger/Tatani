@@ -41,7 +41,7 @@ export default function EpisodeDetail() {
   const { episodeId } = useParams();
   const navigate = useNavigate();
   const { user, profile } = useAuth();
-  const fileRef = useRef<HTMLInputElement>(null);
+  
   const pollRef = useRef<number | null>(null);
   const [episode, setEpisode] = useState<{ id: string; episode_number: number; processing_status: string; processing_chunks_total: number; processing_chunks_done: number } | null>(null);
   const [vocab, setVocab] = useState<VocabItem[]>([]);
