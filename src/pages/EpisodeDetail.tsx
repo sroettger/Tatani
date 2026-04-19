@@ -194,8 +194,8 @@ export default function EpisodeDetail() {
     [newVocab, wordStates]
   );
 
-  // Chunkify-staleness: compare current "study"+"kanji_only" new words to existing chunks' word_count sum.
-  const studyableCount = newVocab.filter(v => prefOf(v.word) !== "skip").length;
+  // Chunkify-staleness: chunks reflect the current "to learn" queue (max QUEUE_SIZE words).
+  const studyableCount = queueVocab.length;
   const chunkedCount = chunks.reduce((s, c) => s + c.word_count, 0);
   const chunksStale = chunks.length > 0 && chunkedCount !== studyableCount;
 
