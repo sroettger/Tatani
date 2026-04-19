@@ -561,11 +561,26 @@ function StatBox({ label, value, accent, active, onClick }: { label: string; val
   );
 }
 
+function FreqBadge({ freq }: { freq: number }) {
+  if (freq <= 0) return null;
+  // Visual heat: 1 = subtle, 2 = warm, 3+ = hot.
+  const tone = freq >= 3 ? "bg-primary/15 text-primary" : freq === 2 ? "bg-accent/15 text-accent" : "bg-muted text-muted-foreground";
+  return (
+    <span
+      className={cn("text-[10px] px-1.5 py-0.5 rounded-full shrink-0 tabular-nums", tone)}
+      title={`Appears ${freq}× in this episode's example sentences`}
+    >
+      ×{freq}
+    </span>
+  );
+}
+
 function renderQueueRow(
   v: VocabItem,
   prefOf: (w: string) => WordPref,
   togglePref: (v: VocabItem) => void,
   markKnown: (v: VocabItem) => void,
+  freq: number,
 ) {
   const pref = prefOf(v.word);
   const hasKanji = v.word !== v.reading;
@@ -579,6 +594,7 @@ function renderQueueRow(
         </div>
         <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
       </div>
+      <FreqBadge freq={freq} />
       <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
       <div className="flex items-center gap-1 shrink-0">
         <Button
