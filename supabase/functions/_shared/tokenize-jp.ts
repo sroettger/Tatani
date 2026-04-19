@@ -75,12 +75,14 @@ export async function extractVocabFromSubtitles(text: string): Promise<VocabEntr
     for (const t of tokens) {
       if (!STUDY_POS.has(t.pos)) continue;
       if (t.pos_detail_1 && SKIP_POS_DETAIL.has(t.pos_detail_1)) continue;
+      // Drop UNKNOWN tokens entirely — kuromoji tags every unrecognized symbol/emoji as 名詞.
+      if ((t as any).word_type === "UNKNOWN") continue;
       const word = t.basic_form && t.basic_form !== "*" ? t.basic_form : t.surface_form;
       if (!word || word.length < 1) continue;
+      // Must contain at least one Japanese character (kanji, hiragana, or katakana).
+      if (!/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]/.test(word)) continue;
       // Skip pure-kana single chars and punctuation-y stuff.
       if (/^[、。！？…・「」『』（）()\s]+$/.test(word)) continue;
-      // Skip ASCII / numerals
-      if (/^[a-zA-Z0-9]+$/.test(word)) continue;
 
       const reading = t.reading ? katakanaToHiragana(t.reading) : "";
       const cur = map.get(word);

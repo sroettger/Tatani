@@ -56,10 +56,13 @@ const TRANSLATE_TOOL = {
 function stripSubtitleFormatting(raw: string): string {
   const lines = raw.split(/\r?\n/);
   const out: string[] = [];
+  // Skip ASS/SSA metadata lines that aren't actual dialogue.
+  const ASS_META = /^(Format|Style|Title|ScriptType|Collisions|PlayRes[XY]|Timer|WrapStyle|ScaledBorderAndShadow|YCbCr Matrix|Audio URI|Video URI|Original\s|Update\s|Synch Point|Script Updated By|Comment|PlayDepth):/i;
   for (let line of lines) {
     if (/^\d+$/.test(line.trim())) continue;
     if (/-->/i.test(line)) continue;
     if (/^\[.*\]$/.test(line.trim())) continue;
+    if (ASS_META.test(line.trim())) continue;
     if (line.startsWith("Dialogue:")) {
       const parts = line.split(",");
       if (parts.length > 9) line = parts.slice(9).join(",");
