@@ -35,7 +35,7 @@ const COUNTRIES = [
 
 export default function Settings() {
   const { profile, signOut, refreshProfile, user } = useAuth();
-  const navigate = useNavigate();
+  const { chunkSize, queueSize, setChunkSize, setQueueSize } = useStudyPrefs();
 
   const setJlptLevel = async (level: JlptLevel) => {
     if (!user || profile?.jlpt_level === level) return;
