@@ -244,7 +244,7 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
               </div>
             ))}
 
-            {loading && messages[messages.length - 1]?.role === "user" && (
+            {loading && messages[messages.length - 1]?.role !== "assistant" && (
               <div className="rounded-lg bg-muted/50 px-3 py-2 text-sm max-w-[88%]">
                 <span className="inline-flex gap-1">
                   <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground animate-pulse" />
