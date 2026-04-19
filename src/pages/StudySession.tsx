@@ -255,8 +255,8 @@ export default function StudySession() {
               </Card>
               <Card className="flip-face flip-back gradient-card border-primary/30 shadow-elegant grid place-items-center cursor-pointer">
                 <div className="text-center px-6">
-                  <div className="font-jp text-3xl font-bold mb-1">{reviewCard?.word}</div>
-                  <div className="font-jp text-base text-muted-foreground mb-3">{reviewCard?.reading}</div>
+                  <Furigana text={reviewCard?.word ?? ""} className="font-jp text-3xl font-bold mb-3 inline-block" />
+                  {reviewCard?.reading === reviewCard?.word && <div className="sr-only">{reviewCard?.reading}</div>}
                   <div className="text-lg font-semibold mb-3">{reviewCard?.meaning}</div>
                   <div className="text-xs text-muted-foreground italic">{reviewCard?.part_of_speech} • {reviewCard?.jlpt_level}</div>
                   {reviewCard?.example_sentence_jp && (
