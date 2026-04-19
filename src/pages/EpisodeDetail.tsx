@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ChevronLeft, Loader2, Upload, Sparkles, BookOpen, BrainCircuit, Volume2, Plus, Mic, Layers, Check, Type, CheckCircle2, RotateCw, Tv, GraduationCap, Repeat } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
@@ -55,6 +56,18 @@ export default function EpisodeDetail() {
   const [showQueue, setShowQueue] = useState(true);
   const [chunks, setChunks] = useState<{ id: string; chunk_index: number; word_count: number; studied_at: string | null }[]>([]);
   const [chunkifying, setChunkifying] = useState(false);
+  const [allQuery, setAllQuery] = useState("");
+  const [knownQuery, setKnownQuery] = useState("");
+
+  const matchesQuery = (v: VocabItem, q: string) => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return true;
+    return (
+      v.word.toLowerCase().includes(needle) ||
+      (v.reading ?? "").toLowerCase().includes(needle) ||
+      (v.meaning ?? "").toLowerCase().includes(needle)
+    );
+  };
 
   const load = async () => {
     if (!episodeId || !user) return;
@@ -485,8 +498,14 @@ export default function EpisodeDetail() {
           {showAll && (
             <Card className="p-3 mb-4 gradient-card border-border/50">
               <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">All words ({vocab.length})</div>
+              <Input
+                value={allQuery}
+                onChange={(e) => setAllQuery(e.target.value)}
+                placeholder="Search Japanese or English…"
+                className="h-8 mb-2"
+              />
               <div className="grid gap-1 max-h-96 overflow-y-auto">
-                {sortedVocab.map((v) => {
+                {sortedVocab.filter((v) => matchesQuery(v, allQuery)).map((v) => {
                   const bucket = bucketOf(v);
                   return (
                     <div key={`${v.word}-${v.reading}`} className="flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0">
@@ -520,34 +539,42 @@ export default function EpisodeDetail() {
               {knownVocab.length === 0 ? (
                 <div className="text-sm text-muted-foreground">No known words yet.</div>
               ) : (
-                <div className="grid gap-1 max-h-96 overflow-y-auto">
-                  {knownVocab.map((v) => {
-                    const s = wordStates.get(v.word);
-                    const reason = s?.state === "known" ? "known" : "below your level";
-                    return (
-                      <div key={`${v.word}-${v.reading}`} className="flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0">
-                        <div className="min-w-0 flex-1">
-                          <div className="font-jp text-sm truncate">
-                            {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
+                <>
+                  <Input
+                    value={knownQuery}
+                    onChange={(e) => setKnownQuery(e.target.value)}
+                    placeholder="Search Japanese or English…"
+                    className="h-8 mb-2"
+                  />
+                  <div className="grid gap-1 max-h-96 overflow-y-auto">
+                    {knownVocab.filter((v) => matchesQuery(v, knownQuery)).map((v) => {
+                      const s = wordStates.get(v.word);
+                      const reason = s?.state === "known" ? "known" : "below your level";
+                      return (
+                        <div key={`${v.word}-${v.reading}`} className="flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0">
+                          <div className="min-w-0 flex-1">
+                            <div className="font-jp text-sm truncate">
+                              {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
+                            </div>
+                            <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
+                            <div className="text-[10px] text-muted-foreground/70">{reason}</div>
                           </div>
-                          <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
-                          <div className="text-[10px] text-muted-foreground/70">{reason}</div>
+                          <FreqBadge freq={frequency.get(v.word) ?? 0} />
+                          <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 shrink-0"
+                            onClick={() => markNew(v)}
+                            title="Move back to new"
+                          >
+                            <Plus className="h-3 w-3" /> New
+                          </Button>
                         </div>
-                        <FreqBadge freq={frequency.get(v.word) ?? 0} />
-                        <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-7 px-2 shrink-0"
-                          onClick={() => markNew(v)}
-                          title="Move back to new"
-                        >
-                          <Plus className="h-3 w-3" /> New
-                        </Button>
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                </>
               )}
             </Card>
           )}
