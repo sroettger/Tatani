@@ -83,6 +83,11 @@ export async function extractVocabFromSubtitles(text: string): Promise<VocabEntr
       if (!/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]/.test(word)) continue;
       // Skip pure-kana single chars and punctuation-y stuff.
       if (/^[、。！？…・「」『』（）()\s]+$/.test(word)) continue;
+      // Drop short pure-hiragana/katakana "words" (1-2 chars) — these are almost always
+      // tokenizer fragments from conjugations (ちゃ, しょ, ばー, やや) rather than real vocab.
+      // Real short kana words (e.g. 目, 手) are kanji and pass this filter.
+      const isAllKana = /^[\u3040-\u309F\u30A0-\u30FFー]+$/.test(word);
+      if (isAllKana && word.length <= 2) continue;
 
       const reading = t.reading ? katakanaToHiragana(t.reading) : "";
       const cur = map.get(word);
