@@ -336,7 +336,7 @@ export default function StudyChunk() {
       </div>
 
       <div className="flex justify-center mb-3">
-        <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); current && speak(current.word); }}>
+        <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); current && speak(current.reading || current.word); }}>
           <Volume2 className="h-4 w-4" /> Play audio
         </Button>
       </div>
