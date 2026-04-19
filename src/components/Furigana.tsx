@@ -74,13 +74,15 @@ export function Furigana({
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    if (!text || !show || tokens) return;
+    setTokens(null);
+    setFailed(false);
+    if (!text || !show) return;
     let cancelled = false;
     getTokenizer()
       .then((tk) => { if (!cancelled) setTokens(tk.tokenize(text)); })
       .catch(() => { if (!cancelled) setFailed(true); });
     return () => { cancelled = true; };
-  }, [text, show, tokens]);
+  }, [text, show]);
 
   const showFurigana = show && tokens && !failed;
 
