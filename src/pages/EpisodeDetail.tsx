@@ -339,7 +339,7 @@ export default function EpisodeDetail() {
                             variant={kanjiOnly ? "default" : "outline"}
                             className={cn("h-7 px-2 text-[11px] gap-1", !hasKanji && "opacity-30")}
                             disabled={!hasKanji}
-                            onClick={() => togglePref(v)}
+                            onClick={(e) => { togglePref(v); (e.currentTarget as HTMLButtonElement).blur(); }}
                             title={hasKanji ? (kanjiOnly ? "Studying kanji only" : "Switch to kanji-only") : "No kanji in this word"}
                           >
                             <Type className="h-3 w-3" /> Kanji
@@ -348,7 +348,7 @@ export default function EpisodeDetail() {
                             size="sm"
                             variant="outline"
                             className="h-7 px-2 text-[11px] gap-1 hover:text-success"
-                            onClick={() => markKnown(v)}
+                            onClick={(e) => { markKnown(v); (e.currentTarget as HTMLButtonElement).blur(); }}
                             title="Mark as known"
                           >
                             <CheckCircle2 className="h-3 w-3" /> Known
