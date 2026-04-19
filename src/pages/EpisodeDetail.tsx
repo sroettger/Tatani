@@ -161,23 +161,24 @@ export default function EpisodeDetail() {
   // (b) JLPT commonness (lower JLPT level = more common Japanese word = more likely to recur).
   // Higher = more important.
   const JLPT_COMMONNESS: Record<string, number> = { N5: 5, N4: 4, N3: 3, N2: 2, N1: 1, none: 0 };
-  const importance = useMemo(() => {
+  const { importance, frequency } = useMemo(() => {
     const corpus = [
       ...vocab.flatMap(v => [v.example_sentence_jp ?? ""]),
       ...sentences.map(s => s.jp ?? ""),
     ].join("\n");
     const score = new Map<string, number>();
+    const freqMap = new Map<string, number>();
     for (const v of vocab) {
-      // Count occurrences of the surface form. Escape regex special chars.
       const w = v.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       let freq = 0;
       if (w) {
         const re = new RegExp(w, "g");
         freq = (corpus.match(re) ?? []).length;
       }
+      freqMap.set(v.word, freq);
       score.set(v.word, freq * 10 + (JLPT_COMMONNESS[v.jlpt_level] ?? 0));
     }
-    return score;
+    return { importance: score, frequency: freqMap };
   }, [vocab, sentences]);
 
   const byImportance = (a: VocabItem, b: VocabItem) =>
@@ -364,7 +365,7 @@ export default function EpisodeDetail() {
                 <div className="text-sm text-muted-foreground">Queue empty — you've mastered everything in this episode!</div>
               ) : (
                 <div className="grid gap-1 max-h-96 overflow-y-auto">
-                  {queueVocab.map((v) => renderQueueRow(v, prefOf, togglePref, markKnown))}
+                  {queueVocab.map((v) => renderQueueRow(v, prefOf, togglePref, markKnown, frequency.get(v.word) ?? 0))}
                 </div>
               )}
             </Card>
@@ -384,6 +385,7 @@ export default function EpisodeDetail() {
                         </div>
                         <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
                       </div>
+                      <FreqBadge freq={frequency.get(v.word) ?? 0} />
                       <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
                       {bucket === "known" ? (
                         <Button size="sm" variant="ghost" className="h-7 px-2 shrink-0" onClick={() => markNew(v)}>
@@ -420,6 +422,7 @@ export default function EpisodeDetail() {
                           <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
                           <div className="text-[10px] text-muted-foreground/70">{reason}</div>
                         </div>
+                        <FreqBadge freq={frequency.get(v.word) ?? 0} />
                         <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
                         <Button
                           size="sm"
@@ -560,11 +563,26 @@ function StatBox({ label, value, accent, active, onClick }: { label: string; val
   );
 }
 
+function FreqBadge({ freq }: { freq: number }) {
+  if (freq <= 0) return null;
+  // Visual heat: 1 = subtle, 2 = warm, 3+ = hot.
+  const tone = freq >= 3 ? "bg-primary/15 text-primary" : freq === 2 ? "bg-accent/15 text-accent" : "bg-muted text-muted-foreground";
+  return (
+    <span
+      className={cn("text-[10px] px-1.5 py-0.5 rounded-full shrink-0 tabular-nums", tone)}
+      title={`Appears ${freq}× in this episode's example sentences`}
+    >
+      ×{freq}
+    </span>
+  );
+}
+
 function renderQueueRow(
   v: VocabItem,
   prefOf: (w: string) => WordPref,
   togglePref: (v: VocabItem) => void,
   markKnown: (v: VocabItem) => void,
+  freq: number,
 ) {
   const pref = prefOf(v.word);
   const hasKanji = v.word !== v.reading;
@@ -578,6 +596,7 @@ function renderQueueRow(
         </div>
         <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
       </div>
+      <FreqBadge freq={freq} />
       <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
       <div className="flex items-center gap-1 shrink-0">
         <Button
