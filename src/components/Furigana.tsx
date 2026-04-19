@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import kuromoji from "kuromoji";
+import kuromoji from "@sglkc/kuromoji";
 
 type Token = { surface_form: string; reading?: string };
 
