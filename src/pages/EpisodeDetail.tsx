@@ -212,37 +212,124 @@ export default function EpisodeDetail() {
   const chunkedCount = chunks.reduce((s, c) => s + c.word_count, 0);
   const chunksStale = chunks.length > 0 && chunkedCount !== studyableCount;
 
-  const upsertWord = async (v: VocabItem, patch: Partial<Pick<WordRow, "state" | "preference">>) => {
+  const upsertWord = async (
+    v: VocabItem,
+    patch: Partial<Pick<WordRow, "state" | "preference" | "known_source" | "srs_level" | "srs_due_at">>,
+    extra?: { marked_known_at?: string | null }
+  ) => {
     if (!user) return;
     const prev = wordStates.get(v.word);
     const next: WordRow = {
       word: v.word,
       state: (patch.state ?? prev?.state ?? "unknown") as WordState,
       preference: (patch.preference ?? prev?.preference ?? "study") as WordPref,
+      known_source: (patch.known_source !== undefined ? patch.known_source : (prev?.known_source ?? null)) as KnownSource,
+      srs_level: patch.srs_level ?? prev?.srs_level ?? 0,
+      srs_due_at: patch.srs_due_at !== undefined ? patch.srs_due_at : (prev?.srs_due_at ?? null),
     };
     setWordStates(m => {
       const nm = new Map(m);
       nm.set(v.word, next);
       return nm;
     });
-    await supabase.from("user_word_state").upsert({
+    const payload: any = {
       user_id: user.id,
       word: v.word,
       reading: v.reading,
       jlpt_level: (v.jlpt_level as any) ?? null,
       state: next.state,
       preference: next.preference,
-    }, { onConflict: "user_id,word" });
+      known_source: next.known_source,
+      srs_level: next.srs_level,
+      srs_due_at: next.srs_due_at,
+    };
+    if (extra?.marked_known_at !== undefined) payload.marked_known_at = extra.marked_known_at;
+    await supabase.from("user_word_state").upsert(payload, { onConflict: "user_id,word" });
   };
 
-  const markKnown = (v: VocabItem) => upsertWord(v, { state: "known" });
-  const markNew = (v: VocabItem) => upsertWord(v, { state: "unknown" });
+  // Default "Known" action = "Learned it" (SRS-tracked, will resurface in future episodes).
+  const markKnownLearned = (v: VocabItem) =>
+    upsertWord(v, { state: "known", known_source: "learned", srs_level: 0, srs_due_at: dueAtForLevel(0) }, { marked_known_at: new Date().toISOString() });
+  // "Already knew it" = permanent, never resurfaces.
+  const markKnownPrior = (v: VocabItem) =>
+    upsertWord(v, { state: "known", known_source: "prior", srs_level: 0, srs_due_at: null }, { marked_known_at: new Date().toISOString() });
+  const markNew = (v: VocabItem) =>
+    upsertWord(v, { state: "unknown", known_source: null, srs_due_at: null });
   const togglePref = (v: VocabItem) => {
     const cur = prefOf(v.word);
     const hasKanji = v.word !== v.reading;
     if (!hasKanji) return;
     upsertWord(v, { preference: cur === "kanji_only" ? "study" : "kanji_only" });
   };
+
+  // Demote any "learned" known word that's now due back into the "learning" queue,
+  // bumping its SRS level. "prior" words are never demoted.
+  const demoteDueWords = async (words: VocabItem[]): Promise<number> => {
+    if (!user || words.length === 0) return 0;
+    const now = Date.now();
+    const due = words.filter(v => {
+      const s = wordStates.get(v.word);
+      if (!s || s.state !== "known" || s.known_source !== "learned") return false;
+      if (!s.srs_due_at) return false;
+      return new Date(s.srs_due_at).getTime() <= now;
+    });
+    if (due.length === 0) return 0;
+    const updates = due.map(v => {
+      const s = wordStates.get(v.word)!;
+      const newLevel = Math.min(s.srs_level + 1, SRS_INTERVALS_DAYS.length - 1);
+      return {
+        user_id: user.id,
+        word: v.word,
+        reading: v.reading,
+        jlpt_level: (v.jlpt_level as any) ?? null,
+        state: "learning" as WordState,
+        preference: s.preference,
+        known_source: "learned" as KnownSource,
+        srs_level: newLevel,
+        srs_due_at: dueAtForLevel(newLevel),
+        correct_streak: 0,
+      };
+    });
+    await supabase.from("user_word_state").upsert(updates as any, { onConflict: "user_id,word" });
+    setWordStates(m => {
+      const nm = new Map(m);
+      for (const u of updates) {
+        const prev = nm.get(u.word);
+        nm.set(u.word, {
+          word: u.word,
+          state: u.state,
+          preference: u.preference,
+          known_source: u.known_source,
+          srs_level: u.srs_level,
+          srs_due_at: u.srs_due_at,
+        });
+      }
+      return nm;
+    });
+    return due.length;
+  };
+
+  // Manual rewatch: re-evaluate this episode's vocab right now.
+  const [rewatching, setRewatching] = useState(false);
+  const handleRewatch = async () => {
+    setRewatching(true);
+    const n = await demoteDueWords(vocab);
+    setRewatching(false);
+    if (n > 0) toast.success(`${n} word${n === 1 ? "" : "s"} back in your queue`);
+    else toast.message("Nothing due yet", { description: "All learned words are still within their review interval." });
+  };
+
+  // Auto-demote on first open: only if user has never created chunks for this episode
+  // (i.e. truly first time viewing). This keeps already-opened episodes stable.
+  const autoDemoteRanRef = useRef(false);
+  useEffect(() => {
+    if (autoDemoteRanRef.current) return;
+    if (!user || vocab.length === 0) return;
+    if (chunks.length > 0) { autoDemoteRanRef.current = true; return; }
+    autoDemoteRanRef.current = true;
+    demoteDueWords(vocab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vocab, chunks, user]);
 
   const chunkify = async () => {
     if (!user || !episodeId) return;
