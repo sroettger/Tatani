@@ -257,15 +257,25 @@ Deno.serve(async (req) => {
           throw new Error("all chunks failed");
         }
 
+        // Override AI-guessed JLPT levels with the official list when available.
+        const mergedVocab = Array.from(vocabMap.values()).map((v: any) => {
+          const official = getOfficialJlptLevel(v?.word, v?.reading);
+          return official ? { ...v, jlpt_level: official } : v;
+        });
+        const officialCount = mergedVocab.filter((v: any, i: number) => {
+          const orig = Array.from(vocabMap.values())[i] as any;
+          return orig?.jlpt_level !== v.jlpt_level;
+        }).length;
+
         const payload = {
           episode_id,
-          vocab: Array.from(vocabMap.values()),
+          vocab: mergedVocab,
           grammar: Array.from(grammarMap.values()),
           sentences: sentences.slice(0, 60),
         };
         await supabase.from("episode_vocab_cache").upsert(payload, { onConflict: "episode_id" });
         await supabase.from("episodes").update({ processing_status: "ready" }).eq("id", episode_id);
-        console.log(`Episode ${episode_id} processed: ${successCount}/${chunks.length} chunks ok, ${payload.vocab.length} vocab, ${payload.grammar.length} grammar, ${payload.sentences.length} sentences`);
+        console.log(`Episode ${episode_id} processed: ${successCount}/${chunks.length} chunks ok, ${payload.vocab.length} vocab (${officialCount} re-tagged from official JLPT list), ${payload.grammar.length} grammar, ${payload.sentences.length} sentences`);
       } catch (e) {
         console.error(`Episode ${episode_id} background processing failed:`, e instanceof Error ? e.message : e);
         await supabase.from("episodes").update({ processing_status: "failed" }).eq("id", episode_id);
