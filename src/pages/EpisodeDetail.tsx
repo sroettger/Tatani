@@ -348,7 +348,7 @@ export default function EpisodeDetail() {
                             size="sm"
                             variant="outline"
                             className="h-7 px-2 text-[11px] gap-1 hover:text-success"
-                            onClick={() => markKnown(v)}
+                            onClick={(e) => { markKnown(v); (e.currentTarget as HTMLButtonElement).blur(); }}
                             title="Mark as known"
                           >
                             <CheckCircle2 className="h-3 w-3" /> Known
