@@ -36,8 +36,6 @@ export default function StudyChunk() {
   const [sessionStreak, setSessionStreak] = useState<Record<string, number>>({});
   // persistent streak (from user_word_state) — controls kanji vs hiragana view
   const [persistStreak, setPersistStreak] = useState<Record<string, number>>({});
-  // map of word -> kanji_only preference
-  const [kanjiOnly, setKanjiOnly] = useState<Record<string, boolean>>({});
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [doneCount, setDoneCount] = useState(0);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
