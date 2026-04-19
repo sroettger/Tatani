@@ -1,17 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ChevronLeft, Loader2, Upload, Sparkles, BookOpen, BrainCircuit, Volume2, Plus, Mic, Layers, ListChecks, RotateCw, Check } from "lucide-react";
+import { ChevronLeft, Loader2, Upload, Sparkles, BookOpen, BrainCircuit, Volume2, Plus, Mic, Layers, Check, Type, CheckCircle2, RotateCw } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { TutorChat } from "@/components/TutorChat";
+import { cn } from "@/lib/utils";
 
 // JLPT difficulty rank — higher number = harder. "none" treated as harder than N1
 // so unclassified/proper-noun vocab is never auto-skipped.
 const JLPT_RANK: Record<string, number> = { N5: 1, N4: 2, N3: 3, N2: 4, N1: 5, none: 6 };
+const CHUNK_SIZE = 10;
 
 type VocabItem = {
   word: string;
@@ -23,6 +25,9 @@ type VocabItem = {
   example_sentence_en: string;
 };
 type SentenceItem = { jp: string; en: string };
+type WordPref = "study" | "kanji_only" | "skip";
+type WordState = "unknown" | "learning" | "known";
+type WordRow = { word: string; state: WordState; preference: WordPref };
 
 export default function EpisodeDetail() {
   const { episodeId } = useParams();
@@ -33,14 +38,13 @@ export default function EpisodeDetail() {
   const [episode, setEpisode] = useState<{ id: string; episode_number: number; processing_status: string; processing_chunks_total: number; processing_chunks_done: number } | null>(null);
   const [vocab, setVocab] = useState<VocabItem[]>([]);
   const [sentences, setSentences] = useState<SentenceItem[]>([]);
-  const [knownWords, setKnownWords] = useState<Set<string>>(new Set());
-  const [addedBack, setAddedBack] = useState<Set<string>>(new Set());
+  const [wordStates, setWordStates] = useState<Map<string, WordRow>>(new Map());
   const [busy, setBusy] = useState(false);
   const [progressStage, setProgressStage] = useState<string>("");
-  const [showSkipped, setShowSkipped] = useState(false);
   const [showNew, setShowNew] = useState(false);
   const [showKnown, setShowKnown] = useState(false);
   const [chunks, setChunks] = useState<{ id: string; chunk_index: number; word_count: number; studied_at: string | null }[]>([]);
+  const [chunkifying, setChunkifying] = useState(false);
 
   const load = async () => {
     if (!episodeId || !user) return;
@@ -49,8 +53,10 @@ export default function EpisodeDetail() {
     const { data: cache } = await supabase.from("episode_vocab_cache").select("vocab,sentences").eq("episode_id", episodeId).maybeSingle();
     setVocab(((cache?.vocab ?? []) as VocabItem[]));
     setSentences(((cache?.sentences ?? []) as SentenceItem[]));
-    const { data: words } = await supabase.from("user_word_state").select("word,state").eq("user_id", user.id).eq("state", "known");
-    setKnownWords(new Set((words ?? []).map((w: any) => w.word)));
+    const { data: words } = await supabase.from("user_word_state").select("word,state,preference").eq("user_id", user.id);
+    const map = new Map<string, WordRow>();
+    (words ?? []).forEach((w: any) => map.set(w.word, { word: w.word, state: w.state, preference: w.preference }));
+    setWordStates(map);
     const { data: ch } = await supabase
       .from("study_chunks")
       .select("id,chunk_index,word_count,studied_at")
@@ -101,7 +107,6 @@ export default function EpisodeDetail() {
       load();
       return;
     }
-    // Background processing started — switch to polling
     setProgressStage("Extracting vocabulary with AI… (this can take 1–2 minutes)");
     await load();
   };
@@ -134,38 +139,97 @@ export default function EpisodeDetail() {
     speechSynthesis.speak(u);
   };
 
-  // A word is "below my level" if its JLPT rank is strictly easier than my profile level.
-  // E.g. profile=N4 (rank 2) → N5 (rank 1) is auto-skipped, N4/N3/etc. stay.
+  // Level-based defaulting: words below user's JLPT level default to "known" unless user overrode.
   const myLevel = profile?.jlpt_level && profile.jlpt_level !== "none" ? profile.jlpt_level : null;
   const myRank = myLevel ? JLPT_RANK[myLevel] : 0;
   const isBelowLevel = (lvl: string) => myRank > 0 && (JLPT_RANK[lvl] ?? 99) < myRank;
 
-  const newVocab = vocab.filter(v =>
-    !knownWords.has(v.word) && (!isBelowLevel(v.jlpt_level) || addedBack.has(v.word))
-  );
-  const skippedVocab = vocab.filter(v =>
-    !addedBack.has(v.word) && (knownWords.has(v.word) || isBelowLevel(v.jlpt_level))
-  );
-  const masteryPct = vocab.length ? Math.round((skippedVocab.length / vocab.length) * 100) : 0;
+  // Effective bucket for a word: "known" | "new" (with preference)
+  const bucketOf = (v: VocabItem): "known" | "new" => {
+    const s = wordStates.get(v.word);
+    if (s?.state === "known") return "known";
+    if (s) return "new"; // user explicitly set it as not-known
+    if (isBelowLevel(v.jlpt_level)) return "known"; // auto-skip default
+    return "new";
+  };
 
-  const addBack = async (v: VocabItem) => {
+  const prefOf = (word: string): WordPref => wordStates.get(word)?.preference ?? "study";
+
+  const newVocab = useMemo(() => vocab.filter(v => bucketOf(v) === "new"), [vocab, wordStates, myRank]);
+  const knownVocab = useMemo(() => vocab.filter(v => bucketOf(v) === "known"), [vocab, wordStates, myRank]);
+  const masteryPct = vocab.length ? Math.round((knownVocab.length / vocab.length) * 100) : 0;
+
+  // Chunkify-staleness: compare current "study"+"kanji_only" new words to existing chunks' word_count sum.
+  const studyableCount = newVocab.filter(v => prefOf(v.word) !== "skip").length;
+  const chunkedCount = chunks.reduce((s, c) => s + c.word_count, 0);
+  const chunksStale = chunks.length > 0 && chunkedCount !== studyableCount;
+
+  const upsertWord = async (v: VocabItem, patch: Partial<Pick<WordRow, "state" | "preference">>) => {
     if (!user) return;
-    setAddedBack(prev => new Set(prev).add(v.word));
-    // Persist as 'unknown' so it survives reloads and gets included in study.
+    const prev = wordStates.get(v.word);
+    const next: WordRow = {
+      word: v.word,
+      state: (patch.state ?? prev?.state ?? "unknown") as WordState,
+      preference: (patch.preference ?? prev?.preference ?? "study") as WordPref,
+    };
+    setWordStates(m => {
+      const nm = new Map(m);
+      nm.set(v.word, next);
+      return nm;
+    });
     await supabase.from("user_word_state").upsert({
       user_id: user.id,
       word: v.word,
       reading: v.reading,
       jlpt_level: (v.jlpt_level as any) ?? null,
-      state: "unknown" as const,
+      state: next.state,
+      preference: next.preference,
     }, { onConflict: "user_id,word" });
-    // If this word was previously marked known, drop it from the local known set too.
-    setKnownWords(prev => {
-      const next = new Set(prev);
-      next.delete(v.word);
-      return next;
-    });
-    toast.success(`Added "${v.word}" to study`);
+  };
+
+  const markKnown = (v: VocabItem) => upsertWord(v, { state: "known" });
+  const markNew = (v: VocabItem) => upsertWord(v, { state: "unknown" });
+  const togglePref = (v: VocabItem) => {
+    const cur = prefOf(v.word);
+    const hasKanji = v.word !== v.reading;
+    if (!hasKanji) return;
+    upsertWord(v, { preference: cur === "kanji_only" ? "study" : "kanji_only" });
+  };
+
+  const chunkify = async () => {
+    if (!user || !episodeId) return;
+    const studyable = newVocab.filter(v => prefOf(v.word) !== "skip");
+    if (studyable.length === 0) {
+      toast.error("No words to chunkify");
+      return;
+    }
+    setChunkifying(true);
+    await supabase.from("study_chunks").delete().eq("user_id", user.id).eq("episode_id", episodeId);
+    const groups: VocabItem[][] = [];
+    for (let i = 0; i < studyable.length; i += CHUNK_SIZE) groups.push(studyable.slice(i, i + CHUNK_SIZE));
+    for (let idx = 0; idx < groups.length; idx++) {
+      const { data: chunk, error: cErr } = await supabase
+        .from("study_chunks")
+        .insert({ user_id: user.id, episode_id: episodeId, chunk_index: idx + 1, word_count: groups[idx].length })
+        .select("id").single();
+      if (cErr || !chunk) { toast.error("Failed to create chunk"); setChunkifying(false); return; }
+      const wordRows = groups[idx].map((v, pos) => ({
+        chunk_id: chunk.id,
+        word: v.word,
+        reading: v.reading,
+        meaning: v.meaning,
+        jlpt_level: (v.jlpt_level as any) ?? null,
+        part_of_speech: v.part_of_speech,
+        example_sentence_jp: v.example_sentence_jp,
+        example_sentence_en: v.example_sentence_en,
+        position: pos,
+      }));
+      const { error: wErr } = await supabase.from("study_chunk_words").insert(wordRows);
+      if (wErr) { toast.error("Failed to save chunk words"); setChunkifying(false); return; }
+    }
+    toast.success(`Created ${groups.length} chunk${groups.length === 1 ? "" : "s"}`);
+    setChunkifying(false);
+    await load();
   };
 
   return (
@@ -234,7 +298,7 @@ export default function EpisodeDetail() {
             />
             <StatBox
               label="Known"
-              value={skippedVocab.filter(v => knownWords.has(v.word)).length}
+              value={knownVocab.length}
               accent="text-success"
               active={showKnown}
               onClick={() => { setShowKnown(s => !s); setShowNew(false); }}
@@ -244,118 +308,167 @@ export default function EpisodeDetail() {
 
           {showNew && (
             <Card className="p-3 mb-4 gradient-card border-border/50">
-              <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">New words ({newVocab.length})</div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs uppercase tracking-wider text-muted-foreground">New words ({newVocab.length})</div>
+                <div className="text-[10px] text-muted-foreground/80 flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1"><Type className="h-3 w-3" />kanji-only</span>
+                  <span className="inline-flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />known</span>
+                </div>
+              </div>
               {newVocab.length === 0 ? (
                 <div className="text-sm text-muted-foreground">Nothing new — you've mastered them all.</div>
               ) : (
-                <div className="grid gap-1.5 max-h-72 overflow-y-auto">
-                  {newVocab.map((v, i) => (
-                    <div key={i} className="flex items-center justify-between gap-2 py-1">
-                      <div className="min-w-0 flex-1">
-                        <div className="font-jp text-sm truncate">
-                          {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
+                <div className="grid gap-1 max-h-96 overflow-y-auto">
+                  {newVocab.map((v, i) => {
+                    const pref = prefOf(v.word);
+                    const hasKanji = v.word !== v.reading;
+                    const kanjiOnly = pref === "kanji_only";
+                    return (
+                      <div key={i} className="flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-jp text-sm truncate">
+                            {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
+                            {kanjiOnly && <span className="ml-1 text-[10px] text-accent">· kanji only</span>}
+                          </div>
+                          <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
                         </div>
-                        <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
+                        <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
+                        <Button
+                          size="icon"
+                          variant={kanjiOnly ? "default" : "ghost"}
+                          className={cn("h-7 w-7 shrink-0", !hasKanji && "opacity-30")}
+                          disabled={!hasKanji}
+                          onClick={() => togglePref(v)}
+                          title={hasKanji ? (kanjiOnly ? "Studying kanji only" : "Switch to kanji-only") : "No kanji in this word"}
+                        >
+                          <Type className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 shrink-0 text-muted-foreground hover:text-success"
+                          onClick={() => markKnown(v)}
+                          title="Mark as known"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                        </Button>
                       </div>
-                      <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </Card>
           )}
 
-          {showKnown && (() => {
-            const knownList = skippedVocab.filter(v => knownWords.has(v.word));
-            return (
-              <Card className="p-3 mb-4 gradient-card border-border/50">
-                <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Known words ({knownList.length})</div>
-                {knownList.length === 0 ? (
-                  <div className="text-sm text-muted-foreground">No words marked known yet for this episode.</div>
-                ) : (
-                  <div className="grid gap-1.5 max-h-72 overflow-y-auto">
-                    {knownList.map((v, i) => (
-                      <div key={i} className="flex items-center justify-between gap-2 py-1">
+          {showKnown && (
+            <Card className="p-3 mb-4 gradient-card border-border/50">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Known words ({knownVocab.length})</div>
+              {knownVocab.length === 0 ? (
+                <div className="text-sm text-muted-foreground">No known words yet.</div>
+              ) : (
+                <div className="grid gap-1 max-h-96 overflow-y-auto">
+                  {knownVocab.map((v, i) => {
+                    const s = wordStates.get(v.word);
+                    const reason = s?.state === "known" ? "known" : "below your level";
+                    return (
+                      <div key={i} className="flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0">
                         <div className="min-w-0 flex-1">
                           <div className="font-jp text-sm truncate">
                             {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
                           </div>
                           <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
+                          <div className="text-[10px] text-muted-foreground/70">{reason}</div>
                         </div>
-                        <Button size="sm" variant="ghost" className="h-7 px-2 shrink-0" onClick={() => addBack(v)}>
-                          <Plus className="h-3 w-3" /> Re-add
+                        <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 px-2 shrink-0"
+                          onClick={() => markNew(v)}
+                          title="Move back to new"
+                        >
+                          <Plus className="h-3 w-3" /> New
                         </Button>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </Card>
-            );
-          })()}
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
+          )}
 
-          {/* Chunks list / pre-review CTA */}
-          {chunks.length === 0 ? (
-            <div className="grid gap-2 mb-6">
+          {/* Chunkify CTA */}
+          <div className="grid gap-2 mb-6">
+            {chunks.length === 0 ? (
               <Button
                 className="w-full h-12 gradient-primary text-primary-foreground"
-                onClick={() => navigate(`/episode/${episodeId}/prereview`)}
-                disabled={newVocab.length === 0}
+                onClick={chunkify}
+                disabled={chunkifying || studyableCount === 0}
               >
-                <ListChecks className="h-4 w-4" /> Pre-review & create chunks
+                {chunkifying ? <><Loader2 className="h-4 w-4 animate-spin" /> Creating chunks…</> : <><Layers className="h-4 w-4" /> Create chunks ({studyableCount} word{studyableCount === 1 ? "" : "s"})</>}
               </Button>
-              <Button
-                variant="outline"
-                className="w-full h-12"
-                onClick={() => navigate(`/study/${episodeId}/voice`)}
-                disabled={newVocab.length === 0}
-              >
-                <Mic className="h-4 w-4" /> Hands-free voice mode
-              </Button>
-            </div>
-          ) : (
-            <div className="mb-6">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="font-semibold flex items-center gap-2">
-                  <Layers className="h-4 w-4 text-primary" /> Study chunks
-                </h3>
-                <button
-                  onClick={() => navigate(`/episode/${episodeId}/prereview`)}
-                  className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
-                >
-                  <RotateCw className="h-3 w-3" /> Re-do pre-review
-                </button>
-              </div>
-              <div className="grid gap-2 mb-3">
-                {chunks.map(c => (
-                  <Card
-                    key={c.id}
-                    onClick={() => navigate(`/study/chunk/${c.id}`)}
-                    className="p-3 gradient-card border-border/50 cursor-pointer hover:border-primary/40 transition flex items-center justify-between"
+            ) : (
+              <>
+                <div className="flex items-center justify-between mb-1">
+                  <h3 className="font-semibold flex items-center gap-2">
+                    <Layers className="h-4 w-4 text-primary" /> Study chunks
+                  </h3>
+                  <Button
+                    size="sm"
+                    variant={chunksStale ? "default" : "ghost"}
+                    className={cn("h-7 px-2 text-xs", chunksStale && "gradient-primary text-primary-foreground")}
+                    onClick={chunkify}
+                    disabled={chunkifying || studyableCount === 0}
                   >
-                    <div>
-                      <div className="font-medium text-sm flex items-center gap-2">
-                        Chunk {c.chunk_index}
-                        {c.studied_at && <Check className="h-3.5 w-3.5 text-success" />}
+                    {chunkifying ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCw className="h-3 w-3" />}
+                    Re-chunkify
+                  </Button>
+                </div>
+                {chunksStale && (
+                  <div className="text-xs text-accent mb-1">
+                    Word list changed ({studyableCount} now vs {chunkedCount} chunked). Re-chunkify to refresh.
+                  </div>
+                )}
+                <div className="grid gap-2">
+                  {chunks.map(c => (
+                    <Card
+                      key={c.id}
+                      onClick={() => navigate(`/study/chunk/${c.id}`)}
+                      className="p-3 gradient-card border-border/50 cursor-pointer hover:border-primary/40 transition flex items-center justify-between"
+                    >
+                      <div>
+                        <div className="font-medium text-sm flex items-center gap-2">
+                          Chunk {c.chunk_index}
+                          {c.studied_at && <Check className="h-3.5 w-3.5 text-success" />}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {c.word_count} word{c.word_count === 1 ? "" : "s"}
+                          {c.studied_at ? " · Studied" : " · Not yet"}
+                        </div>
                       </div>
-                      <div className="text-xs text-muted-foreground">
-                        {c.word_count} word{c.word_count === 1 ? "" : "s"}
-                        {c.studied_at ? " · Studied" : " · Not yet"}
-                      </div>
-                    </div>
-                    <BookOpen className="h-4 w-4 text-muted-foreground" />
-                  </Card>
-                ))}
-              </div>
-              <Button
-                variant="outline"
-                className="w-full h-11"
-                onClick={() => navigate(`/episode/${episodeId}/quiz`)}
-                disabled={!chunks.some(c => c.studied_at)}
-              >
-                <BrainCircuit className="h-4 w-4" /> Quiz studied chunks
-              </Button>
-            </div>
-          )}
+                      <BookOpen className="h-4 w-4 text-muted-foreground" />
+                    </Card>
+                  ))}
+                </div>
+                <Button
+                  variant="outline"
+                  className="w-full h-11 mt-1"
+                  onClick={() => navigate(`/episode/${episodeId}/quiz`)}
+                  disabled={!chunks.some(c => c.studied_at)}
+                >
+                  <BrainCircuit className="h-4 w-4" /> Quiz studied chunks
+                </Button>
+              </>
+            )}
+            <Button
+              variant="outline"
+              className="w-full h-11"
+              onClick={() => navigate(`/study/${episodeId}/voice`)}
+              disabled={studyableCount === 0}
+            >
+              <Mic className="h-4 w-4" /> Hands-free voice mode
+            </Button>
+          </div>
 
           <h3 className="font-semibold mb-2 flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-primary" /> Sentences</h3>
           <div className="grid gap-2 mb-6">
@@ -369,46 +482,18 @@ export default function EpisodeDetail() {
               </Card>
             ))}
           </div>
-
-          {skippedVocab.length > 0 && (
-            <div>
-              <button
-                onClick={() => setShowSkipped(s => !s)}
-                className="text-sm text-muted-foreground hover:text-foreground"
-              >
-                {showSkipped ? "Hide" : "Show"} {skippedVocab.length} skipped (below your level or already known)
-              </button>
-              {showSkipped && (
-                <div className="grid gap-2 mt-3">
-                  {skippedVocab.map((v, i) => {
-                    const reason = knownWords.has(v.word) ? "known" : "below level";
-                    return (
-                      <Card key={i} className="p-3 gradient-card border-border/50 flex items-center justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="font-jp font-semibold truncate">{v.word} <span className="text-muted-foreground text-xs">{v.reading}</span></div>
-                          <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
-                          <div className="text-[10px] text-muted-foreground/70 mt-0.5">{reason}</div>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <Badge variant="secondary" className="text-[10px]">{v.jlpt_level}</Badge>
-                          <Button size="sm" variant="outline" className="h-8 px-2" onClick={() => addBack(v)}>
-                            <Plus className="h-3 w-3" /> Add
-                          </Button>
-                        </div>
-                      </Card>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
         </>
       )}
 
       <TutorChat
         vocab={vocab}
         onStartQuiz={() => navigate(`/study/${episodeId}`)}
-        onWordMarkedKnown={(w) => setKnownWords((prev) => new Set([...prev, w]))}
+        onWordMarkedKnown={(w) => setWordStates(prev => {
+          const next = new Map(prev);
+          const existing = next.get(w);
+          next.set(w, { word: w, state: "known", preference: existing?.preference ?? "study" });
+          return next;
+        })}
       />
     </div>
   );
