@@ -11,6 +11,7 @@ import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { TutorChat } from "@/components/TutorChat";
 import { EpisodeSummary } from "@/components/EpisodeSummary";
+import { EpisodeDiscussion } from "@/components/EpisodeDiscussion";
 import { cn } from "@/lib/utils";
 import { useStudyPrefs } from "@/hooks/use-study-prefs";
 
@@ -670,6 +671,13 @@ export default function EpisodeDetail() {
 
           {episodeId && (
             <EpisodeSummary
+              episodeId={episodeId}
+              studiedWordCount={chunks.filter(c => c.studied_at).reduce((s, c) => s + c.word_count, 0)}
+            />
+          )}
+
+          {episodeId && (
+            <EpisodeDiscussion
               episodeId={episodeId}
               studiedWordCount={chunks.filter(c => c.studied_at).reduce((s, c) => s + c.word_count, 0)}
             />
