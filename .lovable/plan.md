@@ -1,49 +1,33 @@
 
 
 ## Goal
-Add spaced repetition to "known" words. Distinguish words known *before* studying (permanent) vs. words learned *through* study (time-limited). Future episodes auto-promote due words back into "to learn." Old episodes only re-evaluate when user hits "Rewatch."
+Replace AI-guessed JLPT levels with the **official JLPT vocab list** when the word is on it. Fall back to the AI's level only if the word isn't found.
 
-## Data model changes (`user_word_state`)
+## Approach
 
-Add columns:
-- `known_source` text — `'prior'` (already knew it) or `'learned'` (studied here). Null = not known.
-- `srs_level` int default 0 — current SRS box (0..8).
-- `srs_due_at` timestamptz — when this word becomes due for re-review.
-- `marked_known_at` timestamptz — when it was last marked known.
+1. **Source data**: Use a public JLPT vocabulary dataset. The cleanest one is [jonowo/jlpt-resources](https://github.com/jonowo/jlpt-resources) or [elzup/jlpt-word-list](https://github.com/elzup/jlpt-word-list) — both list ~8000 words across N5–N1 with kanji + reading.
+2. **Storage**: Build a single JSON file `supabase/functions/_shared/jlpt-vocab.json` keyed by `"word|reading"` (or just `word` with array fallback) → `"N5"|"N4"|"N3"|"N2"|"N1"`. Roughly 200–400 KB gzipped, fine to bundle into the edge function.
+3. **Lookup priority**:
+   - Exact match on `word + reading` → official level.
+   - Fallback: exact match on `word` alone (handles cases where AI gave a different reading) → official level.
+   - No match → keep AI's `jlpt_level`.
+4. **Where to apply**: In `process-episode` edge function, right after Gemini returns the vocab list, run each item through the lookup and overwrite `jlpt_level` if found. This means: future processing → official levels. Already-cached episodes → unchanged unless re-processed.
+5. **Optional**: Add a one-shot "re-tag levels" pass that walks `episode_vocab_cache`, applies the lookup, and updates rows in place. Cheap, no AI calls.
 
-`state` field semantics stay the same (`known` / `learning` / `unknown`), but for `learned` words we now also check `srs_due_at` to decide if they should resurface in *new* episodes.
+## Files to change
 
-SRS intervals (days, Leitner-ish): `[1, 3, 7, 14, 30, 60, 120, 240, 480]`.
-
-## UI changes — `EpisodeDetail.tsx`
-
-**"Mark as known" gets two options** (small dropdown / two buttons):
-1. **Already knew it** → `state='known'`, `known_source='prior'`, no due date. Permanent.
-2. **Learned it** → `state='known'`, `known_source='learned'`, `srs_level=0`, `srs_due_at = now + 1 day`.
-
-(Default click = "Learned it" since that's the common case after studying. "Already knew it" available via small secondary action / long-press / dropdown.)
-
-**Rewatch button** on episode page header:
-- Re-evaluates this episode's `known` words. For each `learned` word where `srs_due_at <= now`: demote back to `learning` (resets streak), increment `srs_level`, set new `srs_due_at = now + intervals[new_level]`. Show toast: "X words back in your queue."
-- `prior` words are never demoted.
-
-## Auto-promotion on episode load
-
-When a new episode is opened (no chunks yet, or first time viewing), run the same due-check pass implicitly: any `learned` words appearing in this episode that are due get demoted into the queue automatically. This satisfies "when episode 2 is processed, check the time limit."
-
-To prevent retro-resurfacing in *already-opened* episodes: track `last_seen_in_episode` per word OR simpler — only auto-demote if the user has never opened/chunked this episode before (check `study_chunks` for this episode). Old episodes require explicit Rewatch.
-
-## Quiz wins (later, optional)
-
-When user gets a `learned` word right in a quiz, bump `srs_level` and push `srs_due_at` further out. (Out of scope unless you want it now.)
-
-## Files to edit
-- New migration: add 4 columns to `user_word_state`.
-- `src/pages/EpisodeDetail.tsx`: split mark-known into two actions, add Rewatch button, add auto-demote logic on first-open, filter `knownVocab` vs `queueVocab` accordingly.
-- `src/pages/StudyChunk.tsx`, `StudySession.tsx`, `VoiceStudySession.tsx`: no behavior change (still don't auto-mark known). Optional later: SRS bump on quiz correct.
+- New: `supabase/functions/_shared/jlpt-vocab.json` (built from the public dataset; I'll fetch it and trim to `{word, reading, level}` rows).
+- New: `supabase/functions/_shared/jlpt-lookup.ts` — exports `getOfficialJlptLevel(word, reading)`.
+- Edit: `supabase/functions/process-episode/index.ts` — call the lookup after AI extraction.
+- Edit: `supabase/functions/_shared/jlpt-vocab.json` is read via Deno's `import ... assert { type: "json" }`.
 
 ## Open questions
 
-1. Default action for the "Mark as known" button — should clicking it assume "Learned it" (SRS) and require a secondary action for "Already knew it"? Or always show both buttons side by side?
-2. Should getting a word right in a quiz advance its SRS level (push the due date out further), or only the explicit "mark known" action does that?
+1. **Re-tag existing cached episodes?** Two options:
+   - (a) Only apply to *future* processing — old caches keep AI levels until re-processed.
+   - (b) Add a one-time backfill that re-tags every row in `episode_vocab_cache` right now (no AI cost, just a SQL update powered by the lookup table).
+
+2. **Reading mismatch policy** — if the AI gave reading "じなん" but the official list has "次男" with reading "じなん" (matches) vs. an entry with a different reading (e.g. okurigana variant), should we:
+   - (a) Strict: only match when reading matches exactly → safer, fewer matches.
+   - (b) Lenient: match by surface word alone if reading mismatch → more coverage, occasional wrong level for homographs.
 
