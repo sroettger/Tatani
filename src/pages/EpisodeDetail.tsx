@@ -456,7 +456,7 @@ export default function EpisodeDetail() {
           <div className="grid grid-cols-3 gap-2 mb-4">
             <StatBox
               label="To learn"
-              value={`${queueVocab.length}/${Math.min(newVocab.length, QUEUE_SIZE)}`}
+              value={`${queueVocab.length}/${newVocab.length}`}
               accent="text-primary"
               active={showQueue}
               onClick={() => { setShowQueue(s => !s); setShowAll(false); setShowKnown(false); }}
