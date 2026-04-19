@@ -40,6 +40,8 @@ export default function StudyChunk() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [doneCount, setDoneCount] = useState(0);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  // Stack of previous queue snapshots so the user can step back.
+  const [history, setHistory] = useState<ChunkWord[][]>([]);
 
   useEffect(() => {
     if (!chunkId || !user) return;
@@ -133,6 +135,7 @@ export default function StudyChunk() {
       // current is prev[0]
       const [head, ...rest] = prev;
       if (!head) return prev;
+      setHistory(h => [...h, prev]);
       let next: ChunkWord[];
       if (afterRemove) {
         next = rest;
@@ -144,6 +147,17 @@ export default function StudyChunk() {
       }
       setCurrent(next[0] ?? null);
       return next;
+    });
+  };
+
+  const onSkipBack = () => {
+    setFlipped(false);
+    setHistory(h => {
+      if (h.length === 0) return h;
+      const prevQueue = h[h.length - 1];
+      setQueue(prevQueue);
+      setCurrent(prevQueue[0] ?? null);
+      return h.slice(0, -1);
     });
   };
 
@@ -300,6 +314,16 @@ export default function StudyChunk() {
             </Card>
           </div>
         </div>
+
+        {/* Left-side transparent skip-back arrow */}
+        <button
+          onClick={(e) => { e.stopPropagation(); onSkipBack(); }}
+          aria-label="Previous word"
+          disabled={history.length === 0}
+          className="absolute top-0 left-0 h-full w-14 flex items-center justify-center rounded-l-lg bg-background/0 hover:bg-background/40 active:bg-background/60 transition text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:hover:bg-background/0"
+        >
+          <ChevronLeft className="h-7 w-7" />
+        </button>
 
         {/* Right-side transparent skip-forward arrow */}
         <button
