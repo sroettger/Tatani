@@ -218,7 +218,8 @@ export default function Settings() {
           </div>
         </Card>
 
-
+        <Card className="p-4 gradient-card border-border/50">
+          <h3 className="font-semibold mb-1">Retake placement quiz</h3>
           <p className="text-xs text-muted-foreground mb-3">Generates a fresh quiz and re-seeds your known-word list.</p>
           <Button variant="outline" onClick={retakePlacement}><RotateCw className="h-4 w-4" /> Retake</Button>
         </Card>
