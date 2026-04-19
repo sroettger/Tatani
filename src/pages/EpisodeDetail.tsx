@@ -238,7 +238,8 @@ export default function EpisodeDetail() {
       srs_due_at: next.srs_due_at,
     };
     if (extra?.marked_known_at !== undefined) payload.marked_known_at = extra.marked_known_at;
-    await supabase.from("user_word_state").upsert(payload, { onConflict: "user_id,word" });
+    const { error: upsertErr } = await supabase.from("user_word_state").upsert(payload, { onConflict: "user_id,word" });
+    if (upsertErr) console.error("user_word_state upsert failed:", upsertErr, payload);
   };
 
   // Default "Known" action = "Learned it" (SRS-tracked, will resurface in future episodes).
