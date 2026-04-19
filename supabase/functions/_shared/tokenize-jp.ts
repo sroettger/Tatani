@@ -125,7 +125,10 @@ export async function extractVocabFromSubtitles(text: string): Promise<VocabEntr
       const isAllKana = /^[\u3040-\u309F\u30A0-\u30FFー]+$/.test(word);
       if (isAllKana && word.length <= 2) continue;
 
-      const reading = t.reading ? katakanaToHiragana(t.reading) : "";
+      const surfaceReading = t.reading ? katakanaToHiragana(t.reading) : "";
+      // Kuromoji's `reading` matches the inflected surface_form. Convert it
+      // to the dictionary-form reading so cards display 殴る/なぐる, not 殴る/なぐっ.
+      const reading = dictionaryFormReading(t.surface_form, word, surfaceReading);
       const cur = map.get(word);
       if (cur) {
         cur.count++;
