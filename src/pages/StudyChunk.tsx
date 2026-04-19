@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,7 @@ export default function StudyChunk() {
   const [kanjiOnly, setKanjiOnly] = useState<Record<string, boolean>>({});
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [doneCount, setDoneCount] = useState(0);
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   useEffect(() => {
     if (!chunkId || !user) return;
@@ -82,6 +83,19 @@ export default function StudyChunk() {
       setLoading(false);
     })();
   }, [chunkId, user]);
+
+  useEffect(() => {
+    if (!("speechSynthesis" in window)) return;
+    const synth = window.speechSynthesis;
+    const primeVoices = () => { synth.getVoices(); };
+    primeVoices();
+    synth.onvoiceschanged = primeVoices;
+    return () => {
+      synth.cancel();
+      utteranceRef.current = null;
+      synth.onvoiceschanged = null;
+    };
+  }, []);
 
   const totalRemaining = queue.length;
   const totalWords = allWords.length;
@@ -182,26 +196,23 @@ export default function StudyChunk() {
   const speak = (text: string) => {
     if (!("speechSynthesis" in window)) return;
     try {
-      speechSynthesis.cancel();
-      const speakNow = () => {
-        const u = new SpeechSynthesisUtterance(text);
-        u.lang = "ja-JP";
-        const voices = speechSynthesis.getVoices();
-        const jp = voices.find(v => v.lang?.toLowerCase().startsWith("ja"));
-        if (jp) u.voice = jp;
-        u.rate = 0.95;
-        speechSynthesis.speak(u);
+      const synth = window.speechSynthesis;
+      synth.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "ja-JP";
+      u.rate = 0.95;
+      const voices = synth.getVoices();
+      const jp = voices.find((voice) => voice.lang?.toLowerCase().startsWith("ja"));
+      if (jp) u.voice = jp;
+      u.onerror = () => toast.error("Audio playback failed");
+      u.onend = () => {
+        if (utteranceRef.current === u) utteranceRef.current = null;
       };
-      // Some browsers need a tick after cancel(); also voices may load async.
-      if (speechSynthesis.getVoices().length === 0) {
-        speechSynthesis.onvoiceschanged = () => { speakNow(); speechSynthesis.onvoiceschanged = null; };
-        // Fallback in case the event never fires
-        setTimeout(speakNow, 250);
-      } else {
-        setTimeout(speakNow, 50);
-      }
+      utteranceRef.current = u;
+      synth.speak(u);
     } catch (e) {
       console.error("speech failed", e);
+      toast.error("Audio playback failed");
     }
   };
 
