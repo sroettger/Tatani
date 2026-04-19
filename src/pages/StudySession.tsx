@@ -270,7 +270,7 @@ export default function StudySession() {
           </div>
 
           <div className="flex justify-center mb-4">
-            <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); reviewCard && speak(reviewCard.word); }}>
+            <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); reviewCard && speak(reviewCard.reading || reviewCard.word); }}>
               <Volume2 className="h-4 w-4" /> Play audio
             </Button>
           </div>
