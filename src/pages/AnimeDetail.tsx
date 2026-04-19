@@ -88,7 +88,7 @@ export default function AnimeDetail() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="font-medium text-sm truncate">
-                        {ep.title_en ?? `Episode ${ep.episode_number}`}
+                        {ep.title_en ?? ep.title_jp ?? `Episode ${ep.episode_number}`}
                       </div>
                       {ep.title_jp && (
                         <div className="font-jp text-[11px] text-muted-foreground truncate">{ep.title_jp}</div>
