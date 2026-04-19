@@ -56,6 +56,18 @@ export default function EpisodeDetail() {
   const [showQueue, setShowQueue] = useState(true);
   const [chunks, setChunks] = useState<{ id: string; chunk_index: number; word_count: number; studied_at: string | null }[]>([]);
   const [chunkifying, setChunkifying] = useState(false);
+  const [allQuery, setAllQuery] = useState("");
+  const [knownQuery, setKnownQuery] = useState("");
+
+  const matchesQuery = (v: VocabItem, q: string) => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return true;
+    return (
+      v.word.toLowerCase().includes(needle) ||
+      (v.reading ?? "").toLowerCase().includes(needle) ||
+      (v.meaning ?? "").toLowerCase().includes(needle)
+    );
+  };
 
   const load = async () => {
     if (!episodeId || !user) return;
