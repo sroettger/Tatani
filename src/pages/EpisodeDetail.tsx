@@ -319,12 +319,12 @@ export default function EpisodeDetail() {
                 <div className="text-sm text-muted-foreground">Nothing new — you've mastered them all.</div>
               ) : (
                 <div className="grid gap-1 max-h-96 overflow-y-auto">
-                  {newVocab.map((v, i) => {
+                  {newVocab.map((v) => {
                     const pref = prefOf(v.word);
                     const hasKanji = v.word !== v.reading;
                     const kanjiOnly = pref === "kanji_only";
                     return (
-                      <div key={i} className="flex flex-wrap items-center gap-2 py-2 border-b border-border/30 last:border-0">
+                      <div key={`${v.word}-${v.reading}`} className="flex flex-wrap items-center gap-2 py-2 border-b border-border/30 last:border-0">
                         <div className="min-w-0 flex-1">
                           <div className="font-jp text-sm truncate">
                             {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
@@ -371,11 +371,11 @@ export default function EpisodeDetail() {
                 <div className="text-sm text-muted-foreground">No known words yet.</div>
               ) : (
                 <div className="grid gap-1 max-h-96 overflow-y-auto">
-                  {knownVocab.map((v, i) => {
+                  {knownVocab.map((v) => {
                     const s = wordStates.get(v.word);
                     const reason = s?.state === "known" ? "known" : "below your level";
                     return (
-                      <div key={i} className="flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0">
+                      <div key={`${v.word}-${v.reading}`} className="flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0">
                         <div className="min-w-0 flex-1">
                           <div className="font-jp text-sm truncate">
                             {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
