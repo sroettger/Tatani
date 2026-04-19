@@ -492,9 +492,7 @@ export default function EpisodeDetail() {
                           <Plus className="h-3 w-3" /> New
                         </Button>
                       ) : (
-                        <Button size="sm" variant="ghost" className="h-7 px-2 shrink-0 hover:text-success" onClick={() => markKnown(v)}>
-                          <CheckCircle2 className="h-3 w-3" /> Known
-                        </Button>
+                        <Button size="sm" variant="ghost" className="h-7 px-2 shrink-0 hover:text-success" onClick={() => markKnownLearned(v)}>
                       )}
                     </div>
                   );
