@@ -38,6 +38,8 @@ export default function EpisodeDetail() {
   const [busy, setBusy] = useState(false);
   const [progressStage, setProgressStage] = useState<string>("");
   const [showSkipped, setShowSkipped] = useState(false);
+  const [showNew, setShowNew] = useState(false);
+  const [showKnown, setShowKnown] = useState(false);
 
   const load = async () => {
     if (!episodeId || !user) return;
