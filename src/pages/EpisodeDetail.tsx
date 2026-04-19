@@ -15,6 +15,12 @@ import { cn } from "@/lib/utils";
 // so unclassified/proper-noun vocab is never auto-skipped.
 const JLPT_RANK: Record<string, number> = { N5: 1, N4: 2, N3: 3, N2: 4, N1: 5, none: 6 };
 const CHUNK_SIZE = 10;
+// SRS intervals in days (Leitner-style). Index = srs_level.
+const SRS_INTERVALS_DAYS = [1, 3, 7, 14, 30, 60, 120, 240, 480];
+const dueAtForLevel = (level: number) => {
+  const days = SRS_INTERVALS_DAYS[Math.min(level, SRS_INTERVALS_DAYS.length - 1)];
+  return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+};
 
 type VocabItem = {
   word: string;
