@@ -118,7 +118,6 @@ Deno.serve(async (req) => {
     const cleaned = stripSubtitleFormatting(subtitle_text);
 
     // Tunables.
-    const MAX_VOCAB = 300;       // cap how many words per episode we translate
     const BATCH_SIZE = 40;       // words per AI call (keeps response well under output limits)
     const MAX_CONCURRENCY = 4;
 
@@ -135,8 +134,8 @@ Deno.serve(async (req) => {
           jlpt_level: getOfficialJlptLevel(v.word, v.reading) ?? "none",
         }));
 
-        // 3. Keep top-N by frequency for translation.
-        const top = tagged.slice(0, MAX_VOCAB);
+        // 3. Translate everything (no cap).
+        const top = tagged;
 
         // 4. Batch words to AI for English meanings + grammar extraction.
         const batches: Array<typeof top> = [];
