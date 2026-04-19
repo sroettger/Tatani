@@ -41,8 +41,9 @@ export default function EpisodeDetail() {
   const [wordStates, setWordStates] = useState<Map<string, WordRow>>(new Map());
   const [busy, setBusy] = useState(false);
   const [progressStage, setProgressStage] = useState<string>("");
-  const [showNew, setShowNew] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const [showKnown, setShowKnown] = useState(false);
+  const [showQueue, setShowQueue] = useState(true);
   const [chunks, setChunks] = useState<{ id: string; chunk_index: number; word_count: number; studied_at: string | null }[]>([]);
   const [chunkifying, setChunkifying] = useState(false);
 
