@@ -51,6 +51,12 @@ export default function EpisodeDetail() {
     setSentences(((cache?.sentences ?? []) as SentenceItem[]));
     const { data: words } = await supabase.from("user_word_state").select("word,state").eq("user_id", user.id).eq("state", "known");
     setKnownWords(new Set((words ?? []).map((w: any) => w.word)));
+    const { data: ch } = await supabase
+      .from("study_chunks")
+      .select("id,chunk_index,word_count,studied_at")
+      .eq("user_id", user.id).eq("episode_id", episodeId)
+      .order("chunk_index");
+    setChunks((ch ?? []) as any);
     return ep;
   };
 
