@@ -47,6 +47,7 @@ export default function EpisodeDetail() {
   const [vocab, setVocab] = useState<VocabItem[]>([]);
   const [sentences, setSentences] = useState<SentenceItem[]>([]);
   const [wordStates, setWordStates] = useState<Map<string, WordRow>>(new Map());
+  const [studiedWords, setStudiedWords] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [progressStage, setProgressStage] = useState<string>("");
   const [showAll, setShowAll] = useState(false);
@@ -71,6 +72,9 @@ export default function EpisodeDetail() {
       srs_due_at: w.srs_due_at ?? null,
     }));
     setWordStates(map);
+    // Words that have been seen in any quiz/study session — used to default "Known" to SRS-tracked.
+    const { data: studied } = await supabase.from("quiz_results").select("word").eq("user_id", user.id);
+    setStudiedWords(new Set((studied ?? []).map((r: any) => r.word)));
     const { data: ch } = await supabase
       .from("study_chunks")
       .select("id,chunk_index,word_count,studied_at")
@@ -466,7 +470,7 @@ export default function EpisodeDetail() {
                 <div className="text-sm text-muted-foreground">Queue empty — you've mastered everything in this episode!</div>
               ) : (
                 <div className="grid gap-1 max-h-96 overflow-y-auto">
-                  {queueVocab.map((v) => renderQueueRow(v, prefOf, togglePref, isBelowLevel(v.jlpt_level) ? markKnownPrior : markKnownLearned, frequency.get(v.word) ?? 0))}
+                  {queueVocab.map((v) => renderQueueRow(v, prefOf, togglePref, studiedWords.has(v.word) ? markKnownLearned : markKnownPrior, frequency.get(v.word) ?? 0))}
                 </div>
               )}
             </Card>
