@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ChevronLeft, Loader2, Upload, Sparkles, BookOpen, BrainCircuit, Volume2, Plus, Mic } from "lucide-react";
+import { ChevronLeft, Loader2, Upload, Sparkles, BookOpen, BrainCircuit, Volume2, Plus, Mic, Layers, ListChecks, RotateCw, Check } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
@@ -40,6 +40,7 @@ export default function EpisodeDetail() {
   const [showSkipped, setShowSkipped] = useState(false);
   const [showNew, setShowNew] = useState(false);
   const [showKnown, setShowKnown] = useState(false);
+  const [chunks, setChunks] = useState<{ id: string; chunk_index: number; word_count: number; studied_at: string | null }[]>([]);
 
   const load = async () => {
     if (!episodeId || !user) return;
