@@ -15,6 +15,7 @@ import StudySession from "./pages/StudySession";
 import VoiceStudySession from "./pages/VoiceStudySession";
 import StudyChunk from "./pages/StudyChunk";
 import ChunkQuiz from "./pages/ChunkQuiz";
+import WatchEpisode from "./pages/WatchEpisode";
 
 import Stats from "./pages/Stats";
 import Settings from "./pages/Settings";
@@ -54,6 +55,7 @@ const App = () => (
               <Route path="/study/:episodeId" element={<StudySession />} />
               <Route path="/study/:episodeId/voice" element={<VoiceStudySession />} />
               <Route path="/episode/:episodeId/quiz" element={<ChunkQuiz />} />
+              <Route path="/episode/:episodeId/watch" element={<WatchEpisode />} />
               <Route path="/study/chunk/:chunkId" element={<StudyChunk />} />
             </Route>
             <Route path="*" element={<NotFound />} />
