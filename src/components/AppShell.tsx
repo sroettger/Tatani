@@ -15,7 +15,7 @@ export function AppShell() {
         <Outlet />
       </main>
       <nav className="fixed bottom-0 inset-x-0 z-40 border-t border-border bg-card/80 backdrop-blur-xl">
-        <div className="max-w-2xl mx-auto grid grid-cols-4">
+        <div className="max-w-2xl mx-auto grid grid-cols-3">
           {tabs.map(({ to, label, Icon }) => (
             <NavLink
               key={to}
