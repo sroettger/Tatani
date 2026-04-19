@@ -714,13 +714,16 @@ function StatBox({ label, value, accent, active, onClick }: { label: string; val
 }
 
 function FreqBadge({ freq }: { freq: number }) {
-  if (freq <= 0) return null;
-  // Visual heat: 1 = subtle, 2 = warm, 3+ = hot.
-  const tone = freq >= 3 ? "bg-primary/15 text-primary" : freq === 2 ? "bg-accent/15 text-accent" : "bg-muted text-muted-foreground";
+  // Visual heat: 0 = neutral, 1 = subtle, 2 = warm, 3+ = hot.
+  const tone =
+    freq >= 3 ? "bg-primary/15 text-primary"
+    : freq === 2 ? "bg-accent/15 text-accent"
+    : freq === 1 ? "bg-muted text-muted-foreground"
+    : "bg-muted/50 text-muted-foreground/70";
   return (
     <span
       className={cn("text-[10px] px-1.5 py-0.5 rounded-full shrink-0 tabular-nums", tone)}
-      title={`Appears ${freq}× in this episode's example sentences`}
+      title={`Appears ${freq}× in this episode`}
     >
       ×{freq}
     </span>
