@@ -164,6 +164,12 @@ export default function Settings() {
         </Card>
 
         <Card className="p-4 gradient-card border-border/50">
+          <h3 className="font-semibold mb-1">Delete anime data <span className="text-xs text-muted-foreground font-normal">(admin)</span></h3>
+          <p className="text-xs text-muted-foreground mb-3">Wipes the entire anime catalog (anime, episodes, subtitles, processed vocab) and everyone's libraries + study chunks. Profiles and known words are kept.</p>
+          <Button variant="outline" onClick={wipeAnimeData}><Film className="h-4 w-4" /> Delete anime data</Button>
+        </Card>
+
+        <Card className="p-4 gradient-card border-border/50">
           <h3 className="font-semibold mb-1">Sign out</h3>
           <p className="text-xs text-muted-foreground mb-3">You'll need to sign back in with Google.</p>
           <Button variant="destructive" onClick={async () => { await signOut(); navigate("/auth"); }}>
