@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { ChevronLeft, Volume2, Check, X, RotateCw } from "lucide-react";
+import { ChevronLeft, Volume2, Check, X, RotateCw, Languages } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -38,6 +38,13 @@ export default function StudySession() {
   const [quizChoice, setQuizChoice] = useState<number | null>(null);
 
   const [done, setDone] = useState<"none" | "review" | "quiz">("none");
+  const [showFurigana, setShowFurigana] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("furigana_on") === "1";
+  });
+  useEffect(() => {
+    if (typeof window !== "undefined") localStorage.setItem("furigana_on", showFurigana ? "1" : "0");
+  }, [showFurigana]);
 
   // JLPT difficulty rank — must match EpisodeDetail. "none" treated as harder than N1.
   const JLPT_RANK: Record<string, number> = { N5: 1, N4: 2, N3: 3, N2: 4, N1: 5, none: 6 };
