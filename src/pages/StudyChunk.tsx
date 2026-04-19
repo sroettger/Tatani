@@ -43,13 +43,7 @@ export default function StudyChunk() {
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   // Stack of previous queue snapshots so the user can step back.
   const [history, setHistory] = useState<ChunkWord[][]>([]);
-  const [showFurigana, setShowFurigana] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("furigana_on") === "1";
-  });
-  useEffect(() => {
-    if (typeof window !== "undefined") localStorage.setItem("furigana_on", showFurigana ? "1" : "0");
-  }, [showFurigana]);
+  const [showFurigana, setShowFurigana] = useState(false);
 
   useEffect(() => {
     if (!chunkId || !user) return;
