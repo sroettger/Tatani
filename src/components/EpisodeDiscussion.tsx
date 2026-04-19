@@ -196,25 +196,18 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
       ) : (
         <>
           <div ref={scrollRef} className="max-h-80 overflow-y-auto space-y-2.5 mb-3">
-            {messages.length === 0 && (
-              <div className="text-xs text-muted-foreground mb-2">
-                Chat with an AI partner in Japanese about what you just watched. Pick a starter or write your own.
-              </div>
-            )}
-
-            {messages.length === 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {STARTERS_JP.map((s) => (
-                  <Button
-                    key={s}
-                    size="sm"
-                    variant="outline"
-                    className="h-auto py-1.5 px-2.5 font-jp text-xs whitespace-normal text-left"
-                    onClick={() => send(s)}
-                  >
-                    {s}
-                  </Button>
-                ))}
+            {messages.length === 0 && !loading && (
+              <div className="flex flex-col items-start gap-2">
+                <div className="text-xs text-muted-foreground">
+                  Chat in Japanese with an AI partner who watched this episode with you.
+                </div>
+                <Button
+                  size="sm"
+                  className="gradient-primary text-primary-foreground h-9"
+                  onClick={() => send(undefined, { autoStart: true })}
+                >
+                  <MessageCircle className="h-4 w-4" /> Start the conversation
+                </Button>
               </div>
             )}
 
