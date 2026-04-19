@@ -10,6 +10,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { TutorChat } from "@/components/TutorChat";
+import { EpisodeSummary } from "@/components/EpisodeSummary";
 import { cn } from "@/lib/utils";
 import { useStudyPrefs } from "@/hooks/use-study-prefs";
 
@@ -666,6 +667,13 @@ export default function EpisodeDetail() {
               <Tv className="h-4 w-4" /> Watch mode (Bingo)
             </Button>
           </div>
+
+          {episodeId && (
+            <EpisodeSummary
+              episodeId={episodeId}
+              studiedWordCount={chunks.filter(c => c.studied_at).reduce((s, c) => s + c.word_count, 0)}
+            />
+          )}
 
           <h3 className="font-semibold mb-2 flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-primary" /> Sentences</h3>
           <div className="grid gap-2 mb-6">
