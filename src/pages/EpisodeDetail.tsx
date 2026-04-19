@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ChevronLeft, Loader2, Upload, Sparkles, BookOpen, BrainCircuit, Volume2, Plus, Mic, Layers, Check, Type, CheckCircle2, RotateCw } from "lucide-react";
+import { ChevronLeft, Loader2, Upload, Sparkles, BookOpen, BrainCircuit, Volume2, Plus, Mic, Layers, Check, Type, CheckCircle2, RotateCw, Tv } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
@@ -471,6 +471,13 @@ export default function EpisodeDetail() {
               disabled={studyableCount === 0}
             >
               <Mic className="h-4 w-4" /> Hands-free voice mode
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full h-11"
+              onClick={() => navigate(`/episode/${episodeId}/watch`)}
+            >
+              <Tv className="h-4 w-4" /> Watch mode (Bingo)
             </Button>
           </div>
 
