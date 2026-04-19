@@ -118,7 +118,6 @@ Deno.serve(async (req) => {
     const cleaned = stripSubtitleFormatting(subtitle_text);
 
     // Tunables.
-    const MAX_VOCAB = 300;       // cap how many words per episode we translate
     const BATCH_SIZE = 40;       // words per AI call (keeps response well under output limits)
     const MAX_CONCURRENCY = 4;
 
