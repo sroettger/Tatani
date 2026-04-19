@@ -425,14 +425,6 @@ export default function EpisodeDetail() {
             <Button onClick={tryAutoFetch} disabled={busy} className="gradient-primary text-primary-foreground h-12">
               {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> Working…</> : <><Sparkles className="h-4 w-4" /> Auto-fetch & process</>}
             </Button>
-            <Button variant="outline" onClick={() => fileRef.current?.click()} disabled={busy} className="h-12">
-              <Upload className="h-4 w-4" /> Upload subtitle file
-            </Button>
-            <input
-              ref={fileRef} type="file" accept=".srt,.ass,.ssa,.vtt,.txt"
-              className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); }}
-            />
           </div>
         </Card>
       ) : (
