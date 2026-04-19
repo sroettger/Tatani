@@ -107,8 +107,7 @@ export default function StudySession() {
 
   const onReviewKnow = async () => {
     if (!reviewCard) return;
-    const newState = await recordWord(reviewCard.word, reviewCard.reading, reviewCard.jlpt_level, true);
-    if (newState === "known") setReviewedKnown(k => k + 1);
+    await recordWord(reviewCard.word, reviewCard.reading, reviewCard.jlpt_level, true);
     nextReview();
   };
   const onReviewLearning = async () => {
