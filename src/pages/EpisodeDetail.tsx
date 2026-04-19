@@ -642,7 +642,14 @@ export default function EpisodeDetail() {
         onWordMarkedKnown={(w) => setWordStates(prev => {
           const next = new Map(prev);
           const existing = next.get(w);
-          next.set(w, { word: w, state: "known", preference: existing?.preference ?? "study" });
+          next.set(w, {
+            word: w,
+            state: "known",
+            preference: existing?.preference ?? "study",
+            known_source: existing?.known_source ?? "learned",
+            srs_level: existing?.srs_level ?? 0,
+            srs_due_at: existing?.srs_due_at ?? dueAtForLevel(0),
+          });
           return next;
         })}
       />
