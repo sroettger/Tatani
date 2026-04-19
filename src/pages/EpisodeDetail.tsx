@@ -158,7 +158,12 @@ export default function EpisodeDetail() {
 
   const newVocab = useMemo(() => vocab.filter(v => bucketOf(v) === "new"), [vocab, wordStates, myRank]);
   const knownVocab = useMemo(() => vocab.filter(v => bucketOf(v) === "known"), [vocab, wordStates, myRank]);
-  const masteryPct = vocab.length ? Math.round((knownVocab.length / vocab.length) * 100) : 0;
+  // Queue = up to 30 words to learn next (study/kanji_only preference, not skipped).
+  const QUEUE_SIZE = 30;
+  const queueVocab = useMemo(
+    () => newVocab.filter(v => prefOf(v.word) !== "skip").slice(0, QUEUE_SIZE),
+    [newVocab, wordStates]
+  );
 
   // Chunkify-staleness: compare current "study"+"kanji_only" new words to existing chunks' word_count sum.
   const studyableCount = newVocab.filter(v => prefOf(v.word) !== "skip").length;
