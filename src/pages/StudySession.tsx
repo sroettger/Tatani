@@ -38,13 +38,7 @@ export default function StudySession() {
   const [quizChoice, setQuizChoice] = useState<number | null>(null);
 
   const [done, setDone] = useState<"none" | "review" | "quiz">("none");
-  const [showFurigana, setShowFurigana] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("furigana_on") === "1";
-  });
-  useEffect(() => {
-    if (typeof window !== "undefined") localStorage.setItem("furigana_on", showFurigana ? "1" : "0");
-  }, [showFurigana]);
+  const [showFurigana, setShowFurigana] = useState(false);
 
   // JLPT difficulty rank — must match EpisodeDetail. "none" treated as harder than N1.
   const JLPT_RANK: Record<string, number> = { N5: 1, N4: 2, N3: 3, N2: 4, N1: 5, none: 6 };
@@ -138,6 +132,7 @@ export default function StudySession() {
   };
   const nextReview = () => {
     setFlipped(false);
+    setShowFurigana(false);
     if (reviewIdx + 1 < vocab.length) setReviewIdx(reviewIdx + 1);
     else finish("review");
   };
@@ -227,17 +222,7 @@ export default function StudySession() {
       <div className="flex items-center justify-between mb-4">
         <Button variant="ghost" size="icon" onClick={() => navigate(-1)}><ChevronLeft className="h-5 w-5" /></Button>
         <div className="text-sm text-muted-foreground">Study</div>
-        <Button
-          variant={showFurigana ? "default" : "ghost"}
-          size="sm"
-          onClick={() => setShowFurigana(v => !v)}
-          aria-pressed={showFurigana}
-          title="Toggle furigana"
-          className="h-9 gap-1 px-2"
-        >
-          <Languages className="h-4 w-4" />
-          <span className="font-jp text-xs">あ</span>
-        </Button>
+        <div className="w-9" />
       </div>
 
       <Tabs defaultValue="review" className="w-full">
@@ -270,7 +255,18 @@ export default function StudySession() {
                   })()}
                 </div>
               </Card>
-              <Card className="flip-face flip-back gradient-card border-primary/30 shadow-elegant grid place-items-center cursor-pointer">
+              <Card className="flip-face flip-back gradient-card border-primary/30 shadow-elegant grid place-items-center cursor-pointer relative">
+                <Button
+                  variant={showFurigana ? "default" : "ghost"}
+                  size="sm"
+                  onClick={(e) => { e.stopPropagation(); setShowFurigana(v => !v); }}
+                  aria-pressed={showFurigana}
+                  title="Toggle furigana"
+                  className="absolute top-2 right-2 h-8 gap-1 px-2 z-10"
+                >
+                  <Languages className="h-3.5 w-3.5" />
+                  <span className="font-jp text-[11px]">あ</span>
+                </Button>
                 <div className="text-center px-6">
                   <Furigana text={reviewCard?.word ?? ""} show={showFurigana} className="font-jp text-3xl font-bold mb-3 inline-block" />
                   {reviewCard?.reading === reviewCard?.word && <div className="sr-only">{reviewCard?.reading}</div>}
