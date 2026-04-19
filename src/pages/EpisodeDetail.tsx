@@ -539,34 +539,42 @@ export default function EpisodeDetail() {
               {knownVocab.length === 0 ? (
                 <div className="text-sm text-muted-foreground">No known words yet.</div>
               ) : (
-                <div className="grid gap-1 max-h-96 overflow-y-auto">
-                  {knownVocab.map((v) => {
-                    const s = wordStates.get(v.word);
-                    const reason = s?.state === "known" ? "known" : "below your level";
-                    return (
-                      <div key={`${v.word}-${v.reading}`} className="flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0">
-                        <div className="min-w-0 flex-1">
-                          <div className="font-jp text-sm truncate">
-                            {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
+                <>
+                  <Input
+                    value={knownQuery}
+                    onChange={(e) => setKnownQuery(e.target.value)}
+                    placeholder="Search Japanese or English…"
+                    className="h-8 mb-2"
+                  />
+                  <div className="grid gap-1 max-h-96 overflow-y-auto">
+                    {knownVocab.filter((v) => matchesQuery(v, knownQuery)).map((v) => {
+                      const s = wordStates.get(v.word);
+                      const reason = s?.state === "known" ? "known" : "below your level";
+                      return (
+                        <div key={`${v.word}-${v.reading}`} className="flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0">
+                          <div className="min-w-0 flex-1">
+                            <div className="font-jp text-sm truncate">
+                              {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
+                            </div>
+                            <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
+                            <div className="text-[10px] text-muted-foreground/70">{reason}</div>
                           </div>
-                          <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
-                          <div className="text-[10px] text-muted-foreground/70">{reason}</div>
+                          <FreqBadge freq={frequency.get(v.word) ?? 0} />
+                          <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 shrink-0"
+                            onClick={() => markNew(v)}
+                            title="Move back to new"
+                          >
+                            <Plus className="h-3 w-3" /> New
+                          </Button>
                         </div>
-                        <FreqBadge freq={frequency.get(v.word) ?? 0} />
-                        <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-7 px-2 shrink-0"
-                          onClick={() => markNew(v)}
-                          title="Move back to new"
-                        >
-                          <Plus className="h-3 w-3" /> New
-                        </Button>
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                </>
               )}
             </Card>
           )}
