@@ -9,6 +9,40 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// AI tool: find common Japanese words written in unusual kana-only form (childish speech, stylization)
+// that morphological tokenizers like kuromoji split into meaningless fragments.
+const UNUSUAL_KANA_TOOL = {
+  type: "function",
+  function: {
+    name: "report_unusual_kana_spellings",
+    description: "Report common Japanese vocabulary words that appear in the subtitle text written in unusual kana-only form (e.g. じなん for 次男, ぱぱ for パパ) which morphological tokenizers typically fail to recognize as a single word.",
+    parameters: {
+      type: "object",
+      properties: {
+        words: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              kana_surface: { type: "string", description: "EXACT kana substring as it appears in the subtitle text (e.g. じなん)" },
+              canonical_word: { type: "string", description: "Standard dictionary form, usually with kanji (e.g. 次男)" },
+              reading: { type: "string", description: "Hiragana reading of the canonical word" },
+              meaning: { type: "string", description: "Concise English meaning" },
+              part_of_speech: { type: "string", description: "Japanese POS tag like 名詞, 動詞, 形容詞" },
+              example_sentence_jp: { type: "string", description: "MUST be an actual line from the supplied subtitle text containing kana_surface" },
+              example_sentence_en: { type: "string", description: "Natural English translation of that sentence" },
+            },
+            required: ["kana_surface", "canonical_word", "reading", "meaning", "part_of_speech", "example_sentence_jp", "example_sentence_en"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["words"],
+      additionalProperties: false,
+    },
+  },
+};
+
 // AI tool: translate a batch of vocab + extract grammar from the supplied example sentences.
 const TRANSLATE_TOOL = {
   type: "function",
@@ -73,6 +107,94 @@ function stripSubtitleFormatting(raw: string): string {
   return out.filter((l, i) => l !== out[i - 1]).join("\n");
 }
 
+// Ask the AI to find common words written in unusual kana-only form (e.g. じなん, ぱぱ, おかあさん)
+// that kuromoji would split into meaningless fragments. Each suggestion is verified against the
+// raw subtitle text before being merged — the AI must not hallucinate words that don't appear.
+async function detectUnusualKanaSpellings(
+  cleanedText: string,
+  lines: string[],
+  alreadyKnown: Set<string>,
+  apiKey: string,
+): Promise<VocabEntry[]> {
+  // Trim very long subtitles to keep the prompt bounded.
+  const MAX_CHARS = 12000;
+  const sample = cleanedText.length > MAX_CHARS ? cleanedText.slice(0, MAX_CHARS) : cleanedText;
+
+  const userMessage = `Below is the Japanese subtitle text from one anime episode. Identify any common Japanese vocabulary words (nouns, verbs, adjectives) that appear written in an UNUSUAL KANA-ONLY form — for example: じなん instead of 次男, ぱぱ instead of パパ, おかあさん written as おかーさん, etc. These are typically childish speech, baby talk, or stylized renderings that morphological tokenizers miss.
+
+Only report words where:
+- The kana surface form ACTUALLY appears as a contiguous substring in the text below
+- The word is a meaningful content word (not a particle, interjection, or onomatopoeia)
+- A learner would benefit from knowing the canonical kanji form
+
+Do NOT report words already in standard kanji form. Return at most 30 entries.
+
+SUBTITLE TEXT:
+${sample}`;
+
+  try {
+    const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          { role: "system", content: "You help Japanese language learners by spotting common words written in unusual kana spellings that morphological tokenizers fail to recognize. You MUST call the report_unusual_kana_spellings function." },
+          { role: "user", content: userMessage },
+        ],
+        tools: [UNUSUAL_KANA_TOOL],
+        tool_choice: { type: "function", function: { name: "report_unusual_kana_spellings" } },
+      }),
+    });
+    if (!aiResp.ok) {
+      console.warn(`unusual-kana AI call failed: ${aiResp.status}`);
+      return [];
+    }
+    const aiJson = await aiResp.json();
+    const call = aiJson?.choices?.[0]?.message?.tool_calls?.[0];
+    if (!call?.function?.arguments) return [];
+    const parsed = JSON.parse(call.function.arguments);
+    const suggestions: any[] = parsed.words ?? [];
+
+    // Verify each suggestion: kana_surface MUST appear in the raw text, and we
+    // skip anything kuromoji already produced (avoids duplicates).
+    const out: VocabEntry[] = [];
+    const seen = new Set<string>();
+    for (const s of suggestions) {
+      if (!s?.kana_surface || !s?.canonical_word) continue;
+      const surface = String(s.kana_surface).trim();
+      const canonical = String(s.canonical_word).trim();
+      if (!surface || !canonical) continue;
+      if (alreadyKnown.has(canonical) || seen.has(canonical)) continue;
+      // Hallucination guard: surface must literally exist in the subtitles.
+      if (!cleanedText.includes(surface)) {
+        console.log(`Skipping hallucinated kana surface: ${surface}`);
+        continue;
+      }
+      // Find an example line that contains the surface (prefer the AI's, else first match).
+      let exampleLine = String(s.example_sentence_jp ?? "").trim();
+      if (!exampleLine || !exampleLine.includes(surface) || !lines.includes(exampleLine)) {
+        exampleLine = lines.find((l) => l.includes(surface)) ?? "";
+      }
+      if (!exampleLine) continue;
+      // Count occurrences for frequency.
+      const freq = (cleanedText.match(new RegExp(surface.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) ?? []).length;
+      seen.add(canonical);
+      out.push({
+        word: canonical,
+        reading: String(s.reading ?? "").trim(),
+        part_of_speech: String(s.part_of_speech ?? "名詞").trim(),
+        frequency: Math.max(1, freq),
+        example_sentence_jp: exampleLine,
+      });
+    }
+    return out;
+  } catch (e) {
+    console.warn("detectUnusualKanaSpellings error:", (e as Error).message);
+    return [];
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   try {
@@ -127,6 +249,16 @@ Deno.serve(async (req) => {
         // 1. Tokenize + frequency rank (deterministic, no AI).
         const allVocab = await extractVocabFromSubtitles(cleaned);
         console.log(`Episode ${episode_id}: tokenized → ${allVocab.length} unique words`);
+
+        // 1b. AI pass: detect common words written in unusual kana-only form
+        // (childish speech, stylization) that kuromoji splits into fragments.
+        const knownSurfaces = new Set(allVocab.map((v) => v.word));
+        const subtitleLines = cleaned.split("\n").filter((l) => l.trim().length > 0);
+        const extraKanaVocab = await detectUnusualKanaSpellings(cleaned, subtitleLines, knownSurfaces, LOVABLE_API_KEY);
+        if (extraKanaVocab.length > 0) {
+          console.log(`Episode ${episode_id}: +${extraKanaVocab.length} unusual-kana vocab merged`);
+          allVocab.push(...extraKanaVocab);
+        }
 
         // 2. Tag JLPT levels from official list (covers ~8000 most common words).
         const tagged = allVocab.map((v) => ({
