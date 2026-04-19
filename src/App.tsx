@@ -13,6 +13,9 @@ import AnimeDetail from "./pages/AnimeDetail";
 import EpisodeDetail from "./pages/EpisodeDetail";
 import StudySession from "./pages/StudySession";
 import VoiceStudySession from "./pages/VoiceStudySession";
+import EpisodePrereview from "./pages/EpisodePrereview";
+import StudyChunk from "./pages/StudyChunk";
+import ChunkQuiz from "./pages/ChunkQuiz";
 import Study from "./pages/Study";
 import Stats from "./pages/Stats";
 import Settings from "./pages/Settings";
@@ -50,6 +53,9 @@ const App = () => (
               <Route path="/episode/:episodeId" element={<EpisodeDetail />} />
               <Route path="/study/:episodeId" element={<StudySession />} />
               <Route path="/study/:episodeId/voice" element={<VoiceStudySession />} />
+              <Route path="/episode/:episodeId/prereview" element={<EpisodePrereview />} />
+              <Route path="/episode/:episodeId/quiz" element={<ChunkQuiz />} />
+              <Route path="/study/chunk/:chunkId" element={<StudyChunk />} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>
