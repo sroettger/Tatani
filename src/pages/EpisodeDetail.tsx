@@ -296,77 +296,80 @@ export default function EpisodeDetail() {
         <>
           <div className="grid grid-cols-3 gap-2 mb-4">
             <StatBox
-              label="New"
-              value={newVocab.length}
-              accent="text-primary"
-              active={showNew}
-              onClick={() => { setShowNew(s => !s); setShowKnown(false); }}
+              label="All"
+              value={vocab.length}
+              accent="text-foreground"
+              active={showAll}
+              onClick={() => { setShowAll(s => !s); setShowKnown(false); setShowQueue(false); }}
             />
             <StatBox
               label="Known"
               value={knownVocab.length}
               accent="text-success"
               active={showKnown}
-              onClick={() => { setShowKnown(s => !s); setShowNew(false); }}
+              onClick={() => { setShowKnown(s => !s); setShowAll(false); setShowQueue(false); }}
             />
-            <StatBox label="Mastery" value={`${masteryPct}%`} accent="text-accent" />
+            <StatBox
+              label="To learn"
+              value={`${queueVocab.length}/${Math.min(newVocab.length, QUEUE_SIZE)}`}
+              accent="text-primary"
+              active={showQueue}
+              onClick={() => { setShowQueue(s => !s); setShowAll(false); setShowKnown(false); }}
+            />
           </div>
 
-          {showNew && (
+          {showQueue && (
             <Card className="p-3 mb-4 gradient-card border-border/50">
               <div className="flex items-center justify-between mb-2">
-                <div className="text-xs uppercase tracking-wider text-muted-foreground">New words ({newVocab.length})</div>
+                <div className="text-xs uppercase tracking-wider text-muted-foreground">
+                  To learn next ({queueVocab.length})
+                  {newVocab.length > QUEUE_SIZE && (
+                    <span className="ml-1 normal-case tracking-normal text-muted-foreground/70">· {newVocab.length - QUEUE_SIZE} more queued</span>
+                  )}
+                </div>
                 <div className="text-[10px] text-muted-foreground/80 flex items-center gap-2">
                   <span className="inline-flex items-center gap-1"><Type className="h-3 w-3" />kanji-only</span>
                   <span className="inline-flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />known</span>
                 </div>
               </div>
-              {newVocab.length === 0 ? (
-                <div className="text-sm text-muted-foreground">Nothing new — you've mastered them all.</div>
+              {queueVocab.length === 0 ? (
+                <div className="text-sm text-muted-foreground">Queue empty — you've mastered everything in this episode!</div>
               ) : (
                 <div className="grid gap-1 max-h-96 overflow-y-auto">
-                  {newVocab.map((v) => {
-                    const pref = prefOf(v.word);
-                    const hasKanji = v.word !== v.reading;
-                    const kanjiOnly = pref === "kanji_only";
-                    return (
-                      <div key={`${v.word}-${v.reading}`} className="flex flex-wrap items-center gap-2 py-2 border-b border-border/30 last:border-0">
-                        <div className="min-w-0 flex-1">
-                          <div className="font-jp text-sm truncate">
-                            {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
-                            {kanjiOnly && <span className="ml-1 text-[10px] text-accent">· kanji only</span>}
-                          </div>
-                          <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
-                        </div>
-                        <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <Button
-                            size="sm"
-                            variant={kanjiOnly ? "default" : "outline"}
-                            className={cn("h-7 px-2 text-[11px] gap-1", !hasKanji && "opacity-30")}
-                            disabled={!hasKanji}
-                            onPointerDown={(e) => e.preventDefault()}
-                            onClick={(e) => { togglePref(v); (e.currentTarget as HTMLButtonElement).blur(); }}
-                            title={hasKanji ? (kanjiOnly ? "Studying kanji only" : "Switch to kanji-only") : "No kanji in this word"}
-                          >
-                            <Type className="h-3 w-3" /> Kanji
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 px-2 text-[11px] gap-1 hover:text-success"
-                            onPointerDown={(e) => e.preventDefault()}
-                            onClick={(e) => { markKnown(v); (e.currentTarget as HTMLButtonElement).blur(); }}
-                            title="Mark as known"
-                          >
-                            <CheckCircle2 className="h-3 w-3" /> Known
-                          </Button>
-                        </div>
-                      </div>
-                    );
-                  })}
+                  {queueVocab.map((v) => renderQueueRow(v, prefOf, togglePref, markKnown))}
                 </div>
               )}
+            </Card>
+          )}
+
+          {showAll && (
+            <Card className="p-3 mb-4 gradient-card border-border/50">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">All words ({vocab.length})</div>
+              <div className="grid gap-1 max-h-96 overflow-y-auto">
+                {vocab.map((v) => {
+                  const bucket = bucketOf(v);
+                  return (
+                    <div key={`${v.word}-${v.reading}`} className="flex items-center gap-2 py-1.5 border-b border-border/30 last:border-0">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-jp text-sm truncate">
+                          {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
+                        </div>
+                        <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
+                      </div>
+                      <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
+                      {bucket === "known" ? (
+                        <Button size="sm" variant="ghost" className="h-7 px-2 shrink-0" onClick={() => markNew(v)}>
+                          <Plus className="h-3 w-3" /> New
+                        </Button>
+                      ) : (
+                        <Button size="sm" variant="ghost" className="h-7 px-2 shrink-0 hover:text-success" onClick={() => markKnown(v)}>
+                          <CheckCircle2 className="h-3 w-3" /> Known
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </Card>
           )}
 
