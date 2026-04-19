@@ -54,7 +54,7 @@ export default function EpisodeDetail() {
   const [progressStage, setProgressStage] = useState<string>("");
   const [showAll, setShowAll] = useState(false);
   const [showKnown, setShowKnown] = useState(false);
-  const [showQueue, setShowQueue] = useState(true);
+  const [showQueue, setShowQueue] = useState(false);
   const [chunks, setChunks] = useState<{ id: string; chunk_index: number; word_count: number; studied_at: string | null }[]>([]);
   const [chunkifying, setChunkifying] = useState(false);
   const [allQuery, setAllQuery] = useState("");
