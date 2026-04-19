@@ -14,12 +14,6 @@ type Props = {
   studiedWordCount: number;
 };
 
-const STARTERS_JP = [
-  "今日のエピソードはどう思った？",
-  "一番好きなキャラクターは誰？",
-  "次のエピソードで何が起こると思う？",
-];
-
 // Strip ** markers for TTS
 const stripMd = (s: string) => s.replace(/\*\*/g, "").replace(/\*\(English:[^)]*\)\*/g, "").trim();
 
