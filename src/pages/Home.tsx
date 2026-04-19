@@ -71,13 +71,13 @@ function SortableLibraryCard({
   return (
     <div ref={setNodeRef} style={style}>
       <Card
-        className="p-3 gradient-card border-border/50 cursor-pointer hover:border-primary/40 transition-all shadow-card"
+        className="p-3 gradient-card border-border/50 cursor-pointer hover:border-primary/40 transition-all shadow-card overflow-hidden"
         onClick={onOpen}
       >
-        <div className="flex gap-3">
+        <div className="flex gap-2 items-stretch min-w-0">
           <button
             type="button"
-            className="flex items-center justify-center -ml-1 px-1 text-muted-foreground hover:text-foreground touch-none cursor-grab active:cursor-grabbing"
+            className="flex items-center justify-center -ml-1 text-muted-foreground hover:text-foreground touch-none cursor-grab active:cursor-grabbing flex-shrink-0"
             aria-label="Drag to reorder"
             onClick={(e) => e.stopPropagation()}
             {...attributes}
@@ -85,7 +85,7 @@ function SortableLibraryCard({
           >
             <GripVertical className="h-5 w-5" />
           </button>
-          <div className="w-16 h-24 rounded-lg overflow-hidden bg-muted flex-shrink-0">
+          <div className="w-14 h-20 rounded-lg overflow-hidden bg-muted flex-shrink-0">
             {entry.anime.cover_url ? (
               <img src={entry.anime.cover_url} alt={entry.anime.title_romaji} className="w-full h-full object-cover" loading="lazy" />
             ) : <div className="w-full h-full grid place-items-center text-muted-foreground text-xs">No cover</div>}
@@ -93,12 +93,12 @@ function SortableLibraryCard({
           <div className="flex-1 min-w-0">
             <div className="font-semibold truncate">{entry.anime.title_en ?? entry.anime.title_romaji}</div>
             {entry.anime.title_jp && <div className="font-jp text-xs text-muted-foreground truncate">{entry.anime.title_jp}</div>}
-            <div className="text-xs text-muted-foreground mt-1">
-              {entry.processed} / {total || "?"} episodes ready
+            <div className="text-xs text-muted-foreground mt-1 truncate">
+              {entry.processed} / {total || "?"} eps ready
             </div>
             <Progress value={pct} className="h-1.5 mt-2" />
           </div>
-          <div className="flex flex-col items-center gap-1 self-center">
+          <div className="flex flex-col items-center justify-between flex-shrink-0">
             <ChevronRight className="h-5 w-5 text-muted-foreground" />
             <Button
               size="icon"
