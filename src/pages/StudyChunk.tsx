@@ -36,8 +36,6 @@ export default function StudyChunk() {
   const [sessionStreak, setSessionStreak] = useState<Record<string, number>>({});
   // persistent streak (from user_word_state) — controls kanji vs hiragana view
   const [persistStreak, setPersistStreak] = useState<Record<string, number>>({});
-  // map of word -> kanji_only preference
-  const [kanjiOnly, setKanjiOnly] = useState<Record<string, boolean>>({});
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [doneCount, setDoneCount] = useState(0);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
@@ -62,16 +60,13 @@ export default function StudyChunk() {
       // Pull persistent state for these words
       const wordKeys = list.map(w => w.word);
       const { data: states } = wordKeys.length
-        ? await supabase.from("user_word_state").select("word,correct_streak,preference").in("word", wordKeys).eq("user_id", user.id)
+        ? await supabase.from("user_word_state").select("word,correct_streak").in("word", wordKeys).eq("user_id", user.id)
         : { data: [] as any[] };
       const pStreak: Record<string, number> = {};
-      const pref: Record<string, boolean> = {};
       (states ?? []).forEach((s: any) => {
         pStreak[s.word] = s.correct_streak ?? 0;
-        if (s.preference === "kanji_only") pref[s.word] = true;
       });
       setPersistStreak(pStreak);
-      setKanjiOnly(pref);
 
       // Shuffle initial queue
       const shuffled = [...list].sort(() => Math.random() - 0.5);
@@ -108,9 +103,8 @@ export default function StudyChunk() {
   const showKanji = useMemo(() => {
     if (!current) return false;
     if (current.word === current.reading) return true;
-    if (kanjiOnly[current.word]) return true;
     return (persistStreak[current.word] ?? 0) >= KANJI_THRESHOLD;
-  }, [current, kanjiOnly, persistStreak]);
+  }, [current, persistStreak]);
 
   const recordWord = async (word: string, reading: string | null, jlpt: string | null, gotItRight: boolean) => {
     if (!user) return;
@@ -288,11 +282,6 @@ export default function StudyChunk() {
                 {current && !showKanji && current.word !== current.reading && (
                   <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
                     Hiragana mode
-                  </div>
-                )}
-                {current && kanjiOnly[current.word] && showKanji && current.word !== current.reading && (
-                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
-                    Kanji only
                   </div>
                 )}
                 <div className="text-xs text-muted-foreground">Tap to flip</div>

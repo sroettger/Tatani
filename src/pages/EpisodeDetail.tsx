@@ -266,12 +266,7 @@ export default function EpisodeDetail() {
     upsertWord(v, { state: "known", known_source: "prior", srs_level: 0, srs_due_at: null }, { marked_known_at: new Date().toISOString() });
   const markNew = (v: VocabItem) =>
     upsertWord(v, { state: "unknown", known_source: null, srs_due_at: null });
-  const togglePref = (v: VocabItem) => {
-    const cur = prefOf(v.word);
-    const hasKanji = v.word !== v.reading;
-    if (!hasKanji) return;
-    upsertWord(v, { preference: cur === "kanji_only" ? "study" : "kanji_only" });
-  };
+  // (kanji-only feature removed)
 
   // Demote any "learned" known word that's now due back into the "learning" queue,
   // bumping its SRS level. "prior" words are never demoted.
@@ -474,7 +469,6 @@ export default function EpisodeDetail() {
                   )}
                 </div>
                 <div className="text-[10px] text-muted-foreground/80 flex items-center gap-2">
-                  <span className="inline-flex items-center gap-1"><Type className="h-3 w-3" />kanji-only</span>
                   <span className="inline-flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />known</span>
                 </div>
               </div>
@@ -482,7 +476,7 @@ export default function EpisodeDetail() {
                 <div className="text-sm text-muted-foreground">Queue empty — you've mastered everything in this episode!</div>
               ) : (
                 <div className="grid gap-1 max-h-96 overflow-y-auto">
-                  {queueVocab.map((v) => renderQueueRow(v, prefOf, togglePref, studiedWords.has(v.word) ? markKnownLearned : markKnownPrior, frequency.get(v.word) ?? 0))}
+                  {queueVocab.map((v) => renderQueueRow(v, studiedWords.has(v.word) ? markKnownLearned : markKnownPrior, frequency.get(v.word) ?? 0))}
                 </div>
               )}
             </Card>
@@ -703,46 +697,28 @@ function FreqBadge({ freq }: { freq: number }) {
 
 function renderQueueRow(
   v: VocabItem,
-  prefOf: (w: string) => WordPref,
-  togglePref: (v: VocabItem) => void,
   markKnown: (v: VocabItem) => void,
   freq: number,
 ) {
-  const pref = prefOf(v.word);
-  const hasKanji = v.word !== v.reading;
-  const kanjiOnly = pref === "kanji_only";
   return (
     <div key={`${v.word}-${v.reading}`} className="flex flex-wrap items-center gap-2 py-2 border-b border-border/30 last:border-0">
       <div className="min-w-0 flex-1">
         <div className="font-jp text-sm truncate">
           {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
-          {kanjiOnly && <span className="ml-1 text-[10px] text-accent">· kanji only</span>}
         </div>
         <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
       </div>
       <FreqBadge freq={freq} />
       <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
-      <div className="flex items-center gap-1 shrink-0">
-        <Button
-          size="sm"
-          variant={kanjiOnly ? "default" : "outline"}
-          className={cn("h-7 px-2 text-[11px] gap-1", !hasKanji && "opacity-30")}
-          disabled={!hasKanji}
-          onClick={(e) => { togglePref(v); (e.currentTarget as HTMLButtonElement).blur(); }}
-          title={hasKanji ? (kanjiOnly ? "Studying kanji only" : "Switch to kanji-only") : "No kanji in this word"}
-        >
-          <Type className="h-3 w-3" /> Kanji
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 px-2 text-[11px] gap-1 hover:text-success"
-          onClick={() => markKnown(v)}
-          title="Mark as known"
-        >
-          <CheckCircle2 className="h-3 w-3" /> Known
-        </Button>
-      </div>
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-7 px-2 text-[11px] gap-1 shrink-0 hover:text-success"
+        onClick={() => markKnown(v)}
+        title="Mark as known"
+      >
+        <CheckCircle2 className="h-3 w-3" /> Known
+      </Button>
     </div>
   );
 }
