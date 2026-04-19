@@ -11,8 +11,8 @@ const tabs = [
 
 export function AppShell() {
   return (
-    <div className="min-h-screen flex flex-col bg-background">
-      <main className="flex-1 pb-24">
+    <div className="min-h-screen flex flex-col bg-background overflow-x-hidden">
+      <main className="flex-1 pb-24 min-w-0 w-full">
         <Outlet />
       </main>
       <nav className="fixed bottom-0 inset-x-0 z-40 border-t border-border bg-card/80 backdrop-blur-xl">
