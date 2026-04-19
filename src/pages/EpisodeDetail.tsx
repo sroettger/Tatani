@@ -296,11 +296,11 @@ export default function EpisodeDetail() {
         <>
           <div className="grid grid-cols-3 gap-2 mb-4">
             <StatBox
-              label="All"
-              value={vocab.length}
-              accent="text-foreground"
-              active={showAll}
-              onClick={() => { setShowAll(s => !s); setShowKnown(false); setShowQueue(false); }}
+              label="To learn"
+              value={`${queueVocab.length}/${Math.min(newVocab.length, QUEUE_SIZE)}`}
+              accent="text-primary"
+              active={showQueue}
+              onClick={() => { setShowQueue(s => !s); setShowAll(false); setShowKnown(false); }}
             />
             <StatBox
               label="Known"
@@ -310,11 +310,11 @@ export default function EpisodeDetail() {
               onClick={() => { setShowKnown(s => !s); setShowAll(false); setShowQueue(false); }}
             />
             <StatBox
-              label="To learn"
-              value={`${queueVocab.length}/${Math.min(newVocab.length, QUEUE_SIZE)}`}
-              accent="text-primary"
-              active={showQueue}
-              onClick={() => { setShowQueue(s => !s); setShowAll(false); setShowKnown(false); }}
+              label="All"
+              value={vocab.length}
+              accent="text-foreground"
+              active={showAll}
+              onClick={() => { setShowAll(s => !s); setShowKnown(false); setShowQueue(false); }}
             />
           </div>
 
