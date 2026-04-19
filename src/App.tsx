@@ -18,6 +18,7 @@ import ChunkQuiz from "./pages/ChunkQuiz";
 
 import Stats from "./pages/Stats";
 import Settings from "./pages/Settings";
+import Recommendations from "./pages/Recommendations";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -45,6 +46,7 @@ const App = () => (
               }
             >
               <Route path="/" element={<Home />} />
+              <Route path="/recommendations" element={<Recommendations />} />
               <Route path="/stats" element={<Stats />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/anime/:animeId" element={<AnimeDetail />} />

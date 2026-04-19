@@ -1,9 +1,10 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Home, BarChart3, Settings as SettingsIcon } from "lucide-react";
+import { Home, BarChart3, Settings as SettingsIcon, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const tabs = [
   { to: "/", label: "Home", Icon: Home },
+  { to: "/recommendations", label: "For you", Icon: Sparkles },
   { to: "/stats", label: "Stats", Icon: BarChart3 },
   { to: "/settings", label: "Settings", Icon: SettingsIcon },
 ];
@@ -15,7 +16,7 @@ export function AppShell() {
         <Outlet />
       </main>
       <nav className="fixed bottom-0 inset-x-0 z-40 border-t border-border bg-card/80 backdrop-blur-xl">
-        <div className="max-w-2xl mx-auto grid grid-cols-3">
+        <div className="max-w-2xl mx-auto grid grid-cols-4">
           {tabs.map(({ to, label, Icon }) => (
             <NavLink
               key={to}
