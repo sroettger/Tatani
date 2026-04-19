@@ -72,9 +72,21 @@ export default function EpisodeDetail() {
       srs_due_at: w.srs_due_at ?? null,
     }));
     setWordStates(map);
-    // Words that have been seen in any quiz/study session — used to default "Known" to SRS-tracked.
-    const { data: studied } = await supabase.from("quiz_results").select("word").eq("user_id", user.id);
-    setStudiedWords(new Set((studied ?? []).map((r: any) => r.word)));
+    // Words seen in any quiz OR any studied chunk → "Known" defaults to SRS-tracked.
+    const [{ data: quizzed }, { data: studiedChunks }] = await Promise.all([
+      supabase.from("quiz_results").select("word").eq("user_id", user.id),
+      supabase.from("study_chunks").select("id").eq("user_id", user.id).not("studied_at", "is", null),
+    ]);
+    const studiedSet = new Set<string>((quizzed ?? []).map((r: any) => r.word));
+    const chunkIds = (studiedChunks ?? []).map((c: any) => c.id);
+    if (chunkIds.length > 0) {
+      const { data: chunkWords } = await supabase
+        .from("study_chunk_words")
+        .select("word")
+        .in("chunk_id", chunkIds);
+      (chunkWords ?? []).forEach((r: any) => studiedSet.add(r.word));
+    }
+    setStudiedWords(studiedSet);
     const { data: ch } = await supabase
       .from("study_chunks")
       .select("id,chunk_index,word_count,studied_at")
