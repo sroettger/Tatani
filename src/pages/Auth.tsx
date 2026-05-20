@@ -40,7 +40,7 @@ export default function Auth() {
             <Sparkles className="h-7 w-7 text-primary-foreground" />
           </div>
         </div>
-        <h1 className="text-2xl font-bold text-center mb-2">Anime Japanese Trainer</h1>
+        <h1 className="text-2xl font-bold text-center mb-2">Tatani</h1>
         <p className="text-sm text-muted-foreground text-center mb-8">
           Learn Japanese from the anime you actually want to watch. Personalized flashcards, adaptive to your level.
         </p>
