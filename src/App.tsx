@@ -61,7 +61,6 @@ const App = () => (
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>
-          <InstallAppPrompt />
         </AuthProvider>
       </BrowserRouter>
     </TooltipProvider>
