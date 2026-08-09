@@ -8,6 +8,8 @@ import { ChevronLeft, Loader2, RotateCw } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
+import { useI18n } from "@/i18n";
+import { cn } from "@/lib/utils";
 
 type Chunk = { id: string; chunk_index: number; word_count: number; studied_at: string | null };
 type ChunkWord = {
@@ -20,7 +22,8 @@ const KANJI_THRESHOLD = 2;
 export default function ChunkQuiz() {
   const { episodeId } = useParams();
   const navigate = useNavigate();
-  const { user, learningLanguage } = useAuth();
+  const { user, learningLanguage, learningLanguageInfo } = useAuth();
+  const { t } = useI18n();
 
   const [loading, setLoading] = useState(true);
   const [chunks, setChunks] = useState<Chunk[]>([]);
@@ -30,7 +33,7 @@ export default function ChunkQuiz() {
   // quiz state
   const [words, setWords] = useState<ChunkWord[]>([]);
   const [persistStreak, setPersistStreak] = useState<Record<string, number>>({});
-  
+
   const [idx, setIdx] = useState(0);
   const [correct, setCorrect] = useState(0);
   const [choice, setChoice] = useState<number | null>(null);
@@ -61,14 +64,14 @@ export default function ChunkQuiz() {
 
   const startQuiz = async () => {
     if (!user || selectedIds.length === 0) {
-      toast.error("Pick at least one chunk");
+      toast.error(t("quiz.pickAtLeastOne"));
       return;
     }
     const { data: w } = await supabase
       .from("study_chunk_words").select("*").in("chunk_id", selectedIds);
     const allWords = (w ?? []) as ChunkWord[];
     if (allWords.length < 2) {
-      toast.error("Not enough words to quiz");
+      toast.error(t("quiz.notEnoughWords"));
       return;
     }
     // dedupe by word
@@ -92,7 +95,7 @@ export default function ChunkQuiz() {
 
     const { data: sess } = await supabase
       .from("study_sessions")
-      .insert({ user_id: user.id, episode_id: episodeId!, mode: "quiz", words_studied: 0, words_mastered: 0 })
+      .insert({ user_id: user.id, episode_id: episodeId!, mode: "quiz", words_studied: 0, words_mastered: 0, learning_language: learningLanguage })
       .select("id").single();
     if (sess) setSessionId(sess.id);
     setPhase("quiz");
@@ -112,9 +115,10 @@ export default function ChunkQuiz() {
 
   const showKanji = useMemo(() => {
     if (!card) return false;
+    if (!learningLanguageInfo.hasRuby) return false;
     if (card.word === card.reading) return true;
     return (persistStreak[card.word] ?? 0) >= KANJI_THRESHOLD;
-  }, [card, persistStreak]);
+  }, [card, persistStreak, learningLanguageInfo]);
 
   const onAnswer = async (i: number) => {
     if (!card || choice !== null) return;
@@ -125,7 +129,7 @@ export default function ChunkQuiz() {
     if (sessionId && user) {
       await supabase.from("quiz_results").insert({
         session_id: sessionId, user_id: user.id, word: card.word,
-        was_correct: isCorrect, quiz_kind: "jp_to_meaning",
+        was_correct: isCorrect, quiz_kind: "jp_to_meaning", learning_language: learningLanguage,
       });
     }
 
@@ -166,15 +170,15 @@ export default function ChunkQuiz() {
       <div className="max-w-md mx-auto px-5 pt-4 pb-10">
         <div className="flex items-center justify-between mb-4">
           <Button variant="ghost" size="icon" onClick={() => navigate(-1)}><ChevronLeft className="h-5 w-5" /></Button>
-          <div className="text-sm text-muted-foreground">Quiz</div>
+          <div className="text-sm text-muted-foreground">{t("quiz.title")}</div>
           <div className="w-9" />
         </div>
-        <h1 className="text-xl font-bold mb-1">Choose chunks to quiz</h1>
-        <p className="text-sm text-muted-foreground mb-4">Only chunks you've studied appear here.</p>
+        <h1 className="text-xl font-bold mb-1">{t("quiz.chooseChunks")}</h1>
+        <p className="text-sm text-muted-foreground mb-4">{t("quiz.onlyStudied")}</p>
 
         {chunks.length === 0 ? (
           <Card className="p-6 text-center text-sm text-muted-foreground">
-            No studied chunks yet. Study at least one chunk to unlock the quiz.
+            {t("quiz.noStudiedChunks")}
           </Card>
         ) : (
           <>
@@ -188,7 +192,7 @@ export default function ChunkQuiz() {
                     setSelected(sel);
                   }}
                 />
-                <div className="text-sm font-medium">Select all</div>
+                <div className="text-sm font-medium">{t("quiz.selectAll")}</div>
               </div>
             </Card>
             <div className="grid gap-2 mb-6">
@@ -200,8 +204,8 @@ export default function ChunkQuiz() {
                       onCheckedChange={(v) => setSelected(s => ({ ...s, [c.id]: !!v }))}
                     />
                     <div className="flex-1">
-                      <div className="font-medium text-sm">Chunk {c.chunk_index}</div>
-                      <div className="text-xs text-muted-foreground">{c.word_count} words</div>
+                      <div className="font-medium text-sm">{t("chunk.title", { n: c.chunk_index })}</div>
+                      <div className="text-xs text-muted-foreground">{t("episode.wordCount", { n: c.word_count })}</div>
                     </div>
                   </label>
                 </Card>
@@ -212,7 +216,7 @@ export default function ChunkQuiz() {
               disabled={selectedIds.length === 0}
               className="w-full h-12 gradient-primary text-primary-foreground"
             >
-              Start quiz ({selectedIds.length} chunk{selectedIds.length === 1 ? "" : "s"})
+              {t("quiz.startQuiz", { n: selectedIds.length })}
             </Button>
           </>
         )}
@@ -225,14 +229,14 @@ export default function ChunkQuiz() {
       <div className="max-w-md mx-auto px-5 py-10 text-center">
         <Card className="p-8 gradient-card border-border/50 shadow-card animate-fade-in">
           <div className="text-5xl mb-3">🎉</div>
-          <h2 className="text-2xl font-bold mb-2">Quiz complete</h2>
-          <p className="text-sm text-muted-foreground mb-6">{correct} / {words.length} correct</p>
+          <h2 className="text-2xl font-bold mb-2">{t("quiz.complete")}</h2>
+          <p className="text-sm text-muted-foreground mb-6">{t("quiz.correctOf", { correct, total: words.length })}</p>
           <div className="grid gap-2">
             <Button onClick={() => navigate(`/episode/${episodeId}`)} className="gradient-primary text-primary-foreground">
-              Back to episode
+              {t("study.backToEpisode")}
             </Button>
             <Button variant="outline" onClick={() => setPhase("select")}>
-              <RotateCw className="h-4 w-4" /> Pick chunks again
+              <RotateCw className="h-4 w-4" /> {t("quiz.pickChunksAgain")}
             </Button>
           </div>
         </Card>
@@ -245,7 +249,7 @@ export default function ChunkQuiz() {
     <div className="max-w-md mx-auto px-5 pt-4 pb-10">
       <div className="flex items-center justify-between mb-4">
         <Button variant="ghost" size="icon" onClick={() => setPhase("select")}><ChevronLeft className="h-5 w-5" /></Button>
-        <div className="text-sm text-muted-foreground">Quiz</div>
+        <div className="text-sm text-muted-foreground">{t("quiz.title")}</div>
         <div className="w-9" />
       </div>
 
@@ -253,15 +257,15 @@ export default function ChunkQuiz() {
       <div className="text-xs text-muted-foreground text-center mb-4">{Math.min(idx + 1, words.length)} / {words.length}</div>
 
       <Card className="p-6 gradient-card border-border/50 shadow-card mb-4 text-center">
-        <div className="text-xs text-muted-foreground mb-2">What does this mean?</div>
-        <div className="font-jp text-5xl font-bold mb-2">
-          {showKanji ? card?.word : card?.reading}
+        <div className="text-xs text-muted-foreground mb-2">{t("study.whatDoesThisMean")}</div>
+        <div className={cn("text-5xl font-bold mb-2", learningLanguageInfo.hasRuby && "font-jp")}>
+          {learningLanguageInfo.hasRuby ? (showKanji ? card?.word : card?.reading) : card?.word}
         </div>
-        {showKanji
+        {learningLanguageInfo.hasRuby && (showKanji
           ? card?.reading && card.reading !== card.word && <div className="font-jp text-muted-foreground">{card.reading}</div>
           : card && card.word !== card.reading && (
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Hiragana mode</div>
-          )}
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("study.hiraganaMode")}</div>
+          ))}
       </Card>
 
       <div className="grid gap-2">
@@ -291,7 +295,7 @@ export default function ChunkQuiz() {
           disabled={choice !== null}
           className="h-12 mt-2 text-muted-foreground"
         >
-          I don't know
+          {t("study.dontKnow")}
         </Button>
       </div>
     </div>

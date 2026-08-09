@@ -8,6 +8,8 @@ import { useAuth } from "@/context/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
+import { useI18n } from "@/i18n";
+import { formatLevel } from "@/lib/languages";
 
 type Recommendation = {
   anilist_id: number;
@@ -26,14 +28,15 @@ type Recommendation = {
 type Platform = "crunchyroll" | "netflix";
 
 export default function Recommendations() {
-  const { user, profile } = useAuth();
+  const { user, profile, progress } = useAuth();
+  const { t } = useI18n();
   const [items, setItems] = useState<Recommendation[]>([]);
   const [loading, setLoading] = useState(false);
   const [adding, setAdding] = useState<number | null>(null);
   const [filters, setFilters] = useState<Set<Platform>>(new Set());
 
   const country = (profile as any)?.country as string | null | undefined;
-  const netflixLabel = country ? `Netflix (${country})` : "Netflix";
+  const netflixLabel = country ? t("rec.netflixWithCountry", { country }) : t("rec.netflix");
 
   const load = async (overrideFilters?: Set<Platform>) => {
     if (!user) return;
@@ -44,11 +47,11 @@ export default function Recommendations() {
     });
     setLoading(false);
     if (error) {
-      toast.error("Couldn't load recommendations", { description: error.message });
+      toast.error(t("rec.loadFailed"), { description: error.message });
       return;
     }
     if (data?.error) {
-      toast.error("Couldn't load recommendations", { description: data.error });
+      toast.error(t("rec.loadFailed"), { description: data.error });
       return;
     }
     setItems(data?.results ?? []);
@@ -68,34 +71,34 @@ export default function Recommendations() {
     const { data, error } = await supabase.functions.invoke("add-anime-to-library", { body: { anime: r } });
     setAdding(null);
     if (error || data?.error) {
-      toast.error("Couldn't add", { description: error?.message ?? data?.error });
+      toast.error(t("rec.addFailed"), { description: error?.message ?? data?.error });
       return;
     }
-    toast.success("Added to your library");
+    toast.success(t("rec.added"));
     setItems(prev => prev.filter(x => x.anilist_id !== r.anilist_id));
   };
 
-  const level = profile?.jlpt_level && profile.jlpt_level !== "none" ? `Level ${profile.jlpt_level}` : "For you";
+  const level = progress?.level && progress.level !== "none" ? t("rec.levelLabel", { level: formatLevel(progress.level) }) : t("rec.title");
 
   return (
     <div className="max-w-2xl mx-auto">
       <PageHeader
-        title="Recommended for you"
+        title={t("rec.title")}
         subtitle={level}
         icon={<Sparkles className="h-4 w-4" />}
       />
 
       <div className="px-5 mb-3 flex items-center justify-between gap-2">
-        <h2 className="text-lg font-semibold">Picks based on your level</h2>
+        <h2 className="text-lg font-semibold">{t("rec.picksTitle")}</h2>
         <Button size="sm" variant="outline" onClick={() => load()} disabled={loading}>
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          Refresh
+          {t("rec.refresh")}
         </Button>
       </div>
 
       <div className="px-5 mb-4 flex items-center gap-2 flex-wrap">
         <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
-          <Tv className="h-3.5 w-3.5" /> Streaming
+          <Tv className="h-3.5 w-3.5" /> {t("rec.streaming")}
         </span>
         <Button
           size="sm"
@@ -117,13 +120,13 @@ export default function Recommendations() {
         </Button>
         {!country && (
           <Link to="/settings" className="text-[11px] text-muted-foreground underline ml-1">
-            Set country
+            {t("rec.setCountry")}
           </Link>
         )}
       </div>
       {filters.has("netflix") && (
         <p className="px-5 -mt-2 mb-3 text-[11px] text-muted-foreground">
-          Note: regional Netflix availability isn't guaranteed by our data source — verify in the Netflix app.
+          {t("rec.netflixNote")}
         </p>
       )}
 
@@ -131,18 +134,18 @@ export default function Recommendations() {
         {loading && items.length === 0 && (
           <Card className="p-8 text-center gradient-card border-border/50">
             <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2 text-primary" />
-            <p className="text-sm text-muted-foreground">Finding anime for your level…</p>
+            <p className="text-sm text-muted-foreground">{t("rec.findingTitle")}</p>
           </Card>
         )}
         {!loading && items.length === 0 && (
           <Card className="p-8 text-center gradient-card border-border/50">
             <div className="text-4xl mb-2">✨</div>
-            <h3 className="font-semibold mb-1">No recommendations yet</h3>
+            <h3 className="font-semibold mb-1">{t("rec.noneTitle")}</h3>
             <p className="text-sm text-muted-foreground mb-4">
-              {filters.size ? "No picks matched your streaming filter. Try removing a filter or refreshing." : "Try refreshing to generate new picks."}
+              {filters.size ? t("rec.noneFilterBody") : t("rec.noneBody")}
             </p>
             <Button onClick={() => load()} className="gradient-primary text-primary-foreground">
-              <RefreshCw className="h-4 w-4" /> Generate
+              <RefreshCw className="h-4 w-4" /> {t("rec.generate")}
             </Button>
           </Card>
         )}
@@ -152,7 +155,7 @@ export default function Recommendations() {
               <div className="w-16 h-24 rounded-lg overflow-hidden bg-muted flex-shrink-0">
                 {r.cover_url ? (
                   <img src={r.cover_url} alt={r.title_romaji} className="w-full h-full object-cover" loading="lazy" />
-                ) : <div className="w-full h-full grid place-items-center text-muted-foreground text-xs">No cover</div>}
+                ) : <div className="w-full h-full grid place-items-center text-muted-foreground text-xs">{t("home.noCover")}</div>}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="font-semibold truncate">{r.title_en ?? r.title_romaji}</div>
@@ -181,7 +184,7 @@ export default function Recommendations() {
                 className="gradient-primary text-primary-foreground"
               >
                 {adding === r.anilist_id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                Add to library
+                {t("rec.addToLibrary")}
               </Button>
             </div>
           </Card>

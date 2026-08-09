@@ -7,6 +7,8 @@ import { MessageCircle, Send, Volume2, RotateCw, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/context/AuthContext";
+import { useI18n } from "@/i18n";
 
 type Msg = { role: "user" | "assistant"; content: string };
 
@@ -14,6 +16,9 @@ type Props = {
   episodeId: string;
   studiedWordCount: number;
 };
+
+const TTS_LANG: Record<string, string> = { ja: "ja-JP", es: "es-ES", fr: "fr-FR", de: "de-DE" };
+const ttsLangFor = (code: string) => TTS_LANG[code] ?? "en-US";
 
 // Strip markers + meta lines for TTS (don't read corrections or English aloud)
 const stripMd = (s: string) =>
@@ -26,7 +31,7 @@ const stripMd = (s: string) =>
 
 // Render text: extract correction block (leading lines starting with >),
 // highlight **word**, and italicize *(English: ...)* line.
-function FormattedMsg({ text }: { text: string }) {
+function FormattedMsg({ text, hasRuby }: { text: string; hasRuby: boolean }) {
   const lines = text.split("\n");
   const correctionLines: string[] = [];
   const bodyLines: string[] = [];
@@ -72,7 +77,7 @@ function FormattedMsg({ text }: { text: string }) {
               <p
                 key={i}
                 className={cn(
-                  isEnglishNote ? "text-muted-foreground italic" : "font-jp text-foreground",
+                  isEnglishNote ? "text-muted-foreground italic" : cn(hasRuby && "font-jp", "text-foreground"),
                 )}
               >
                 {renderInline(cleaned, `c${i}`)}
@@ -81,13 +86,15 @@ function FormattedMsg({ text }: { text: string }) {
           })}
         </div>
       )}
-      {main && <p className="font-jp text-sm leading-relaxed">{renderInline(main, "m")}</p>}
+      {main && <p className={cn("text-sm leading-relaxed", hasRuby && "font-jp")}>{renderInline(main, "m")}</p>}
       {english && <p className="text-xs text-muted-foreground italic mt-1.5">{english}</p>}
     </div>
   );
 }
 
 export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
+  const { learningLanguage, learningLanguageInfo } = useAuth();
+  const { t } = useI18n();
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -109,7 +116,7 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
   const speak = (text: string) => {
     if (!("speechSynthesis" in window)) return;
     const u = new SpeechSynthesisUtterance(stripMd(text));
-    u.lang = "ja-JP";
+    u.lang = ttsLangFor(learningLanguage);
     speechSynthesis.cancel();
     speechSynthesis.speak(u);
   };
@@ -156,13 +163,13 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
           apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
         },
         signal: controller.signal,
-        body: JSON.stringify({ episode_id: episodeId, messages: next, auto_start: isAutoStart }),
+        body: JSON.stringify({ episode_id: episodeId, messages: next, auto_start: isAutoStart, learning_language: learningLanguage }),
       });
 
       if (!resp.ok) {
-        if (resp.status === 429) toast.error("Slow down — too many requests.");
-        else if (resp.status === 402) toast.error("AI credits exhausted.");
-        else toast.error("Discussion failed. Please try again.");
+        if (resp.status === 429) toast.error(t("discuss.slowDown"));
+        else if (resp.status === 402) toast.error(t("discuss.creditsExhausted"));
+        else toast.error(t("discuss.failed"));
         setLoading(false);
         // remove the optimistic user message? leave it so they can retry
         return;
@@ -200,7 +207,7 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
     } catch (e: any) {
       if (e?.name !== "AbortError") {
         console.error(e);
-        toast.error("Connection lost.");
+        toast.error(t("discuss.connectionLost"));
       }
     } finally {
       setLoading(false);
@@ -224,10 +231,10 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
     <Card className="p-4 mb-6 gradient-card border-border/50">
       <div className="flex items-center justify-between mb-3">
         <h3 className="font-semibold flex items-center gap-2">
-          <MessageCircle className="h-4 w-4 text-primary" /> Discuss in Japanese
+          <MessageCircle className="h-4 w-4 text-primary" /> {t("discuss.title", { lang: learningLanguageInfo.name })}
         </h3>
         {messages.length > 0 && (
-          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={reset} title="New conversation">
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={reset} title={t("discuss.newConversation")}>
             <RotateCw className="h-3.5 w-3.5" />
           </Button>
         )}
@@ -235,7 +242,7 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
 
       {studiedWordCount === 0 ? (
         <p className="text-xs text-muted-foreground">
-          Study at least one chunk to unlock a Japanese conversation about this episode.
+          {t("discuss.studyFirst", { lang: learningLanguageInfo.name })}
         </p>
       ) : (
         <>
@@ -243,14 +250,14 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
             {messages.length === 0 && !loading && (
               <div className="flex flex-col items-start gap-2">
                 <div className="text-xs text-muted-foreground">
-                  Chat in Japanese with an AI partner who watched this episode with you.
+                  {t("discuss.intro", { lang: learningLanguageInfo.name })}
                 </div>
                 <Button
                   size="sm"
                   className="gradient-primary text-primary-foreground h-9"
                   onClick={() => send(undefined, { autoStart: true })}
                 >
-                  <MessageCircle className="h-4 w-4" /> Start the conversation
+                  <MessageCircle className="h-4 w-4" /> {t("discuss.start")}
                 </Button>
               </div>
             )}
@@ -261,14 +268,14 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
                 className={cn(
                   "rounded-lg px-3 py-2 text-sm max-w-[92%]",
                   m.role === "user"
-                    ? "ml-auto bg-primary text-primary-foreground font-jp"
+                    ? cn("ml-auto bg-primary text-primary-foreground", learningLanguageInfo.hasRuby && "font-jp")
                     : "bg-muted/50",
                 )}
               >
                 {m.role === "assistant" ? (
                   <div className="flex items-start gap-2">
                     <div className="flex-1 min-w-0">
-                      <FormattedMsg text={m.content || "…"} />
+                      <FormattedMsg text={m.content || "…"} hasRuby={learningLanguageInfo.hasRuby} />
                     </div>
                     {m.content && (
                       <Button
@@ -276,7 +283,7 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
                         variant="ghost"
                         className="h-6 w-6 shrink-0 -mr-1 -mt-0.5"
                         onClick={() => speak(m.content)}
-                        title="Listen"
+                        title={t("discuss.listen")}
                       >
                         <Volume2 className="h-3.5 w-3.5" />
                       </Button>
@@ -304,8 +311,8 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKey}
-              placeholder="日本語で書いてみよう…"
-              className="font-jp"
+              placeholder={t("discuss.inputPlaceholder", { lang: learningLanguageInfo.name })}
+              className={learningLanguageInfo.hasRuby ? "font-jp" : ""}
               disabled={loading}
             />
             <Button

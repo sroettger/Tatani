@@ -7,6 +7,7 @@ import { Sparkles, Send, X, BrainCircuit } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { useI18n } from "@/i18n";
+import { scaleLabel } from "@/lib/languages";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +17,7 @@ type VocabItem = {
   meaning: string;
   part_of_speech?: string;
   jlpt_level?: string;
+  level?: string;
   example_sentence_jp?: string;
   example_sentence_en?: string;
 };
@@ -34,8 +36,8 @@ export type TutorChatProps = {
 };
 
 export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: TutorChatProps) {
-  const { user, profile, learningLanguage } = useAuth();
-  const { lang } = useI18n();
+  const { user, progress, learningLanguage, learningLanguageInfo } = useAuth();
+  const { t, lang } = useI18n();
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -44,9 +46,9 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
   const abortRef = useRef<AbortController | null>(null);
 
   const greeting = useMemo(() => {
-    if (focusWord) return `Hi! Want help with **${focusWord}**? Ask me anything — meaning, more examples, grammar, or say "quiz me".`;
-    return `Hi! I'm your Japanese tutor for this episode. Ask about any word, request more example sentences, or say **"quiz me"** to practice.`;
-  }, [focusWord]);
+    if (focusWord) return t("tutor.greetingFocus", { word: focusWord });
+    return t("tutor.greeting");
+  }, [focusWord, t]);
 
   // Auto-scroll on new content
   useEffect(() => {
@@ -77,7 +79,7 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
         user_id: user.id,
         word,
         reading: existing?.reading ?? v?.reading ?? word,
-        level: (existing?.level ?? v?.jlpt_level) ?? null,
+        level: (existing?.level ?? v?.level ?? v?.jlpt_level) ?? null,
         learning_language: learningLanguage,
         state: "known",
         correct_streak: 3,
@@ -85,7 +87,7 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
       },
       { onConflict: "user_id,word,learning_language" },
     );
-    toast.success(`Marked "${word}" as known`);
+    toast.success(t("tutor.markedKnown", { word }));
     onWordMarkedKnown?.(word);
   };
 
@@ -96,7 +98,7 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
       } else if (call.name === "start_mini_quiz") {
         const n = Math.max(3, Math.min(8, Number(call.args?.count) || 5));
         onStartQuiz?.(n);
-        toast.success(`Starting a ${n}-question quiz`);
+        toast.success(t("tutor.startingQuiz", { n }));
       }
     }
   };
@@ -141,16 +143,19 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
         body: JSON.stringify({
           messages: next,
           vocab,
-          jlpt_level: profile?.jlpt_level ?? "none",
+          jlpt_level: progress?.level ?? "none",
+          learning_language: learningLanguage,
+          learning_language_name: learningLanguageInfo.name,
+          level_scale: scaleLabel(learningLanguage),
           focus_word: focusWord ?? null,
           ui_language: lang,
         }),
       });
 
       if (!resp.ok) {
-        if (resp.status === 429) toast.error("Slow down — too many requests. Try again in a moment.");
-        else if (resp.status === 402) toast.error("AI credits exhausted. Add funds in Workspace settings.");
-        else toast.error("Tutor chat failed. Please try again.");
+        if (resp.status === 429) toast.error(t("tutor.slowDown"));
+        else if (resp.status === 402) toast.error(t("tutor.creditsExhausted"));
+        else toast.error(t("tutor.chatFailed"));
         setLoading(false);
         return;
       }
@@ -213,7 +218,7 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
     } catch (e: any) {
       if (e?.name !== "AbortError") {
         console.error(e);
-        toast.error("Connection lost.");
+        toast.error(t("tutor.connectionLost"));
       }
     } finally {
       setLoading(false);
@@ -232,7 +237,7 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
       {/* Floating bubble */}
       <button
         onClick={() => setOpen(true)}
-        aria-label="Open AI tutor"
+        aria-label={t("tutor.openAiTutor")}
         className={cn(
           "fixed bottom-20 right-4 z-40 grid place-items-center h-14 w-14 rounded-full",
           "gradient-primary text-primary-foreground shadow-elegant",
@@ -247,7 +252,7 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
           <SheetHeader className="px-5 pt-5 pb-3 border-b border-border/50">
             <SheetTitle className="flex items-center gap-2">
               <BrainCircuit className="h-5 w-5 text-primary" />
-              AI Tutor
+              {t("tutor.aiTutor")}
             </SheetTitle>
           </SheetHeader>
 
@@ -257,9 +262,9 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
                 <ReactMarkdown>{greeting}</ReactMarkdown>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {[
-                    "Quiz me on 5 words",
-                    "More example sentences",
-                    focusWord ? `Explain ${focusWord}` : "Hardest word here?",
+                    t("tutor.suggestQuiz"),
+                    t("tutor.suggestExamples"),
+                    focusWord ? t("tutor.suggestExplain", { word: focusWord }) : t("tutor.suggestHardest"),
                   ].map((s) => (
                     <Button key={s} size="sm" variant="outline" onClick={() => setInput(s)}>
                       {s}
@@ -300,7 +305,7 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKey}
-              placeholder="Ask about a word, grammar, or say 'quiz me'…"
+              placeholder={t("tutor.inputPlaceholder")}
               disabled={loading}
             />
             <Button onClick={send} disabled={loading || !input.trim()} size="icon" className="gradient-primary text-primary-foreground">
