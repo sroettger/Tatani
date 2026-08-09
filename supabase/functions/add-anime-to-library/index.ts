@@ -32,6 +32,9 @@ Deno.serve(async (req) => {
 
     const admin = createClient(SUPABASE_URL, SERVICE);
 
+    const { data: prof } = await admin.from("profiles").select("learning_language").eq("user_id", userId).maybeSingle();
+    const learningLanguage: string = body?.learning_language ?? prof?.learning_language ?? "ja";
+
     // Upsert anime by anilist_id
     let animeId: string;
     const { data: existing } = await admin.from("anime").select("id").eq("anilist_id", r.anilist_id).maybeSingle();
@@ -93,12 +96,12 @@ Deno.serve(async (req) => {
     // Link to user library (idempotent)
     const { data: link, error: linkErr } = await admin
       .from("user_anime")
-      .upsert({ user_id: userId, anime_id: animeId }, { onConflict: "user_id,anime_id" })
+      .upsert({ user_id: userId, anime_id: animeId, learning_language: learningLanguage }, { onConflict: "user_id,anime_id,learning_language" })
       .select("id")
       .maybeSingle();
     if (linkErr) {
       // Fall back: insert if upsert hit a missing unique constraint
-      const { error: insErr } = await admin.from("user_anime").insert({ user_id: userId, anime_id: animeId });
+      const { error: insErr } = await admin.from("user_anime").insert({ user_id: userId, anime_id: animeId, learning_language: learningLanguage });
       if (insErr && !insErr.message.includes("duplicate")) {
         return new Response(JSON.stringify({ error: insErr.message }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
