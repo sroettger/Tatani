@@ -4,9 +4,11 @@ import { PageHeader } from "@/components/PageHeader";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { BarChart3 } from "lucide-react";
+import { useI18n } from "@/i18n";
 
 export default function Stats() {
   const { user, profile } = useAuth();
+  const { t } = useI18n();
   const [counts, setCounts] = useState({ known: 0, learning: 0, unknown: 0 });
   const [sessions, setSessions] = useState(0);
 
@@ -27,14 +29,14 @@ export default function Stats() {
 
   return (
     <div className="max-w-2xl mx-auto">
-      <PageHeader title="Your progress" subtitle="Stats" icon={<BarChart3 className="h-4 w-4" />} />
+      <PageHeader title={t("stats.title")} subtitle={t("stats.subtitle")} icon={<BarChart3 className="h-4 w-4" />} />
       <div className="px-5 grid grid-cols-2 gap-3">
-        <StatCard label="Words known" value={counts.known} accent="text-success" />
-        <StatCard label="Learning" value={counts.learning} accent="text-warning" />
-        <StatCard label="Encountered" value={counts.known + counts.learning + counts.unknown} accent="text-primary" />
-        <StatCard label="Study sessions" value={sessions} accent="text-accent" />
-        <StatCard label="JLPT level" value={profile?.jlpt_level === "none" ? "—" : (profile?.jlpt_level ?? "—")} accent="text-secondary" />
-        <StatCard label="Streak" value={`${profile?.study_streak ?? 0}d`} accent="text-primary" />
+        <StatCard label={t("stats.wordsKnown")} value={counts.known} accent="text-success" />
+        <StatCard label={t("stats.learning")} value={counts.learning} accent="text-warning" />
+        <StatCard label={t("stats.encountered")} value={counts.known + counts.learning + counts.unknown} accent="text-primary" />
+        <StatCard label={t("stats.sessions")} value={sessions} accent="text-accent" />
+        <StatCard label={t("stats.jlpt")} value={profile?.jlpt_level === "none" ? "—" : (profile?.jlpt_level ?? "—")} accent="text-secondary" />
+        <StatCard label={t("stats.streak")} value={`${profile?.study_streak ?? 0}d`} accent="text-primary" />
       </div>
     </div>
   );
