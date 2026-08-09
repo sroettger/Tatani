@@ -44,8 +44,9 @@ export default function Onboarding() {
   const [resultLevel, setResultLevel] = useState<string>(levels[0]);
 
   useEffect(() => {
-    if (langProgress?.placement_done) navigate("/", { replace: true });
-  }, [langProgress, navigate]);
+    if (phase === "uiLang" && langProgress?.placement_done) navigate("/", { replace: true });
+  }, [langProgress, navigate, phase]);
+
 
   const startQuiz = () => {
     const qs = buildPlacementQuiz(learningLanguage as LearningLangCode, lang);
