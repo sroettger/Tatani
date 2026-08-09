@@ -85,7 +85,29 @@ Deno.serve(async (req) => {
         console.error("AI gateway error", aiResp.status, t);
         return { status: aiResp.status, questions: [] as any[] };
       }
-      const questions = rawQuestions.map((q: any) => ({
+      const aiJson = await aiResp.json();
+      const call = aiJson?.choices?.[0]?.message?.tool_calls?.[0];
+      if (!call?.function?.arguments) return { status: 502, questions: [] as any[] };
+      try {
+        const parsed = JSON.parse(call.function.arguments);
+        return { status: 200, questions: (parsed?.questions ?? []).map((q: any) => ({ ...q, level: q.level ?? batchLevels[0] })) };
+      } catch {
+        return { status: 502, questions: [] as any[] };
+      }
+    };
+
+    // One request per level, run in parallel — far faster than a single 20-question call.
+    const results = await Promise.all(levels.map((lvl) => genForLevels([lvl], perLevel)));
+    const failed = results.find((r) => r.status !== 200);
+    const rawQuestions = results.flatMap((r) => r.questions);
+    if (!rawQuestions.length) {
+      const status = failed?.status ?? 502;
+      if (status === 429) return new Response(JSON.stringify({ error: "Rate limit exceeded." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      if (status === 402) return new Response(JSON.stringify({ error: "AI credits exhausted." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ error: "Quiz generation failed" }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    const questions = rawQuestions.map((q: any) => ({
       ...q,
       word: q.word ?? q.jp_word ?? "",
       level: q.level ?? q.jlpt_level ?? levels[0],
