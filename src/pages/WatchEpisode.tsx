@@ -45,7 +45,7 @@ function getWinningLines(board: BoardWord[], size: Size): number[][] {
 export default function WatchEpisode() {
   const { episodeId } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, learningLanguage } = useAuth();
   const [episode, setEpisode] = useState<{ episode_number: number } | null>(null);
   const [pool, setPool] = useState<VocabItem[]>([]);
   const [size, setSize] = useState<Size>(4);
@@ -65,7 +65,7 @@ export default function WatchEpisode() {
         supabase.from("episodes").select("episode_number").eq("id", episodeId).maybeSingle(),
         supabase.from("episode_vocab_cache").select("vocab").eq("episode_id", episodeId).maybeSingle(),
         supabase.from("study_chunks").select("id").eq("episode_id", episodeId).eq("user_id", user.id).not("studied_at", "is", null),
-        supabase.from("user_word_state").select("word,state,correct_streak,preference").eq("user_id", user.id),
+        supabase.from("user_word_state").select("word,state,correct_streak,preference").eq("user_id", user.id).eq("learning_language", learningLanguage),
       ]);
       setEpisode(ep as any);
       const epVocab = ((cache?.vocab ?? []) as VocabItem[]);
@@ -94,7 +94,7 @@ export default function WatchEpisode() {
       setPool(eligible);
       setLoading(false);
     })();
-  }, [episodeId, user]);
+  }, [episodeId, user, learningLanguage]);
 
   // Generate board whenever pool or size changes
   useEffect(() => {
