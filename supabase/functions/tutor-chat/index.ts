@@ -1,6 +1,7 @@
-// Streaming AI tutor for Japanese vocabulary learning.
+// Streaming AI tutor for vocabulary learning in the learner's target language.
 // Uses Lovable AI Gateway. Supports tool calls for marking words known and
 // starting a mini-quiz from the episode's vocab.
+import { langInfo, uiLanguageName } from "../_shared/languages.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
