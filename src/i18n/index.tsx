@@ -80,5 +80,5 @@ export function useI18n() {
   return ctx;
 }
 
-export { SUPPORTED_LANGUAGES, LANGUAGE_NAMES };
+export { SUPPORTED_LANGUAGES, LANGUAGE_NAMES, DICTS };
 export type { LangCode };
