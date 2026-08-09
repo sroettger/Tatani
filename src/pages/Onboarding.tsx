@@ -10,6 +10,8 @@ import { Loader2, Sparkles } from "lucide-react";
 import { useI18n } from "@/i18n";
 import { levelsFor, levelRank, levelFromRank, getLearningLanguage, LEARNING_LANGUAGES, LearningLangCode } from "@/lib/languages";
 import { SUPPORTED_LANGUAGES, LangCode } from "@/i18n/strings";
+import { buildPlacementQuiz } from "@/lib/placementBank";
+
 
 type Question = {
   prompt: string;
