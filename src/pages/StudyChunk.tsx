@@ -12,7 +12,7 @@ import { Furigana } from "@/components/Furigana";
 
 type ChunkWord = {
   word: string; reading: string | null; meaning: string | null;
-  jlpt_level: string | null; part_of_speech: string | null;
+  level: string | null; part_of_speech: string | null;
   example_sentence_jp: string | null; example_sentence_en: string | null;
 };
 
@@ -27,7 +27,7 @@ const REQUIRED_KNOWN = 2; // mark as "session-done" after 2 consecutive "I know 
 export default function StudyChunk() {
   const { chunkId } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, learningLanguage } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [episodeId, setEpisodeId] = useState<string | null>(null);
@@ -76,7 +76,7 @@ export default function StudyChunk() {
       // Pull persistent state for these words
       const wordKeys = list.map(w => w.word);
       const { data: states } = wordKeys.length
-        ? await supabase.from("user_word_state").select("word,correct_streak").in("word", wordKeys).eq("user_id", user.id)
+        ? await supabase.from("user_word_state").select("word,correct_streak").in("word", wordKeys).eq("user_id", user.id).eq("learning_language", learningLanguage)
         : { data: [] as any[] };
       const pStreak: Record<string, number> = {};
       (states ?? []).forEach((s: any) => {
@@ -125,7 +125,7 @@ export default function StudyChunk() {
   const recordWord = async (word: string, reading: string | null, jlpt: string | null, gotItRight: boolean) => {
     if (!user) return;
     const { data: existing } = await supabase
-      .from("user_word_state").select("correct_streak").eq("user_id", user.id).eq("word", word).maybeSingle();
+      .from("user_word_state").select("correct_streak").eq("user_id", user.id).eq("word", word).eq("learning_language", learningLanguage).maybeSingle();
     const prevStreak = existing?.correct_streak ?? 0;
     const newStreak = gotItRight ? prevStreak + 1 : 0;
 
@@ -133,9 +133,9 @@ export default function StudyChunk() {
     // as known via manual action on the episode page. We still track
     // `correct_streak` because it controls kanji vs. hiragana display.
     await supabase.from("user_word_state").upsert({
-      user_id: user.id, word, reading: reading ?? null, jlpt_level: (jlpt as any) ?? null,
+      user_id: user.id, word, reading: reading ?? null, level: jlpt ?? null, learning_language: learningLanguage,
       correct_streak: newStreak, last_reviewed_at: new Date().toISOString(),
-    }, { onConflict: "user_id,word" });
+    }, { onConflict: "user_id,word,learning_language" });
     setPersistStreak(prev => ({ ...prev, [word]: newStreak }));
   };
 
@@ -175,7 +175,7 @@ export default function StudyChunk() {
 
   const onKnow = async () => {
     if (!current) return;
-    await recordWord(current.word, current.reading, current.jlpt_level, true);
+    await recordWord(current.word, current.reading, current.level, true);
     const newStreak = (sessionStreak[current.word] ?? 0) + 1;
     setSessionStreak(s => ({ ...s, [current.word]: newStreak }));
     if (newStreak >= REQUIRED_KNOWN) {
@@ -187,7 +187,7 @@ export default function StudyChunk() {
   };
   const onLearning = async () => {
     if (!current) return;
-    await recordWord(current.word, current.reading, current.jlpt_level, false);
+    await recordWord(current.word, current.reading, current.level, false);
     setSessionStreak(s => ({ ...s, [current.word]: 0 }));
     advance(false);
   };
@@ -323,7 +323,7 @@ export default function StudyChunk() {
                   <div className="font-jp text-base text-muted-foreground mb-3">{current.reading}</div>
                 )}
                 <div className="text-lg font-semibold mb-3">{current?.meaning}</div>
-                <div className="text-xs text-muted-foreground italic">{current?.part_of_speech} • {current?.jlpt_level}</div>
+                <div className="text-xs text-muted-foreground italic">{current?.part_of_speech} • {current?.level}</div>
                 {current?.example_sentence_jp && (
                   <div className="mt-4 text-xs">
                     <Furigana text={current.example_sentence_jp} show={showFurigana} className="font-jp text-sm leading-loose" />
@@ -370,7 +370,7 @@ export default function StudyChunk() {
       <TutorChat
         vocab={allWords.map(w => ({
           word: w.word, reading: w.reading ?? "", meaning: w.meaning ?? "",
-          part_of_speech: w.part_of_speech ?? "", jlpt_level: w.jlpt_level ?? "",
+          part_of_speech: w.part_of_speech ?? "", jlpt_level: w.level ?? "",
           example_sentence_jp: w.example_sentence_jp ?? "", example_sentence_en: w.example_sentence_en ?? "",
         }))}
         focusWord={current?.word ?? null}
