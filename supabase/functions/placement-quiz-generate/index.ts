@@ -62,37 +62,52 @@ Deno.serve(async (req) => {
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY missing");
 
-    const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          {
-            role: "system",
-            content: `You write ${learning.name} placement quizzes. Always return exactly 20 multiple-choice questions spread evenly across the ${scale} levels ${levels.join(", ")} (about ${perLevel} per level). Each question tests vocabulary recognition (${learning.name} word → its meaning). Write the prompt and all four answer choices in ${nativeLang}. ${learning.morphological ? "Include the kana reading for each word." : "Leave the reading field as an empty string."} Provide 4 plausible distractors.`,
-          },
-          { role: "user", content: "Generate a placement quiz now." },
-        ],
-        tools: [buildTool(learning.name, scale, levels)],
-        tool_choice: { type: "function", function: { name: "build_placement_quiz" } },
-      }),
-    });
-    if (!aiResp.ok) {
-      const t = await aiResp.text();
-      console.error("AI gateway error", aiResp.status, t);
-      if (aiResp.status === 429) return new Response(JSON.stringify({ error: "Rate limit exceeded." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      if (aiResp.status === 402) return new Response(JSON.stringify({ error: "AI credits exhausted." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    const genForLevels = async (batchLevels: string[], count: number) => {
+      const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "google/gemini-3-flash-preview",
+          reasoning_effort: "low",
+          messages: [
+            {
+              role: "system",
+              content: `You write ${learning.name} placement quizzes. Return exactly ${count} multiple-choice questions at ${scale} level(s) ${batchLevels.join(", ")}. Each question tests vocabulary recognition (${learning.name} word → its meaning). Write the prompt and all four answer choices in ${nativeLang}. ${learning.morphological ? "Include the kana reading for each word." : "Leave the reading field as an empty string."} Provide 4 plausible distractors.`,
+            },
+            { role: "user", content: "Generate the questions now." },
+          ],
+          tools: [buildTool(learning.name, scale, batchLevels)],
+          tool_choice: { type: "function", function: { name: "build_placement_quiz" } },
+        }),
+      });
+      if (!aiResp.ok) {
+        const t = await aiResp.text();
+        console.error("AI gateway error", aiResp.status, t);
+        return { status: aiResp.status, questions: [] as any[] };
+      }
+      const aiJson = await aiResp.json();
+      const call = aiJson?.choices?.[0]?.message?.tool_calls?.[0];
+      if (!call?.function?.arguments) return { status: 502, questions: [] as any[] };
+      try {
+        const parsed = JSON.parse(call.function.arguments);
+        return { status: 200, questions: (parsed?.questions ?? []).map((q: any) => ({ ...q, level: q.level ?? batchLevels[0] })) };
+      } catch {
+        return { status: 502, questions: [] as any[] };
+      }
+    };
+
+    // One request per level, run in parallel — far faster than a single 20-question call.
+    const results = await Promise.all(levels.map((lvl) => genForLevels([lvl], perLevel)));
+    const failed = results.find((r) => r.status !== 200);
+    const rawQuestions = results.flatMap((r) => r.questions);
+    if (!rawQuestions.length) {
+      const status = failed?.status ?? 502;
+      if (status === 429) return new Response(JSON.stringify({ error: "Rate limit exceeded." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      if (status === 402) return new Response(JSON.stringify({ error: "AI credits exhausted." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       return new Response(JSON.stringify({ error: "Quiz generation failed" }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
-    const aiJson = await aiResp.json();
-    const call = aiJson?.choices?.[0]?.message?.tool_calls?.[0];
-    if (!call?.function?.arguments) {
-      return new Response(JSON.stringify({ error: "no quiz returned" }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-    const data = JSON.parse(call.function.arguments);
-    // Mirror to legacy field names so older clients keep working.
-    const questions = (data?.questions ?? []).map((q: any) => ({
+
+    const questions = rawQuestions.map((q: any) => ({
       ...q,
       word: q.word ?? q.jp_word ?? "",
       level: q.level ?? q.jlpt_level ?? levels[0],
