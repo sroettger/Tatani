@@ -32,6 +32,7 @@ const App = () => (
       <Sonner theme="dark" />
       <BrowserRouter>
         <AuthProvider>
+          <I18nProvider>
           <Routes>
             <Route path="/auth" element={<Auth />} />
             <Route
