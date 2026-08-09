@@ -8,7 +8,8 @@ import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { Loader2, Sparkles } from "lucide-react";
 import { useI18n } from "@/i18n";
-import { levelsFor, levelRank, levelFromRank, getLearningLanguage } from "@/lib/languages";
+import { levelsFor, levelRank, levelFromRank, getLearningLanguage, LEARNING_LANGUAGES, LearningLangCode } from "@/lib/languages";
+import { SUPPORTED_LANGUAGES, LangCode } from "@/i18n/strings";
 
 type Question = {
   prompt: string;
@@ -22,18 +23,19 @@ type Question = {
   jlpt_level?: string;
 };
 
-type Phase = "intro" | "loading" | "quiz" | "result";
+type Phase = "uiLang" | "learnLang" | "intro" | "loading" | "quiz" | "result";
 
 const qWord = (q: Question) => q.word ?? q.jp_word ?? "";
 const qLevel = (q: Question) => q.level ?? q.jlpt_level ?? "";
 
 export default function Onboarding() {
-  const { user, refreshProfile, progress: langProgress, learningLanguage } = useAuth();
+  const { user, refreshProfile, progress: langProgress, learningLanguage, setLearningLanguage } = useAuth();
   const navigate = useNavigate();
-  const { t, lang } = useI18n();
+  const { t, lang, setLang } = useI18n();
   const langInfo = getLearningLanguage(learningLanguage);
   const levels = levelsFor(learningLanguage);
-  const [phase, setPhase] = useState<Phase>("intro");
+  const [phase, setPhase] = useState<Phase>("uiLang");
+  const [busy, setBusy] = useState(false);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [idx, setIdx] = useState(0);
   const [answers, setAnswers] = useState<{ q: Question; correct: boolean }[]>([]);
@@ -113,6 +115,86 @@ export default function Onboarding() {
   };
 
   const progress = useMemo(() => (questions.length ? Math.round((idx / questions.length) * 100) : 0), [idx, questions.length]);
+
+  const pickUiLanguage = async (code: LangCode) => {
+    setBusy(true);
+    try {
+      if (code !== lang) await setLang(code);
+      setPhase("learnLang");
+    } catch {
+      toast.error(t("settings.languageFailed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const pickLearnLanguage = async (code: LearningLangCode) => {
+    setBusy(true);
+    try {
+      if (code !== learningLanguage) await setLearningLanguage(code);
+      setPhase("intro");
+    } catch {
+      toast.error(t("settings.languageFailed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (phase === "uiLang") {
+    return (
+      <main className="min-h-screen gradient-hero grid place-items-center px-5 py-10">
+        <Card className="w-full max-w-md p-8 gradient-card border-border/50 shadow-card animate-fade-in">
+          <div className="flex justify-center mb-4">
+            <div className="h-14 w-14 rounded-2xl gradient-primary grid place-items-center shadow-elegant">
+              <Sparkles className="h-7 w-7 text-primary-foreground" />
+            </div>
+          </div>
+          <h1 className="text-2xl font-bold text-center mb-2">{t("onboarding.pickUiLanguage")}</h1>
+          <p className="text-sm text-muted-foreground text-center mb-6">{t("onboarding.pickUiLanguageHelp")}</p>
+          <div className="grid gap-2">
+            {SUPPORTED_LANGUAGES.map((l) => (
+              <Button
+                key={l.code}
+                disabled={busy}
+                variant={lang === l.code ? "default" : "outline"}
+                className="h-12 justify-start"
+                onClick={() => pickUiLanguage(l.code)}
+              >
+                {l.native}
+              </Button>
+            ))}
+          </div>
+        </Card>
+      </main>
+    );
+  }
+
+  if (phase === "learnLang") {
+    return (
+      <main className="min-h-screen gradient-hero grid place-items-center px-5 py-10">
+        <Card className="w-full max-w-md p-8 gradient-card border-border/50 shadow-card animate-fade-in">
+          <h1 className="text-2xl font-bold text-center mb-2">{t("onboarding.pickLearnLanguage")}</h1>
+          <p className="text-sm text-muted-foreground text-center mb-6">{t("onboarding.pickLearnLanguageHelp")}</p>
+          <div className="grid gap-2">
+            {LEARNING_LANGUAGES.map((l) => (
+              <Button
+                key={l.code}
+                disabled={busy}
+                variant={learningLanguage === l.code ? "default" : "outline"}
+                className="h-12 justify-start"
+                onClick={() => pickLearnLanguage(l.code)}
+              >
+                <span className="mr-2">{l.flag}</span> {l.native}
+              </Button>
+            ))}
+          </div>
+          <Button variant="ghost" className="w-full mt-3 text-muted-foreground" onClick={() => setPhase("uiLang")}>
+            {t("onboarding.back")}
+          </Button>
+        </Card>
+      </main>
+    );
+  }
 
   if (phase === "intro") {
     return (
