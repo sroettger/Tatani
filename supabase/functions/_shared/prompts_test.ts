@@ -27,7 +27,10 @@ Deno.test("AI functions do not hardcode Japanese in prompts", async () => {
   for (const fn of AI_FUNCTIONS) {
     const src = await read(fn);
     // Prompt text must reference the resolved language, not a literal.
-    const promptish = src.split("\n").filter((l) => /Japanese|日本語/.test(l) && !/^\s*(\/\/|\*)/.test(l));
+    // JLPT level descriptions (N5..N1) are Japanese-only by definition.
+    const promptish = src.split("\n").filter((l) =>
+      /Japanese|日本語/.test(l) && !/^\s*(\/\/|\*)/.test(l) && !/^\s*N[1-5]:/.test(l)
+    );
     for (const line of promptish) {
       assert(
         line.includes("learning.name") ||
