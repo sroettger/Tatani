@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/context/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AppShell } from "@/components/AppShell";
+import { I18nProvider } from "@/i18n";
 
 import Auth from "./pages/Auth";
 import Onboarding from "./pages/Onboarding";
