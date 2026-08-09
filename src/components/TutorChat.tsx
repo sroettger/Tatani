@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Sparkles, Send, X, BrainCircuit } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
+import { useI18n } from "@/i18n";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -139,6 +140,7 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
           vocab,
           jlpt_level: profile?.jlpt_level ?? "none",
           focus_word: focusWord ?? null,
+          ui_language: lang,
         }),
       });
 
