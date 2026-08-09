@@ -34,6 +34,9 @@ Deno.serve(async (req) => {
     const focusWord: string | null = typeof body?.focus_word === "string" ? body.focus_word : null;
     const LANG_NAMES: Record<string, string> = { en: "English", ja: "Japanese" };
     const nativeLang = LANG_NAMES[typeof body?.ui_language === "string" ? body.ui_language : "en"] ?? "English";
+    // Learning language name + level scale (falls back to Japanese/JLPT for old clients).
+    const learningLangName: string = typeof body?.learning_language_name === "string" ? body.learning_language_name : "Japanese";
+    const levelScale: string = typeof body?.level_scale === "string" ? body.level_scale : "JLPT";
 
     if (messages.length === 0) {
       return new Response(JSON.stringify({ error: "messages required" }), {
@@ -53,9 +56,9 @@ Deno.serve(async (req) => {
           .join("\n")
       : "(no vocab loaded)";
 
-    const systemPrompt = `You are a friendly Japanese tutor helping someone learn vocabulary from anime episodes.
+    const systemPrompt = `You are a friendly ${learningLangName} tutor helping someone learn vocabulary from anime episodes.
 
-Learner's JLPT level: ${jlptLevel}
+Learner's ${levelScale} level: ${jlptLevel}
 ${focusWord ? `They're focused on this word right now: ${focusWord}\n` : ""}
 Vocabulary from the current episode:
 ${vocabContext}
@@ -63,9 +66,9 @@ ${vocabContext}
 Guidelines:
 - The learner's own language is ${nativeLang}. Write ALL of your explanations, instructions and translations in ${nativeLang}.
 - Keep answers concise and conversational. Use markdown.
-- Match the learner's JLPT level — simpler grammar/vocab in your Japanese examples for lower levels.
-- For example sentences, ALWAYS include both the Japanese and a ${nativeLang} translation.
-- When showing Japanese, include readings (furigana style: 漢字(かんじ)) for words above the learner's level.
+- Match the learner's ${levelScale} level — simpler grammar/vocab in your ${learningLangName} examples for lower levels.
+- For example sentences, ALWAYS include both the ${learningLangName} and a ${nativeLang} translation.
+- When showing Japanese text, include readings (furigana style: 漢字(かんじ)) for words above the learner's level. Skip this for non-Japanese languages.
 - If asked about a word not in the episode list, you can still help — just answer naturally.
 - Use the mark_word_known tool when the learner clearly says they know a word (e.g. "I know this", "got it", "mark as known"). Confirm afterwards.
 - Use the start_mini_quiz tool when the learner asks to be quizzed or wants practice. After calling it, briefly tell them the quiz has started.`;
@@ -79,7 +82,7 @@ Guidelines:
           parameters: {
             type: "object",
             properties: {
-              word: { type: "string", description: "The Japanese word (kanji form if available)" },
+              word: { type: "string", description: "The target-language word (dictionary/kanji form if available)" },
             },
             required: ["word"],
             additionalProperties: false,

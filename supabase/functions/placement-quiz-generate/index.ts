@@ -1,16 +1,17 @@
-// Generate a JLPT placement quiz (~20 adaptive questions across N5→N1) via Lovable AI.
+// Generate a placement quiz (~20 adaptive questions across the learner's level scale) via Lovable AI.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { getUserLanguages, uiLanguageName } from "../_shared/languages.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const TOOL = {
+const buildTool = (targetName: string, scale: string, levels: string[]) => ({
   type: "function",
   function: {
     name: "build_placement_quiz",
-    description: "Build a 20-question adaptive Japanese placement quiz spanning JLPT N5 to N1.",
+    description: `Build a 20-question adaptive ${targetName} placement quiz spanning ${levels[0]} to ${levels[levels.length - 1]}.`,
     parameters: {
       type: "object",
       properties: {
@@ -19,14 +20,14 @@ const TOOL = {
           items: {
             type: "object",
             properties: {
-              prompt: { type: "string", description: "The question shown to the user, in English when asking 'what does X mean' style." },
-              jp_word: { type: "string", description: "The Japanese word being tested (dictionary form)." },
-              reading: { type: "string" },
+              prompt: { type: "string", description: "The question shown to the learner, written in their own language." },
+              word: { type: "string", description: `The ${targetName} word being tested (dictionary form).` },
+              reading: { type: "string", description: "Phonetic reading; empty string for languages that don't need one." },
               choices: { type: "array", items: { type: "string" }, minItems: 4, maxItems: 4 },
               correct_index: { type: "integer", minimum: 0, maximum: 3 },
-              jlpt_level: { type: "string", enum: ["N5","N4","N3","N2","N1"] },
+              level: { type: "string", enum: levels, description: `${scale} level of the word.` },
             },
-            required: ["prompt","jp_word","reading","choices","correct_index","jlpt_level"],
+            required: ["prompt", "word", "reading", "choices", "correct_index", "level"],
             additionalProperties: false,
           },
         },
@@ -35,7 +36,7 @@ const TOOL = {
       additionalProperties: false,
     },
   },
-};
+});
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -50,6 +51,14 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
+    const userId = (claims.claims as any).sub as string;
+    const service = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const { learning, uiLanguage } = await getUserLanguages(service, userId);
+    const nativeLang = uiLanguageName(uiLanguage);
+    const scale = learning.scale === "jlpt" ? "JLPT" : "CEFR";
+    const levels = learning.levels;
+    const perLevel = Math.round(20 / levels.length);
+
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY missing");
 
@@ -59,10 +68,13 @@ Deno.serve(async (req) => {
       body: JSON.stringify({
         model: "google/gemini-3-flash-preview",
         messages: [
-          { role: "system", content: "You write Japanese placement quizzes. Always return exactly 20 multiple-choice questions distributed roughly: 4 N5, 4 N4, 4 N3, 4 N2, 4 N1. Each question tests vocabulary recognition (Japanese → English meaning). Provide 4 plausible distractors." },
+          {
+            role: "system",
+            content: `You write ${learning.name} placement quizzes. Always return exactly 20 multiple-choice questions spread evenly across the ${scale} levels ${levels.join(", ")} (about ${perLevel} per level). Each question tests vocabulary recognition (${learning.name} word → its meaning). Write the prompt and all four answer choices in ${nativeLang}. ${learning.morphological ? "Include the kana reading for each word." : "Leave the reading field as an empty string."} Provide 4 plausible distractors.`,
+          },
           { role: "user", content: "Generate a placement quiz now." },
         ],
-        tools: [TOOL],
+        tools: [buildTool(learning.name, scale, levels)],
         tool_choice: { type: "function", function: { name: "build_placement_quiz" } },
       }),
     });
@@ -79,7 +91,16 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: "no quiz returned" }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
     const data = JSON.parse(call.function.arguments);
-    return new Response(JSON.stringify(data), {
+    // Mirror to legacy field names so older clients keep working.
+    const questions = (data?.questions ?? []).map((q: any) => ({
+      ...q,
+      word: q.word ?? q.jp_word ?? "",
+      level: q.level ?? q.jlpt_level ?? levels[0],
+      jp_word: q.word ?? q.jp_word ?? "",
+      jlpt_level: q.level ?? q.jlpt_level ?? levels[0],
+      reading: q.reading ?? "",
+    }));
+    return new Response(JSON.stringify({ questions }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {

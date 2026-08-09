@@ -1,6 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-
-const LANG_NAMES: Record<string, string> = { en: "English", ja: "Japanese" };
+import { getUserLanguages, uiLanguageName } from "../_shared/languages.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -36,12 +35,15 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Gather context: episode info, user JLPT, sentences, studied vocab for this episode
-    const [{ data: ep }, { data: cache }, { data: profile }, { data: chunks }] = await Promise.all([
+    const { learning, uiLanguage, level } = await getUserLanguages(supabase, user.id);
+    const nativeLang = uiLanguageName(uiLanguage);
+    const learnerLevel = level && level !== "none" ? level : learning.levels[0];
+
+    // Gather context: episode info, sentences, studied vocab for this episode
+    const [{ data: ep }, { data: cache }, { data: chunks }] = await Promise.all([
       supabase.from("episodes").select("episode_number,title_jp,title_en").eq("id", episode_id).maybeSingle(),
-      supabase.from("episode_vocab_cache").select("vocab,sentences").eq("episode_id", episode_id).maybeSingle(),
-      supabase.from("profiles").select("jlpt_level,display_name,ui_language").eq("user_id", user.id).maybeSingle(),
-      supabase.from("study_chunks").select("id").eq("user_id", user.id).eq("episode_id", episode_id).not("studied_at", "is", null),
+      supabase.from("episode_vocab_cache").select("vocab,sentences").eq("episode_id", episode_id).eq("language", learning.code).maybeSingle(),
+      supabase.from("study_chunks").select("id").eq("user_id", user.id).eq("episode_id", episode_id).eq("learning_language", learning.code).not("studied_at", "is", null),
     ]);
 
     const chunkIds = (chunks ?? []).map((c: any) => c.id);
@@ -54,23 +56,21 @@ Deno.serve(async (req) => {
       studiedWords = (cw ?? []) as any;
     }
 
-    const nativeLang = LANG_NAMES[(profile as any)?.ui_language ?? "en"] ?? "English";
-    const jlpt = profile?.jlpt_level && profile.jlpt_level !== "none" ? profile.jlpt_level : "N5";
     // Use as many cached sentences as we can — these ARE the episode's plot for the AI.
     const allSentences = ((cache?.sentences ?? []) as any[]);
-    const sentenceContext = allSentences.map((s: any, i: number) => `[${i + 1}] JP: ${s.jp}\n    EN: ${s.en}`).join("\n");
+    const sentenceContext = allSentences.map((s: any, i: number) => `[${i + 1}] ${learning.name}: ${s.jp}\n    ${nativeLang}: ${s.en}`).join("\n");
     const wordList = studiedWords.length
-      ? studiedWords.map(w => `- ${w.word}（${w.reading}）= ${w.meaning}`).join("\n")
+      ? studiedWords.map(w => w.reading ? `- ${w.word}（${w.reading}）= ${w.meaning}` : `- ${w.word} = ${w.meaning}`).join("\n")
       : "(none yet)";
 
-    const systemPrompt = `あなたはユーザーが今見たアニメのエピソードについて、日本語で楽しく話し合う会話パートナーです。
+    const systemPrompt = `You are a conversation partner discussing, in ${learning.name}, an anime episode the learner just watched.
 
-LEARNER LEVEL: JLPT ${jlpt}
+LEARNER LEVEL: ${learning.scale === "jlpt" ? "JLPT" : "CEFR"} ${learnerLevel}
 EPISODE: ${ep?.episode_number ?? "?"}${ep?.title_en ? ` — ${ep.title_en}` : ""}
 
 YOUR ROLE:
-- Always reply in Japanese (日本語のみ).
-- Match the learner's level (${jlpt}). Use simple grammar and vocabulary they can understand.
+- Always reply in ${learning.name} (never switch languages for the main reply).
+- Match the learner's level (${learnerLevel}). Use simple grammar and vocabulary they can understand.
 - You HAVE WATCHED THIS EPISODE — the numbered subtitle lines below ARE the actual dialogue. Refer to specific moments, characters' lines, and events from those subtitles. Do NOT make up plot points that aren't supported by the subtitles.
 - Ask SPECIFIC, CONCRETE questions about things that actually happened in this episode (a particular line a character said, a specific event, an emotional moment), not generic questions like "did you like it?".
 - Prefer using the learner's RECENTLY STUDIED WORDS below when they fit naturally — this reinforces their learning.
@@ -78,19 +78,19 @@ YOUR ROLE:
 - Try to rotate through different studied words across the conversation rather than reusing the same ones.
 - Keep responses SHORT (2-4 sentences max) so it feels like a real conversation.
 - The learner's own language is ${nativeLang}. Any explanation, translation or meta-comment must be written in ${nativeLang}.
-- If the learner writes in ${nativeLang} instead of Japanese, gently encourage Japanese: respond mostly in Japanese.
-- After your Japanese reply, on a NEW LINE, add a ${nativeLang} translation in italics like: *(${nativeLang}: ...)* — this helps the learner check understanding without breaking the Japanese flow.
+- If the learner writes in ${nativeLang} instead of ${learning.name}, gently encourage ${learning.name}: respond mostly in ${learning.name}.
+- After your ${learning.name} reply, on a NEW LINE, add a ${nativeLang} translation in italics like: *(${nativeLang}: ...)* — this helps the learner check understanding without breaking the ${learning.name} flow.
 - If you use a vocabulary word from their studied list, you may bold it with **word** so the UI can highlight it.
 - Be warm, curious, and fun — like a friend who just watched the episode with them.
 
-GENTLE CORRECTIONS (only when the learner writes Japanese):
-- If their last message contains unnatural grammar, wrong particles, awkward word choice, or a clear mistake, gently correct it BEFORE your normal reply.
+GENTLE CORRECTIONS (only when the learner writes ${learning.name}):
+- If their last message contains unnatural grammar, wrong word choice, or a clear mistake, gently correct it BEFORE your normal reply.
 - Format the correction block on its own lines at the very TOP of your response, like this exactly:
-  > 💡 もっと自然に: 「<corrected Japanese>」
+  > 💡 More natural: "<corrected ${learning.name}>"
   > *(You wrote "<their original phrase>" — <very brief reason in ${nativeLang}, max 1 short sentence>)*
-- Then leave a blank line and continue with your normal Japanese reply + ${nativeLang} translation.
-- Only correct ACTUAL mistakes — never nitpick, never correct stylistic choices, never correct beginners for not using advanced grammar. If their Japanese is fine (even if simple), skip the correction entirely.
-- Never correct messages written in ${nativeLang} — just reply normally and encourage Japanese.
+- Then leave a blank line and continue with your normal ${learning.name} reply + ${nativeLang} translation.
+- Only correct ACTUAL mistakes — never nitpick, never correct stylistic choices, never correct beginners for not using advanced grammar. If their ${learning.name} is fine (even if simple), skip the correction entirely.
+- Never correct messages written in ${nativeLang} — just reply normally and encourage ${learning.name}.
 - At most ONE correction per reply, focused on the single most important issue.
 
 LEARNER'S RECENTLY STUDIED WORDS (use these when natural):
@@ -104,7 +104,7 @@ ${sentenceContext || "(no subtitles available — ask general questions instead)
     const finalMessages = auto_start && messages.length === 0
       ? [{
           role: "user",
-          content: "Start our conversation. Greet me briefly, then ask ONE specific, concrete question in Japanese about something that actually happened in this episode (reference a specific moment, line, or event from the subtitles). IMPORTANT: weave 1-2 of my recently studied words into your greeting/question naturally and bold them with **word**. Keep it short and inviting.",
+          content: `Start our conversation. Greet me briefly, then ask ONE specific, concrete question in ${learning.name} about something that actually happened in this episode (reference a specific moment, line, or event from the subtitles). IMPORTANT: weave 1-2 of my recently studied words into your greeting/question naturally and bold them with **word**. Keep it short and inviting.`,
         }]
       : messages;
 

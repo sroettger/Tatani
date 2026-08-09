@@ -7,39 +7,49 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { Loader2, Sparkles } from "lucide-react";
+import { useI18n } from "@/i18n";
+import { levelsFor, levelRank, levelFromRank, getLearningLanguage } from "@/lib/languages";
 
 type Question = {
   prompt: string;
-  jp_word: string;
+  /** Word in the target language. `jp_word` kept for backwards compatibility. */
+  word?: string;
+  jp_word?: string;
   reading: string;
   choices: string[];
   correct_index: number;
-  jlpt_level: "N5" | "N4" | "N3" | "N2" | "N1";
+  level?: string;
+  jlpt_level?: string;
 };
 
 type Phase = "intro" | "loading" | "quiz" | "result";
 
-const LEVEL_RANK: Record<Question["jlpt_level"], number> = { N5: 1, N4: 2, N3: 3, N2: 4, N1: 5 };
-const RANK_TO_LEVEL: Record<number, Question["jlpt_level"]> = { 1: "N5", 2: "N4", 3: "N3", 4: "N2", 5: "N1" };
+const qWord = (q: Question) => q.word ?? q.jp_word ?? "";
+const qLevel = (q: Question) => q.level ?? q.jlpt_level ?? "";
 
 export default function Onboarding() {
-  const { user, refreshProfile, profile, learningLanguage } = useAuth();
+  const { user, refreshProfile, progress: langProgress, learningLanguage } = useAuth();
   const navigate = useNavigate();
+  const { t, lang } = useI18n();
+  const langInfo = getLearningLanguage(learningLanguage);
+  const levels = levelsFor(learningLanguage);
   const [phase, setPhase] = useState<Phase>("intro");
   const [questions, setQuestions] = useState<Question[]>([]);
   const [idx, setIdx] = useState(0);
   const [answers, setAnswers] = useState<{ q: Question; correct: boolean }[]>([]);
-  const [resultLevel, setResultLevel] = useState<Question["jlpt_level"]>("N5");
+  const [resultLevel, setResultLevel] = useState<string>(levels[0]);
 
   useEffect(() => {
-    if (profile?.placement_done) navigate("/", { replace: true });
-  }, [profile, navigate]);
+    if (langProgress?.placement_done) navigate("/", { replace: true });
+  }, [langProgress, navigate]);
 
   const startQuiz = async () => {
     setPhase("loading");
-    const { data, error } = await supabase.functions.invoke("placement-quiz-generate", { body: {} });
+    const { data, error } = await supabase.functions.invoke("placement-quiz-generate", {
+      body: { learning_language: learningLanguage, ui_language: lang },
+    });
     if (error || !data?.questions) {
-      toast.error("Couldn't generate quiz", { description: error?.message ?? "Try again in a moment" });
+      toast.error(t("onboarding.failed"), { description: error?.message ?? t("onboarding.failedBody") });
       setPhase("intro");
       return;
     }
@@ -62,36 +72,40 @@ export default function Onboarding() {
       // compute level: highest level where they got >=50% correct
       const byLevel: Record<string, { c: number; t: number }> = {};
       for (const a of next) {
-        const k = a.q.jlpt_level;
+        const k = qLevel(a.q);
         byLevel[k] = byLevel[k] || { c: 0, t: 0 };
         byLevel[k].t += 1;
         if (a.correct) byLevel[k].c += 1;
       }
       let bestRank = 1;
-      for (let r = 5; r >= 1; r--) {
-        const lvl = RANK_TO_LEVEL[r];
-        const stat = byLevel[lvl];
+      for (let r = levels.length; r >= 1; r--) {
+        const stat = byLevel[levels[r - 1]];
         if (stat && stat.c / stat.t >= 0.5) { bestRank = r; break; }
       }
-      const level = RANK_TO_LEVEL[bestRank];
+      const level = levelFromRank(learningLanguage, bestRank);
       setResultLevel(level);
 
       // Seed known words: every word answered correctly + every word at or below level
       if (user) {
         const seedRows = next
-          .filter((a) => a.correct || LEVEL_RANK[a.q.jlpt_level] <= bestRank)
+          .filter((a) => a.correct || levelRank(learningLanguage, qLevel(a.q)) <= bestRank)
           .map((a) => ({
             user_id: user.id,
-            word: a.q.jp_word,
-            reading: a.q.reading,
+            word: qWord(a.q),
+            reading: a.q.reading ?? null,
             state: "known" as const,
-            level: a.q.jlpt_level,
+            level: qLevel(a.q) || null,
             learning_language: learningLanguage,
-          }));
+          }))
+          .filter((r) => r.word);
         if (seedRows.length) {
           await supabase.from("user_word_state").upsert(seedRows, { onConflict: "user_id,word,learning_language" });
         }
-        await supabase.from("profiles").update({ jlpt_level: level, placement_done: true }).eq("user_id", user.id);
+        await supabase
+          .from("user_language_progress")
+          .update({ level, placement_done: true })
+          .eq("user_id", user.id)
+          .eq("learning_language", learningLanguage);
         await refreshProfile();
       }
       setPhase("result");
@@ -109,12 +123,12 @@ export default function Onboarding() {
               <Sparkles className="h-7 w-7 text-primary-foreground" />
             </div>
           </div>
-          <h1 className="text-2xl font-bold text-center mb-2">Welcome!</h1>
+          <h1 className="text-2xl font-bold text-center mb-2">{t("onboarding.welcome")}</h1>
           <p className="text-sm text-muted-foreground text-center mb-8">
-            Let's gauge your Japanese level with a quick 20-question quiz. We'll use this to skip words you already know.
+            {t("onboarding.intro", { lang: langInfo.native })}
           </p>
           <Button onClick={startQuiz} className="w-full h-12 gradient-primary text-primary-foreground">
-            Start placement quiz
+            {t("onboarding.start")}
           </Button>
         </Card>
       </main>
@@ -126,7 +140,7 @@ export default function Onboarding() {
       <main className="min-h-screen grid place-items-center bg-background">
         <div className="flex flex-col items-center gap-3 text-muted-foreground">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          Generating your quiz…
+          {t("onboarding.generating")}
         </div>
       </main>
     );
@@ -136,13 +150,13 @@ export default function Onboarding() {
     return (
       <main className="min-h-screen gradient-hero grid place-items-center px-5">
         <Card className="w-full max-w-md p-8 text-center gradient-card border-border/50 shadow-card animate-fade-in">
-          <div className="text-xs uppercase tracking-widest text-primary font-semibold mb-2">Your level</div>
+          <div className="text-xs uppercase tracking-widest text-primary font-semibold mb-2">{t("onboarding.yourLevel")}</div>
           <div className="text-6xl font-bold gradient-primary bg-clip-text text-transparent mb-4">{resultLevel}</div>
           <p className="text-sm text-muted-foreground mb-6">
-            We'll skip words at or below this level by default — you can always review them.
+            {t("onboarding.levelBody")}
           </p>
           <Button onClick={() => navigate("/")} className="w-full h-12 gradient-primary text-primary-foreground">
-            Continue
+            {t("onboarding.continue")}
           </Button>
         </Card>
       </main>
@@ -154,16 +168,16 @@ export default function Onboarding() {
     <main className="min-h-screen bg-background px-5 py-8">
       <div className="max-w-md mx-auto">
         <div className="flex items-center justify-between mb-3">
-          <span className="text-xs text-muted-foreground">Question {idx + 1} of {questions.length}</span>
-          <span className="text-xs text-primary font-semibold">{current?.jlpt_level}</span>
+          <span className="text-xs text-muted-foreground">{t("onboarding.question", { n: idx + 1, total: questions.length })}</span>
+          <span className="text-xs text-primary font-semibold">{current ? qLevel(current) : ""}</span>
         </div>
         <Progress value={progress} className="mb-8 h-2" />
 
         <Card className="p-6 gradient-card border-border/50 shadow-card mb-6 animate-fade-in" key={idx}>
           <div className="text-center py-4">
-            <div className="text-xs text-muted-foreground mb-2">{current?.prompt || "What does this word mean?"}</div>
-            <div className="font-jp text-5xl font-bold mb-2">{current?.jp_word}</div>
-            <div className="font-jp text-muted-foreground">{current?.reading}</div>
+            <div className="text-xs text-muted-foreground mb-2">{current?.prompt || t("onboarding.defaultPrompt")}</div>
+            <div className={`text-5xl font-bold mb-2 ${langInfo.hasRuby ? "font-jp" : ""}`}>{current ? qWord(current) : ""}</div>
+            {langInfo.hasRuby && current?.reading && <div className="font-jp text-muted-foreground">{current.reading}</div>}
           </div>
         </Card>
 
@@ -184,7 +198,7 @@ export default function Onboarding() {
             className="h-12 mt-2 text-muted-foreground"
             onClick={() => pickAnswer(-1)}
           >
-            I don't know
+            {t("onboarding.dontKnow")}
           </Button>
         </div>
       </div>

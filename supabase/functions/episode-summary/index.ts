@@ -1,6 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-
-const LANG_NAMES: Record<string, string> = { en: "English", ja: "Japanese" };
+import { getUserLanguages, uiLanguageName } from "../_shared/languages.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -38,12 +37,15 @@ Deno.serve(async (req) => {
       });
     }
 
+    const { learning, uiLanguage } = await getUserLanguages(supabase, user.id);
+    const nativeLang = uiLanguageName(uiLanguage);
+
     // Return cached summary if exists and not forced
     if (!force) {
       const { data: existing } = await supabase
         .from("episode_summaries")
         .select("summary_jp,summary_en,used_words,updated_at")
-        .eq("user_id", user.id).eq("episode_id", episode_id).maybeSingle();
+        .eq("user_id", user.id).eq("episode_id", episode_id).eq("learning_language", learning.code).maybeSingle();
       if (existing) {
         return new Response(JSON.stringify({ ...existing, cached: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -52,13 +54,11 @@ Deno.serve(async (req) => {
     }
 
     // Gather context: episode info, sentences, studied words for this episode
-    const [{ data: ep }, { data: cache }, { data: chunks }, { data: prof }] = await Promise.all([
+    const [{ data: ep }, { data: cache }, { data: chunks }] = await Promise.all([
       supabase.from("episodes").select("episode_number,title_jp,title_en").eq("id", episode_id).maybeSingle(),
-      supabase.from("episode_vocab_cache").select("vocab,sentences").eq("episode_id", episode_id).maybeSingle(),
-      supabase.from("study_chunks").select("id").eq("user_id", user.id).eq("episode_id", episode_id).not("studied_at", "is", null),
-      supabase.from("profiles").select("ui_language").eq("user_id", user.id).maybeSingle(),
+      supabase.from("episode_vocab_cache").select("vocab,sentences").eq("episode_id", episode_id).eq("language", learning.code).maybeSingle(),
+      supabase.from("study_chunks").select("id").eq("user_id", user.id).eq("episode_id", episode_id).eq("learning_language", learning.code).not("studied_at", "is", null),
     ]);
-    const nativeLang = LANG_NAMES[(prof as any)?.ui_language ?? "en"] ?? "English";
 
     const chunkIds = (chunks ?? []).map((c: any) => c.id);
     let studiedWords: { word: string; reading: string; meaning: string }[] = [];
@@ -77,19 +77,19 @@ Deno.serve(async (req) => {
     }
 
     const sentences = ((cache?.sentences ?? []) as any[]).slice(0, 30);
-    const wordList = studiedWords.map(w => `${w.word}（${w.reading}）= ${w.meaning}`).join("\n");
-    const sentenceContext = sentences.map((s: any) => `JP: ${s.jp}\nEN: ${s.en}`).join("\n\n");
+    const wordList = studiedWords.map(w => w.reading ? `${w.word}（${w.reading}）= ${w.meaning}` : `${w.word} = ${w.meaning}`).join("\n");
+    const sentenceContext = sentences.map((s: any) => `${learning.name}: ${s.jp}\n${nativeLang}: ${s.en}`).join("\n\n");
 
-    const systemPrompt = `You are a Japanese language tutor writing a recap summary of an anime episode the learner just watched.
+    const systemPrompt = `You are a ${learning.name} language tutor writing a recap summary of an anime episode the learner just watched.
 
-GOAL: Write a short natural Japanese summary of the episode (4-7 sentences) that uses AS MANY of the learner's recently studied words as possible. The summary should feel like a natural recap, not a forced word-list.
+GOAL: Write a short natural ${learning.name} summary of the episode (4-7 sentences) that uses AS MANY of the learner's recently studied words as possible. The summary should feel like a natural recap, not a forced word-list.
 
 RULES:
 - Use the studied words list below — incorporate as many as you naturally can.
 - Wrap each used vocabulary word in **double asterisks** like **食べる** so the UI can highlight them.
-- Keep the Japanese natural and at a level appropriate to the words given.
-- Then provide a translation into the learner's language (${nativeLang}) that mirrors the Japanese (also wrap the corresponding ${nativeLang} meaning of each highlighted word in **double asterisks**).
-- All explanations and non-Japanese text MUST be written in ${nativeLang}.
+- Keep the ${learning.name} natural and at a level appropriate to the words given.
+- Then provide a translation into the learner's language (${nativeLang}) that mirrors the ${learning.name} summary (also wrap the corresponding ${nativeLang} meaning of each highlighted word in **double asterisks**).
+- All explanations and non-${learning.name} text MUST be written in ${nativeLang}.
 - Return ONLY a JSON object, no extra text.`;
 
     const userPrompt = `Episode: ${ep?.episode_number ?? "?"}${ep?.title_en ? ` — ${ep.title_en}` : ""}
@@ -120,8 +120,8 @@ ${sentenceContext}`;
             parameters: {
               type: "object",
               properties: {
-                summary_jp: { type: "string", description: "Japanese recap, 4-7 sentences, with **word** highlights." },
-                summary_en: { type: "string", description: `Translation into ${nativeLang} with **word** highlights matching the JP version.` },
+                summary_jp: { type: "string", description: `${learning.name} recap, 4-7 sentences, with **word** highlights.` },
+                summary_en: { type: "string", description: `Translation into ${nativeLang} with **word** highlights matching the ${learning.name} version.` },
                 used_words: {
                   type: "array",
                   description: "List of vocabulary words from the studied list that were actually used in the summary.",
@@ -172,6 +172,7 @@ ${sentenceContext}`;
     await supabase.from("episode_summaries").upsert({
       user_id: user.id,
       episode_id,
+      learning_language: learning.code,
       summary_jp,
       summary_en,
       used_words,

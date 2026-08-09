@@ -6,6 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { ChevronLeft, Shuffle, Eye, EyeOff, Trophy, Languages } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
+import { useI18n } from "@/i18n";
+import { formatLevel } from "@/lib/languages";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -14,6 +16,7 @@ type VocabItem = {
   reading: string;
   meaning: string;
   jlpt_level: string;
+  level?: string;
 };
 
 type BoardWord = VocabItem & { hit: boolean; free?: boolean };
@@ -45,7 +48,8 @@ function getWinningLines(board: BoardWord[], size: Size): number[][] {
 export default function WatchEpisode() {
   const { episodeId } = useParams();
   const navigate = useNavigate();
-  const { user, learningLanguage } = useAuth();
+  const { user, learningLanguage, learningLanguageInfo } = useAuth();
+  const { t } = useI18n();
   const [episode, setEpisode] = useState<{ episode_number: number } | null>(null);
   const [pool, setPool] = useState<VocabItem[]>([]);
   const [size, setSize] = useState<Size>(4);
@@ -114,7 +118,7 @@ export default function WatchEpisode() {
       const tiles: BoardWord[] = [];
       let pi = 0;
       for (let i = 0; i < total; i++) {
-        if (i === center) tiles.push({ word: "★", reading: "FREE", meaning: "", jlpt_level: "", hit: true, free: true });
+        if (i === center) tiles.push({ word: "★", reading: t("watch.free"), meaning: "", jlpt_level: "", hit: true, free: true });
         else tiles.push({ ...padded[pi++], hit: false });
       }
       setBoard(tiles);
@@ -123,7 +127,7 @@ export default function WatchEpisode() {
       const tiles: BoardWord[] = [];
       let pi = 0;
       for (let i = 0; i < total; i++) {
-        if (i === center) tiles.push({ word: "★", reading: "FREE", meaning: "", jlpt_level: "", hit: true, free: true });
+        if (i === center) tiles.push({ word: "★", reading: t("watch.free"), meaning: "", jlpt_level: "", hit: true, free: true });
         else tiles.push({ ...picked[pi++], hit: false });
       }
       setBoard(tiles);
@@ -138,7 +142,7 @@ export default function WatchEpisode() {
       next[i] = { ...next[i], hit: !next[i].hit };
       const wins = getWinningLines(next, size);
       if (wins.length > bingoCount) {
-        toast.success("BINGO! 🎉", { description: `${wins.length} line${wins.length === 1 ? "" : "s"} complete` });
+        toast.success(t("watch.bingoToastTitle"), { description: t("watch.bingoToastDesc", { n: wins.length }) });
         setBingoCount(wins.length);
       } else if (wins.length < bingoCount) {
         setBingoCount(wins.length);
@@ -159,19 +163,17 @@ export default function WatchEpisode() {
     <div className="max-w-2xl mx-auto px-4 pt-4 pb-10 min-w-0">
       <div className="flex items-center justify-between mb-4">
         <Button variant="ghost" size="icon" onClick={() => navigate(-1)}><ChevronLeft className="h-5 w-5" /></Button>
-        <div className="text-sm text-muted-foreground">Watch · Ep {episode?.episode_number}</div>
+        <div className="text-sm text-muted-foreground">{t("watch.title", { n: episode?.episode_number ?? "" })}</div>
         <div className="w-9" />
       </div>
 
       <Card className="p-4 mb-4 gradient-card border-border/50">
         <div className="flex items-center gap-2 mb-2">
           <Trophy className="h-5 w-5 text-primary" />
-          <h1 className="text-lg font-semibold">Bingo</h1>
-          {bingoCount > 0 && <Badge className="ml-auto gradient-primary text-primary-foreground">{bingoCount} BINGO</Badge>}
+          <h1 className="text-lg font-semibold">{t("watch.bingo")}</h1>
+          {bingoCount > 0 && <Badge className="ml-auto gradient-primary text-primary-foreground">{bingoCount} {t("watch.bingo")}</Badge>}
         </div>
-        <p className="text-xs text-muted-foreground">
-          Listen for these words while watching. Tap a tile when you hear it. Complete a row, column, or diagonal to score a bingo.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("watch.bingoDesc")}</p>
       </Card>
 
       {/* Controls */}
@@ -191,24 +193,22 @@ export default function WatchEpisode() {
           ))}
         </div>
         <Button size="sm" variant="outline" className="h-8" onClick={generateBoard} disabled={pool.length === 0}>
-          <Shuffle className="h-3.5 w-3.5" /> New board
+          <Shuffle className="h-3.5 w-3.5" /> {t("watch.newBoard")}
         </Button>
         <Button size="sm" variant={showReading ? "default" : "outline"} className="h-8" onClick={() => setShowReading(v => !v)}>
-          <Languages className="h-3.5 w-3.5" /> Reading
+          <Languages className="h-3.5 w-3.5" /> {t("watch.reading")}
         </Button>
         <Button size="sm" variant={showMeaning ? "default" : "outline"} className="h-8" onClick={() => setShowMeaning(v => !v)}>
-          {showMeaning ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />} Meaning
+          {showMeaning ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />} {t("watch.meaning")}
         </Button>
       </div>
 
       {loading ? (
-        <Card className="p-6 text-center text-sm text-muted-foreground gradient-card border-border/50">Loading…</Card>
+        <Card className="p-6 text-center text-sm text-muted-foreground gradient-card border-border/50">{t("common.loading")}</Card>
       ) : pool.length === 0 ? (
         <Card className="p-6 text-center gradient-card border-border/50">
-          <h2 className="font-semibold mb-1">No eligible words yet</h2>
-          <p className="text-sm text-muted-foreground">
-            Bingo uses words you're currently learning from this episode. Study a chunk first, then come back.
-          </p>
+          <h2 className="font-semibold mb-1">{t("watch.noEligibleTitle")}</h2>
+          <p className="text-sm text-muted-foreground">{t("watch.noEligibleBody")}</p>
         </Card>
       ) : (
         <>
@@ -236,10 +236,10 @@ export default function WatchEpisode() {
                     <span className="text-2xl">★</span>
                   ) : (
                     <>
-                      <div className="font-jp font-semibold leading-tight break-all" style={{ fontSize: size === 5 ? "0.7rem" : size === 4 ? "0.85rem" : "1rem" }}>
+                      <div className={cn("font-semibold leading-tight break-all", learningLanguageInfo.hasRuby && "font-jp")} style={{ fontSize: size === 5 ? "0.7rem" : size === 4 ? "0.85rem" : "1rem" }}>
                         {tile.word}
                       </div>
-                      {showReading && tile.reading && tile.reading !== tile.word && (
+                      {learningLanguageInfo.hasRuby && showReading && tile.reading && tile.reading !== tile.word && (
                         <div className="text-muted-foreground leading-tight break-all" style={{ fontSize: size === 5 ? "0.55rem" : "0.65rem" }}>
                           {tile.reading}
                         </div>
@@ -256,7 +256,7 @@ export default function WatchEpisode() {
             })}
           </div>
           <div className="text-xs text-muted-foreground text-center">
-            {hitCount} / {totalNonFree} heard · pool: {pool.length} word{pool.length === 1 ? "" : "s"}
+            {t("watch.heardStats", { hit: hitCount, total: totalNonFree, n: pool.length })}
           </div>
         </>
       )}

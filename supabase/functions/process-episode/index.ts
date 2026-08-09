@@ -1,8 +1,11 @@
-// Process an episode's subtitles: tokenize with kuromoji, frequency-rank,
-// then ask the AI for English meanings + grammar based on real example sentences.
+// Process an episode's subtitles: tokenize (kuromoji for Japanese, word-boundary
+// tokenizer for latin-script languages), frequency-rank, then ask the AI for
+// meanings + grammar (in the learner's UI language) based on real example sentences.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { getOfficialJlptLevel } from "../_shared/jlpt-lookup.ts";
 import { extractVocabFromSubtitles, type VocabEntry } from "../_shared/tokenize-jp.ts";
+import { extractVocabLatin } from "../_shared/tokenize-latin.ts";
+import { getUserLanguages, uiLanguageName } from "../_shared/languages.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -10,7 +13,7 @@ const corsHeaders = {
 };
 
 // AI tool: find common Japanese words written in unusual kana-only form (childish speech, stylization)
-// that morphological tokenizers like kuromoji split into meaningless fragments.
+// that morphological tokenizers like kuromoji split into meaningless fragments. Japanese-only.
 const UNUSUAL_KANA_TOOL = {
   type: "function",
   function: {
@@ -27,10 +30,10 @@ const UNUSUAL_KANA_TOOL = {
               kana_surface: { type: "string", description: "EXACT kana substring as it appears in the subtitle text (e.g. じなん)" },
               canonical_word: { type: "string", description: "Standard dictionary form, usually with kanji (e.g. 次男)" },
               reading: { type: "string", description: "Hiragana reading of the canonical word" },
-              meaning: { type: "string", description: "Concise English meaning" },
+              meaning: { type: "string", description: "Concise meaning" },
               part_of_speech: { type: "string", description: "Japanese POS tag like 名詞, 動詞, 形容詞" },
               example_sentence_jp: { type: "string", description: "MUST be an actual line from the supplied subtitle text containing kana_surface" },
-              example_sentence_en: { type: "string", description: "Natural English translation of that sentence" },
+              example_sentence_en: { type: "string", description: "Natural translation of that sentence" },
             },
             required: ["kana_surface", "canonical_word", "reading", "meaning", "part_of_speech", "example_sentence_jp", "example_sentence_en"],
             additionalProperties: false,
@@ -43,49 +46,53 @@ const UNUSUAL_KANA_TOOL = {
   },
 };
 
-// AI tool: translate a batch of vocab + extract grammar from the supplied example sentences.
-const TRANSLATE_TOOL = {
-  type: "function",
-  function: {
-    name: "translate_vocab_and_extract_grammar",
-    description: "For each given Japanese vocabulary item, return an English meaning that fits the example sentence. Also extract grammar points used across these sentences.",
-    parameters: {
-      type: "object",
-      properties: {
-        vocab: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              word: { type: "string", description: "MUST exactly match one of the input words" },
-              meaning: { type: "string", description: "Concise English meaning that fits the example sentence context" },
-              example_sentence_en: { type: "string", description: "Natural English translation of THIS word's example sentence" },
+// Build the translate/grammar tool schema dynamically: level enum depends on the
+// learner's target language (JLPT for Japanese, CEFR for everything else).
+function buildTranslateTool(levels: string[]) {
+  return {
+    type: "function",
+    function: {
+      name: "translate_vocab_and_extract_grammar",
+      description: "For each given target-language vocabulary item, return a meaning (in the learner's own language) that fits the example sentence, plus a difficulty level. Also extract grammar points used across these sentences.",
+      parameters: {
+        type: "object",
+        properties: {
+          vocab: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                word: { type: "string", description: "MUST exactly match one of the input words" },
+                meaning: { type: "string", description: "Concise meaning (in the learner's own language) that fits the example sentence context" },
+                example_sentence_en: { type: "string", description: "Natural translation of THIS word's example sentence, in the learner's own language" },
+                level: { type: "string", enum: [...levels, "none"], description: "Difficulty level of this word on the requested scale" },
+              },
+              required: ["word", "meaning", "example_sentence_en", "level"],
+              additionalProperties: false,
             },
-            required: ["word", "meaning", "example_sentence_en"],
-            additionalProperties: false,
+          },
+          grammar: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                pattern: { type: "string" },
+                meaning: { type: "string" },
+                example_jp: { type: "string", description: "MUST be one of the supplied example sentences" },
+                example_en: { type: "string" },
+                jlpt_level: { type: "string", enum: [...levels, "none"] },
+              },
+              required: ["pattern", "meaning", "example_jp", "example_en", "jlpt_level"],
+              additionalProperties: false,
+            },
           },
         },
-        grammar: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              pattern: { type: "string" },
-              meaning: { type: "string" },
-              example_jp: { type: "string", description: "MUST be one of the supplied example sentences" },
-              example_en: { type: "string" },
-              jlpt_level: { type: "string", enum: ["N5", "N4", "N3", "N2", "N1", "none"] },
-            },
-            required: ["pattern", "meaning", "example_jp", "example_en", "jlpt_level"],
-            additionalProperties: false,
-          },
-        },
+        required: ["vocab", "grammar"],
+        additionalProperties: false,
       },
-      required: ["vocab", "grammar"],
-      additionalProperties: false,
     },
-  },
-};
+  };
+}
 
 function stripSubtitleFormatting(raw: string): string {
   const lines = raw.split(/\r?\n/);
@@ -110,6 +117,7 @@ function stripSubtitleFormatting(raw: string): string {
 // Ask the AI to find common words written in unusual kana-only form (e.g. じなん, ぱぱ, おかあさん)
 // that kuromoji would split into meaningless fragments. Each suggestion is verified against the
 // raw subtitle text before being merged — the AI must not hallucinate words that don't appear.
+// Japanese-only (kuromoji's fragmentation quirks don't apply to latin-script tokenization).
 async function detectUnusualKanaSpellings(
   cleanedText: string,
   lines: string[],
@@ -208,6 +216,7 @@ Deno.serve(async (req) => {
     if (claimsErr || !claims?.claims) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
+    const userId = claims.claims.sub as string;
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY missing");
@@ -222,11 +231,16 @@ Deno.serve(async (req) => {
     const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
 
-    // Cache hit?
+    const { learning, uiLanguage } = await getUserLanguages(supabase, userId);
+    const explainLang = uiLanguageName(uiLanguage);
+    const isJapanese = learning.code === "ja";
+
+    // Cache hit? Cache is keyed per (episode_id, language).
     const { data: existing } = await supabase
       .from("episode_vocab_cache")
       .select("vocab,grammar,sentences")
       .eq("episode_id", episode_id)
+      .eq("language", learning.code)
       .maybeSingle();
     if (existing && Array.isArray(existing.vocab) && existing.vocab.length > 0) {
       await supabase.from("episodes").update({ processing_status: "ready" }).eq("id", episode_id);
@@ -242,34 +256,42 @@ Deno.serve(async (req) => {
     // Tunables.
     const BATCH_SIZE = 40;       // words per AI call (keeps response well under output limits)
     const MAX_CONCURRENCY = 4;
+    const TRANSLATE_TOOL = buildTranslateTool(learning.levels);
 
     // Run extraction in the background; client polls episodes.processing_status.
     const work = (async () => {
       try {
-        // 1. Tokenize + frequency rank (deterministic, no AI).
-        const allVocab = await extractVocabFromSubtitles(cleaned);
-        console.log(`Episode ${episode_id}: tokenized → ${allVocab.length} unique words`);
+        // 1. Tokenize + frequency rank (deterministic, no AI). Kuromoji for Japanese,
+        // word-boundary tokenizer for latin-script target languages.
+        const allVocab = isJapanese
+          ? await extractVocabFromSubtitles(cleaned)
+          : extractVocabLatin(cleaned, learning.code);
+        console.log(`Episode ${episode_id} [${learning.code}]: tokenized → ${allVocab.length} unique words`);
 
-        // 1b. AI pass: detect common words written in unusual kana-only form
-        // (childish speech, stylization) that kuromoji splits into fragments.
-        const knownSurfaces = new Set(allVocab.map((v) => v.word));
-        const subtitleLines = cleaned.split("\n").filter((l) => l.trim().length > 0);
-        const extraKanaVocab = await detectUnusualKanaSpellings(cleaned, subtitleLines, knownSurfaces, LOVABLE_API_KEY);
-        if (extraKanaVocab.length > 0) {
-          console.log(`Episode ${episode_id}: +${extraKanaVocab.length} unusual-kana vocab merged`);
-          allVocab.push(...extraKanaVocab);
+        // 1b. AI pass: detect common Japanese words written in unusual kana-only form
+        // (childish speech, stylization) that kuromoji splits into fragments. JP-only.
+        if (isJapanese) {
+          const knownSurfaces = new Set(allVocab.map((v) => v.word));
+          const subtitleLines = cleaned.split("\n").filter((l) => l.trim().length > 0);
+          const extraKanaVocab = await detectUnusualKanaSpellings(cleaned, subtitleLines, knownSurfaces, LOVABLE_API_KEY);
+          if (extraKanaVocab.length > 0) {
+            console.log(`Episode ${episode_id}: +${extraKanaVocab.length} unusual-kana vocab merged`);
+            allVocab.push(...extraKanaVocab);
+          }
         }
 
-        // 2. Tag JLPT levels from official list (covers ~8000 most common words).
+        // 2. Tag levels. Japanese uses the official JLPT list (covers ~8000 common
+        // words); other languages have no such list so we leave it to the AI below.
         const tagged = allVocab.map((v) => ({
           ...v,
-          jlpt_level: getOfficialJlptLevel(v.word, v.reading) ?? "none",
+          level: isJapanese ? (getOfficialJlptLevel(v.word, v.reading) ?? "none") : "none",
         }));
 
         // 3. Translate everything (no cap).
         const top = tagged;
 
-        // 4. Batch words to AI for English meanings + grammar extraction.
+        // 4. Batch words to AI for meanings (in the learner's UI language) + grammar extraction
+        // (+ difficulty level for non-Japanese languages, since there's no static lookup list).
         const batches: Array<typeof top> = [];
         for (let i = 0; i < top.length; i += BATCH_SIZE) {
           batches.push(top.slice(i, i + BATCH_SIZE));
@@ -289,14 +311,17 @@ Deno.serve(async (req) => {
             .then(({ error }) => { if (error) console.warn("progress update failed:", error.message); });
         };
 
-        const callBatch = async (batch: typeof top, idx: number): Promise<{ meanings: Map<string, { meaning: string; example_en: string }>; grammar: any[] } | null> => {
+        const callBatch = async (batch: typeof top, idx: number): Promise<{ meanings: Map<string, { meaning: string; example_en: string; level: string }>; grammar: any[] } | null> => {
           const wordsPayload = batch.map((v) => ({
             word: v.word,
             reading: v.reading,
             part_of_speech: v.part_of_speech,
             example_sentence_jp: v.example_sentence_jp,
           }));
-          const userMessage = `Translate each Japanese word below to English using its example sentence as context. Also extract any meaningful grammar points used in these sentences (particles, verb forms, common patterns).\n\nWORDS:\n${JSON.stringify(wordsPayload, null, 2)}`;
+          const levelInstruction = isJapanese
+            ? "Each word already has an official JLPT level tagged separately — you do not need to re-assess level, just set it to \"none\"."
+            : `Also assign each word a CEFR difficulty level (${learning.levels.join(", ")}) based on how common/advanced it is in ${learning.name}.`;
+          const userMessage = `Translate each ${learning.name} word below into ${explainLang} using its example sentence as context. ${levelInstruction} Also extract any meaningful grammar points used in these sentences (particles/conjugations/common patterns), each tagged with a difficulty level from: ${learning.levels.join(", ")}.\n\nWORDS:\n${JSON.stringify(wordsPayload, null, 2)}`;
 
           try {
             const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -305,7 +330,7 @@ Deno.serve(async (req) => {
               body: JSON.stringify({
                 model: "google/gemini-2.5-flash",
                 messages: [
-                  { role: "system", content: "You are a Japanese-to-English translator helping language learners. For each word given, provide a concise English meaning that fits its example sentence context, plus a natural English translation of that example sentence. Then extract grammar points (particles, verb conjugations, common patterns) actually used in the supplied sentences. You MUST call the translate_vocab_and_extract_grammar function." },
+                  { role: "system", content: `You are a ${learning.name}-to-${explainLang} translator helping language learners. For each word given, provide a concise ${explainLang} meaning that fits its example sentence context, plus a natural ${explainLang} translation of that example sentence. Then extract grammar points actually used in the supplied sentences, explained in ${explainLang}. You MUST call the translate_vocab_and_extract_grammar function.` },
                   { role: "user", content: userMessage },
                 ],
                 tools: [TRANSLATE_TOOL],
@@ -320,9 +345,9 @@ Deno.serve(async (req) => {
             const call = aiJson?.choices?.[0]?.message?.tool_calls?.[0];
             if (!call?.function?.arguments) throw new Error("no_tool_call");
             const parsed = JSON.parse(call.function.arguments);
-            const meanings = new Map<string, { meaning: string; example_en: string }>();
+            const meanings = new Map<string, { meaning: string; example_en: string; level: string }>();
             for (const v of (parsed.vocab ?? [])) {
-              if (v?.word) meanings.set(v.word, { meaning: v.meaning ?? "", example_en: v.example_sentence_en ?? "" });
+              if (v?.word) meanings.set(v.word, { meaning: v.meaning ?? "", example_en: v.example_sentence_en ?? "", level: v.level ?? "none" });
             }
             return { meanings, grammar: parsed.grammar ?? [] };
           } catch (e) {
@@ -334,7 +359,7 @@ Deno.serve(async (req) => {
         };
 
         // Concurrency-limited runner.
-        const results: Array<{ meanings: Map<string, { meaning: string; example_en: string }>; grammar: any[] } | null> = new Array(batches.length);
+        const results: Array<{ meanings: Map<string, { meaning: string; example_en: string; level: string }>; grammar: any[] } | null> = new Array(batches.length);
         let cursor = 0;
         const workers = Array.from({ length: Math.min(MAX_CONCURRENCY, batches.length) }, async () => {
           while (true) {
@@ -346,7 +371,7 @@ Deno.serve(async (req) => {
         await Promise.all(workers);
 
         // 5. Merge translations + dedupe grammar.
-        const allMeanings = new Map<string, { meaning: string; example_en: string }>();
+        const allMeanings = new Map<string, { meaning: string; example_en: string; level: string }>();
         const grammarMap = new Map<string, any>();
         let okBatches = 0;
         for (const r of results) {
@@ -361,11 +386,15 @@ Deno.serve(async (req) => {
 
         const finalVocab = top.map((v) => {
           const m = allMeanings.get(v.word);
+          // Japanese: reading comes from kuromoji + JLPT lookup. Other languages have
+          // no reading system, so we leave it empty; level comes from the AI instead.
+          const level = isJapanese ? v.level : (m?.level ?? "none");
           return {
             word: v.word,
-            reading: v.reading,
+            reading: isJapanese ? v.reading : "",
             part_of_speech: v.part_of_speech,
-            jlpt_level: v.jlpt_level,
+            jlpt_level: level,
+            level,
             meaning: m?.meaning ?? "",
             example_sentence_jp: v.example_sentence_jp,
             example_sentence_en: m?.example_en ?? "",
@@ -386,12 +415,13 @@ Deno.serve(async (req) => {
 
         await supabase.from("episode_vocab_cache").upsert({
           episode_id,
+          language: learning.code,
           vocab: finalVocab,
           grammar: Array.from(grammarMap.values()),
           sentences,
-        }, { onConflict: "episode_id" });
+        }, { onConflict: "episode_id,language" });
         await supabase.from("episodes").update({ processing_status: "ready" }).eq("id", episode_id);
-        console.log(`Episode ${episode_id} done: ${finalVocab.length} vocab (${okBatches}/${batches.length} batches ok), ${grammarMap.size} grammar, ${sentences.length} sentences`);
+        console.log(`Episode ${episode_id} [${learning.code}] done: ${finalVocab.length} vocab (${okBatches}/${batches.length} batches ok), ${grammarMap.size} grammar, ${sentences.length} sentences`);
       } catch (e) {
         console.error(`Episode ${episode_id} failed:`, e instanceof Error ? e.message : e);
         await supabase.from("episodes").update({ processing_status: "failed" }).eq("id", episode_id);

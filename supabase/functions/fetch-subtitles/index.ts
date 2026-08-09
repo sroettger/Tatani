@@ -1,6 +1,8 @@
-// Try to auto-fetch JP subtitles from Jimaku for an episode.
+// Try to auto-fetch subtitles for an episode. Only Japanese is supported via
+// Jimaku today; other learning languages fall back to manual upload in the UI.
 // Requires JIMAKU_API_KEY (optional). If absent or not found, returns { found: false }.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { getUserLanguages } from "../_shared/languages.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -20,6 +22,7 @@ Deno.serve(async (req) => {
     if (claimsErr || !claims?.claims) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
+    const userId = claims.claims.sub as string;
 
     const { episode_id } = await req.json();
     if (!episode_id) {
@@ -30,6 +33,16 @@ Deno.serve(async (req) => {
 
     const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
+
+    const { learning } = await getUserLanguages(supabase, userId);
+
+    // Jimaku only hosts Japanese subtitles. For other learning languages, the UI
+    // should fall back to manual subtitle upload.
+    if (learning.code !== "ja") {
+      return new Response(JSON.stringify({ found: false, reason: "unsupported_language", language: learning.code }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     // Look up episode + anime context
     const { data: ep, error } = await supabase
@@ -93,7 +106,7 @@ Deno.serve(async (req) => {
     }
     const dl = await fetch(match.url);
     const text = await dl.text();
-    return new Response(JSON.stringify({ found: true, filename: match.name, content: text }), {
+    return new Response(JSON.stringify({ found: true, filename: match.name, content: text, language: learning.code }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
