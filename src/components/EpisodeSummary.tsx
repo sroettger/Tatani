@@ -65,7 +65,7 @@ export function EpisodeSummary({ episodeId, studiedWordCount }: Props) {
       if (data) setSummary(data as any);
       setLoading(false);
     })();
-  }, [user, episodeId]);
+  }, [user, episodeId, learningLanguage]);
 
   const generate = async (force = false) => {
     setGenerating(true);

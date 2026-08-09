@@ -26,7 +26,7 @@ export default function Stats() {
       const { count } = await supabase.from("study_sessions").select("id", { count: "exact", head: true }).eq("user_id", user.id).eq("learning_language", learningLanguage).not("finished_at", "is", null);
       setSessions(count ?? 0);
     })();
-  }, [user]);
+  }, [user, learningLanguage]);
 
   return (
     <div className="max-w-2xl mx-auto">
