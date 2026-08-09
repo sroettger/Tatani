@@ -59,7 +59,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       const dict = DICTS[lang] ?? DICTS.en;
       let s = dict[key] ?? DICTS.en[key] ?? key;
       if (vars) {
-        for (const [k, v] of Object.entries(vars)) s = s.replaceAll(`{${k}}`, String(v));
+        for (const [k, v] of Object.entries(vars)) s = s.split(`{${k}}`).join(String(v));
       }
       return s;
     },
