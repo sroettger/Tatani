@@ -1,57 +1,46 @@
-# Testing strategy for Tatani
+# Add more subtitle sources (fix "no German subtitles found")
 
-Today the project has a vitest setup with only a placeholder test (`src/test/example.test.ts`), so every regression from the multi-language work (library not showing, redirect loop after placement, untranslated toasts, wrong language in prompts) had to be found by hand. The bugs shared one shape: **something ignored the active `learning_language` or `ui_language`**. Tests should target exactly that shape.
+Today `fetch-subtitles` only knows one provider: Jimaku, which hosts Japanese subtitles only. For any non-Japanese learning language it returns `{ found: false, reason: "unsupported_language" }` immediately — that's why Romantic Killer in German fails. The fix is to turn the function into a provider chain that supports all learning languages.
 
-## 1. Unit tests (fast, no backend)
+## Provider chain
 
-- `src/lib/languages.ts` — every supported language has metadata, a level scale (JLPT vs CEFR), TTS locale, `hasRuby` only for Japanese.
-- `src/lib/placementBank.ts` — `buildPlacementQuiz` returns the right count per level for each language, distractors never equal the answer, meanings exist in both `en` and `ja`.
-- `src/i18n/strings.ts` — **key parity test**: `en` and `ja` dictionaries have identical key sets and no empty values. This alone catches missing-translation bugs before they ship.
-- `t()` from `src/i18n` — variable interpolation, fallback to `en` for a missing key.
+Try each in order, first hit wins, per-provider failures are logged and skipped:
 
-## 2. Component tests (jsdom + Testing Library)
+1. **Jimaku** — Japanese only, keep as-is, first for `ja`.
+2. **OpenSubtitles.com** — the largest multi-language source (German, Spanish, French included). REST API v1, needs a free API key plus a user login for download tokens.
+3. **SubDL** — free API key, good anime coverage, returns zip archives.
+4. **Podnapisi** — no key required, useful last-resort fallback.
 
-Render with a mocked auth/i18n context so we can drive the two variables that break things:
+Matching uses the anime title (romaji and English), season number, episode number, and the target language code from `_shared/languages.ts` (`subtitleLang`), scoring candidates so `S01E05`-style names win over a blind first-file pick.
 
-- Settings renders the CEFR selector for German and the JLPT selector for Japanese.
-- Furigana / Japanese-only UI is hidden when the learning language is not Japanese.
-- Onboarding shows language selection before the placement quiz for a new user, and routes to Home after the quiz completes.
-- `ProtectedRoute` sends users to onboarding only when `progress.placement_done` is false for the **active** language — the exact regression we hit.
+## Handling the downloads
 
-A shared test helper (`src/test/renderWithProviders.tsx`) mounts the router, query client, and a fake auth context with configurable `ui_language` / `learning_language`.
+Providers return `.srt`, `.ass`, or a `.zip` containing one of those. A new `_shared/subtitles.ts` module will:
+- unzip archives in-memory and pick the best subtitle entry,
+- decode Latin-1/UTF-16 files correctly (German umlauts break otherwise),
+- normalize SRT/ASS to plain cue text for the processing pipeline.
 
-## 3. Data-layer contract tests
+## Better feedback in the UI
 
-A test that scans the source for Supabase queries touching language-scoped tables (`user_anime`, `user_word_state`, `study_chunks`, `study_sessions`, `quiz_results`, `episode_summaries`) and asserts each one filters or writes `learning_language`. This is a lint-style guard that would have caught the "German anime saved as Japanese" bug at write time.
+Instead of one generic "no subtitles found" toast, the response carries which providers were tried and why each missed. The episode page shows a short reason and keeps the manual-upload path clearly offered as the fallback. New i18n keys go into both `en` and `ja`.
 
-## 4. Edge function tests (Deno)
+## What I need from you
 
-For `add-anime-to-library`, `episode-summary`, `episode-discuss`, `tutor-chat`, `recommend-anime`:
-- resolves the learning language from the profile when not supplied,
-- writes rows with the correct `learning_language`,
-- system prompt contains the user's UI language instruction.
-AI calls are stubbed, so no credits are spent.
+OpenSubtitles and SubDL both require free accounts:
+- **OpenSubtitles**: register at opensubtitles.com, then create an API consumer to get an API key; the download endpoint also needs your account username + password.
+- **SubDL**: register at subdl.com and copy the API key from your profile.
 
-## 5. End-to-end smoke (Playwright, run on demand)
-
-One scripted pass of the highest-risk journey with UI = 日本語 and target = Deutsch: sign in, onboarding, placement quiz, add anime, open episode, study a chunk. Screenshots at each step plus a console-error assertion. This is the check that catches "empty page after the quiz" class of failures.
-
-## 6. Making it stick
-
-- Run the unit + component + contract suites after every change touching languages, onboarding, or data queries.
-- Add a `test:e2e` script for the Playwright pass, run before publishing.
+Once you confirm, I'll open the secure form to collect `OPENSUBTITLES_API_KEY`, `OPENSUBTITLES_USERNAME`, `OPENSUBTITLES_PASSWORD`, and `SUBDL_API_KEY`. Podnapisi needs nothing, so German will work at least partially even before you add keys.
 
 ## Technical notes
 
-- Vitest config already exists and matches `src/**/*.{test,spec}.{ts,tsx}`; no config change needed beyond adding `src/test/renderWithProviders.tsx`.
-- Supabase client is mocked per-test with `vi.mock("@/integrations/supabase/client")` returning a chainable stub that records the filters applied — that recording is what the language-scoping assertions inspect.
-- Deno tests live at `supabase/functions/<name>/index.test.ts` and load env via `std/dotenv/load.ts`.
-- Playwright script lives outside the project checkout, driving `http://localhost:8080`.
+- New file `supabase/functions/_shared/subtitles.ts`: zip handling, encoding detection, SRT/ASS normalization, filename scoring.
+- New file `supabase/functions/fetch-subtitles/providers.ts`: one async function per provider with a shared `SubtitleProvider` signature returning `{ content, filename, provider } | null`.
+- `fetch-subtitles/index.ts` drops the `unsupported_language` early return and instead iterates the ordered provider list for the resolved learning language, returning `{ found, content, filename, provider, attempts }`.
+- OpenSubtitles requires a descriptive `User-Agent` header and a `/login` call to obtain the download token; the token is cached per invocation.
+- `src/pages/EpisodeDetail.tsx`: surface `attempts` in the failure toast, no change to `startProcess`.
 
-## Suggested order
+## Verification
 
-1. i18n key parity + languages/placement bank unit tests (cheapest, highest catch rate)
-2. `renderWithProviders` helper + ProtectedRoute/Onboarding/Settings component tests
-3. Language-scoping contract test
-4. Edge function Deno tests
-5. Playwright smoke journey
+- Call the deployed function directly for Romantic Killer episode 1 with a German learner and confirm a provider hit and readable cue text.
+- Repeat for a Japanese learner to confirm Jimaku still wins first.
