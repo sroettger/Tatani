@@ -61,7 +61,7 @@ export function EpisodeSummary({ episodeId, studiedWordCount }: Props) {
       const { data } = await supabase
         .from("episode_summaries")
         .select("summary_jp,summary_en,used_words")
-        .eq("user_id", user.id).eq("episode_id", episodeId).maybeSingle();
+        .eq("user_id", user.id).eq("episode_id", episodeId).eq("learning_language", learningLanguage).maybeSingle();
       if (data) setSummary(data as any);
       setLoading(false);
     })();

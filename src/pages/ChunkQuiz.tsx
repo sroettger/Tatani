@@ -46,7 +46,7 @@ export default function ChunkQuiz() {
       const { data } = await supabase
         .from("study_chunks")
         .select("id,chunk_index,word_count,studied_at")
-        .eq("user_id", user.id).eq("episode_id", episodeId)
+        .eq("user_id", user.id).eq("episode_id", episodeId).eq("learning_language", learningLanguage)
         .not("studied_at", "is", null)
         .order("chunk_index");
       const list = (data ?? []) as Chunk[];

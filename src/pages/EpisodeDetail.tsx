@@ -96,8 +96,8 @@ export default function EpisodeDetail() {
     setWordStates(map);
     // Words seen in any quiz OR any studied chunk → "Known" defaults to SRS-tracked.
     const [{ data: quizzed }, { data: studiedChunks }] = await Promise.all([
-      supabase.from("quiz_results").select("word").eq("user_id", user.id),
-      supabase.from("study_chunks").select("id").eq("user_id", user.id).not("studied_at", "is", null),
+      supabase.from("quiz_results").select("word").eq("user_id", user.id).eq("learning_language", learningLanguage),
+      supabase.from("study_chunks").select("id").eq("user_id", user.id).eq("learning_language", learningLanguage).not("studied_at", "is", null),
     ]);
     const studiedSet = new Set<string>((quizzed ?? []).map((r: any) => r.word));
     const chunkIds = (studiedChunks ?? []).map((c: any) => c.id);
@@ -112,7 +112,7 @@ export default function EpisodeDetail() {
     const { data: ch } = await supabase
       .from("study_chunks")
       .select("id,chunk_index,word_count,studied_at")
-      .eq("user_id", user.id).eq("episode_id", episodeId)
+      .eq("user_id", user.id).eq("episode_id", episodeId).eq("learning_language", learningLanguage)
       .order("chunk_index");
     setChunks((ch ?? []) as any);
     return ep;
@@ -382,13 +382,13 @@ export default function EpisodeDetail() {
       return;
     }
     setChunkifying(true);
-    await supabase.from("study_chunks").delete().eq("user_id", user.id).eq("episode_id", episodeId);
+    await supabase.from("study_chunks").delete().eq("user_id", user.id).eq("episode_id", episodeId).eq("learning_language", learningLanguage);
     const groups: VocabItem[][] = [];
     for (let i = 0; i < studyable.length; i += CHUNK_SIZE) groups.push(studyable.slice(i, i + CHUNK_SIZE));
     for (let idx = 0; idx < groups.length; idx++) {
       const { data: chunk, error: cErr } = await supabase
         .from("study_chunks")
-        .insert({ user_id: user.id, episode_id: episodeId, chunk_index: idx + 1, word_count: groups[idx].length })
+        .insert({ user_id: user.id, episode_id: episodeId, chunk_index: idx + 1, word_count: groups[idx].length, learning_language: learningLanguage })
         .select("id").single();
       if (cErr || !chunk) { toast.error(t("episode.chunkCreateFailed")); setChunkifying(false); return; }
       const wordRows = groups[idx].map((v, pos) => ({
