@@ -1,6 +1,7 @@
-// Streaming AI tutor for Japanese vocabulary learning.
+// Streaming AI tutor for vocabulary learning in the learner's target language.
 // Uses Lovable AI Gateway. Supports tool calls for marking words known and
 // starting a mini-quiz from the episode's vocab.
+import { langInfo, uiLanguageName } from "../_shared/languages.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -32,11 +33,11 @@ Deno.serve(async (req) => {
     const vocab: VocabItem[] = Array.isArray(body?.vocab) ? body.vocab.slice(0, 80) : [];
     const jlptLevel: string = typeof body?.jlpt_level === "string" ? body.jlpt_level : "none";
     const focusWord: string | null = typeof body?.focus_word === "string" ? body.focus_word : null;
-    const LANG_NAMES: Record<string, string> = { en: "English", ja: "Japanese" };
-    const nativeLang = LANG_NAMES[typeof body?.ui_language === "string" ? body.ui_language : "en"] ?? "English";
-    // Learning language name + level scale (falls back to Japanese/JLPT for old clients).
-    const learningLangName: string = typeof body?.learning_language_name === "string" ? body.learning_language_name : "Japanese";
-    const levelScale: string = typeof body?.level_scale === "string" ? body.level_scale : "JLPT";
+    const nativeLang = uiLanguageName(typeof body?.ui_language === "string" ? body.ui_language : "en");
+    // Learning language resolved from the shared config (falls back to the default).
+    const learning = langInfo(typeof body?.learning_language === "string" ? body.learning_language : null);
+    const learningLangName = learning.name;
+    const levelScale = learning.scale.toUpperCase();
 
     if (messages.length === 0) {
       return new Response(JSON.stringify({ error: "messages required" }), {
@@ -68,7 +69,7 @@ Guidelines:
 - Keep answers concise and conversational. Use markdown.
 - Match the learner's ${levelScale} level — simpler grammar/vocab in your ${learningLangName} examples for lower levels.
 - For example sentences, ALWAYS include both the ${learningLangName} and a ${nativeLang} translation.
-- When showing Japanese text, include readings (furigana style: 漢字(かんじ)) for words above the learner's level. Skip this for non-Japanese languages.
+${learning.morphological ? `- When showing ${learningLangName} text, include readings (furigana style: 漢字(かんじ)) for words above the learner's level.` : ""}
 - If asked about a word not in the episode list, you can still help — just answer naturally.
 - Use the mark_word_known tool when the learner clearly says they know a word (e.g. "I know this", "got it", "mark as known"). Confirm afterwards.
 - Use the start_mini_quiz tool when the learner asks to be quizzed or wants practice. After calling it, briefly tell them the quiz has started.`;
