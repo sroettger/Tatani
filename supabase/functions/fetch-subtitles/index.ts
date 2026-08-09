@@ -1,7 +1,7 @@
 // Auto-fetch subtitles for an episode across multiple providers.
 // Jimaku (Japanese) + OpenSubtitles / SubDL / Podnapisi (all languages).
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { getUserLanguages } from "../_shared/languages.ts";
+import { getUserLanguages, langInfo } from "../_shared/languages.ts";
 import { providersFor } from "./providers.ts";
 
 const corsHeaders = {
