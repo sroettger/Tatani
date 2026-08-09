@@ -23,7 +23,7 @@ type SearchResult = {
 export function AddAnimeDialog({
   open, onOpenChange, onAdded,
 }: { open: boolean; onOpenChange: (o: boolean) => void; onAdded: () => void }) {
-  const { user, learningLanguageInfo } = useAuth();
+  const { user, learningLanguage, learningLanguageInfo } = useAuth();
   const { t } = useI18n();
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
@@ -47,7 +47,7 @@ export function AddAnimeDialog({
 
   const add = async (r: SearchResult) => {
     if (!user) return;
-    const { data, error } = await supabase.functions.invoke("add-anime-to-library", { body: { anime: r } });
+    const { data, error } = await supabase.functions.invoke("add-anime-to-library", { body: { anime: r, learning_language: learningLanguage } });
     if (error || data?.error) {
       toast.error(t("addAnime.addFailed"), { description: error?.message ?? data?.error });
       return;
