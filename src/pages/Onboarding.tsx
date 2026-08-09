@@ -45,21 +45,19 @@ export default function Onboarding() {
     if (langProgress?.placement_done) navigate("/", { replace: true });
   }, [langProgress, navigate]);
 
-  const startQuiz = async () => {
-    setPhase("loading");
-    const { data, error } = await supabase.functions.invoke("placement-quiz-generate", {
-      body: { learning_language: learningLanguage, ui_language: lang },
-    });
-    if (error || !data?.questions) {
-      toast.error(t("onboarding.failed"), { description: error?.message ?? t("onboarding.failedBody") });
+  const startQuiz = () => {
+    const qs = buildPlacementQuiz(learningLanguage as LearningLangCode, lang);
+    if (!qs.length) {
+      toast.error(t("onboarding.failed"), { description: t("onboarding.failedBody") });
       setPhase("intro");
       return;
     }
-    setQuestions(data.questions);
+    setQuestions(qs);
     setIdx(0);
     setAnswers([]);
     setPhase("quiz");
   };
+
 
   const current = questions[idx];
 
