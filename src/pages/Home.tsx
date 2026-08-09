@@ -119,7 +119,7 @@ function SortableLibraryCard({
 }
 
 export default function Home() {
-  const { user, profile } = useAuth();
+  const { user, profile, learningLanguage, progress } = useAuth();
   const { t } = useI18n();
   const navigate = useNavigate();
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
@@ -159,6 +159,7 @@ export default function Home() {
       .from("user_anime")
       .select("id, added_at, position, anime:anime_id(id,title_romaji,title_en,title_jp,cover_url,year,episode_count)")
       .eq("user_id", user.id)
+      .eq("learning_language", learningLanguage)
       .order("position", { ascending: true })
       .order("added_at", { ascending: false });
 
@@ -175,7 +176,7 @@ export default function Home() {
     setLoading(false);
   };
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [user]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [user, learningLanguage]);
 
   const onDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
@@ -206,7 +207,7 @@ export default function Home() {
     <div className="max-w-2xl mx-auto">
       <PageHeader
         title={profile?.display_name ? t("home.welcomeNamed", { name: profile.display_name.split(" ")[0] }) : t("home.welcome")}
-        subtitle={profile?.jlpt_level && profile.jlpt_level !== "none" ? t("home.level", { level: profile.jlpt_level }) : t("home.tagline")}
+        subtitle={progress?.level && progress.level !== "none" ? t("home.level", { level: progress.level }) : t("home.tagline")}
         icon={<Sparkles className="h-4 w-4" />}
       />
 
