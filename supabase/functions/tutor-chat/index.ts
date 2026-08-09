@@ -33,11 +33,11 @@ Deno.serve(async (req) => {
     const vocab: VocabItem[] = Array.isArray(body?.vocab) ? body.vocab.slice(0, 80) : [];
     const jlptLevel: string = typeof body?.jlpt_level === "string" ? body.jlpt_level : "none";
     const focusWord: string | null = typeof body?.focus_word === "string" ? body.focus_word : null;
-    const LANG_NAMES: Record<string, string> = { en: "English", ja: "Japanese" };
-    const nativeLang = LANG_NAMES[typeof body?.ui_language === "string" ? body.ui_language : "en"] ?? "English";
-    // Learning language name + level scale (falls back to Japanese/JLPT for old clients).
-    const learningLangName: string = typeof body?.learning_language_name === "string" ? body.learning_language_name : "Japanese";
-    const levelScale: string = typeof body?.level_scale === "string" ? body.level_scale : "JLPT";
+    const nativeLang = uiLanguageName(typeof body?.ui_language === "string" ? body.ui_language : "en");
+    // Learning language resolved from the shared config (falls back to the default).
+    const learning = langInfo(typeof body?.learning_language === "string" ? body.learning_language : null);
+    const learningLangName = learning.name;
+    const levelScale = learning.scale.toUpperCase();
 
     if (messages.length === 0) {
       return new Response(JSON.stringify({ error: "messages required" }), {
