@@ -32,6 +32,8 @@ Deno.serve(async (req) => {
     const vocab: VocabItem[] = Array.isArray(body?.vocab) ? body.vocab.slice(0, 80) : [];
     const jlptLevel: string = typeof body?.jlpt_level === "string" ? body.jlpt_level : "none";
     const focusWord: string | null = typeof body?.focus_word === "string" ? body.focus_word : null;
+    const LANG_NAMES: Record<string, string> = { en: "English", ja: "Japanese" };
+    const nativeLang = LANG_NAMES[typeof body?.ui_language === "string" ? body.ui_language : "en"] ?? "English";
 
     if (messages.length === 0) {
       return new Response(JSON.stringify({ error: "messages required" }), {
@@ -59,9 +61,10 @@ Vocabulary from the current episode:
 ${vocabContext}
 
 Guidelines:
+- The learner's own language is ${nativeLang}. Write ALL of your explanations, instructions and translations in ${nativeLang}.
 - Keep answers concise and conversational. Use markdown.
 - Match the learner's JLPT level — simpler grammar/vocab in your Japanese examples for lower levels.
-- For example sentences, ALWAYS include both Japanese and English translation.
+- For example sentences, ALWAYS include both the Japanese and a ${nativeLang} translation.
 - When showing Japanese, include readings (furigana style: 漢字(かんじ)) for words above the learner's level.
 - If asked about a word not in the episode list, you can still help — just answer naturally.
 - Use the mark_word_known tool when the learner clearly says they know a word (e.g. "I know this", "got it", "mark as known"). Confirm afterwards.

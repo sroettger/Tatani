@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/context/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AppShell } from "@/components/AppShell";
+import { I18nProvider } from "@/i18n";
 
 import Auth from "./pages/Auth";
 import Onboarding from "./pages/Onboarding";
@@ -32,6 +33,7 @@ const App = () => (
       <Sonner theme="dark" />
       <BrowserRouter>
         <AuthProvider>
+          <I18nProvider>
           <Routes>
             <Route path="/auth" element={<Auth />} />
             <Route
@@ -61,6 +63,7 @@ const App = () => (
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>
+          </I18nProvider>
         </AuthProvider>
       </BrowserRouter>
     </TooltipProvider>

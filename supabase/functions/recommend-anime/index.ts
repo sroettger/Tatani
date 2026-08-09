@@ -79,10 +79,12 @@ Deno.serve(async (req) => {
 
     // Get profile + library
     const [{ data: profile }, { data: libRows }] = await Promise.all([
-      supa.from("profiles").select("jlpt_level, country").eq("user_id", userId).maybeSingle(),
+      supa.from("profiles").select("jlpt_level, country, ui_language").eq("user_id", userId).maybeSingle(),
       supa.from("user_anime").select("anime:anime_id(title_romaji,title_en,title_jp)").eq("user_id", userId),
     ]);
     const level = (profile?.jlpt_level ?? "none") as string;
+    const LANG_NAMES: Record<string, string> = { en: "English", ja: "Japanese" };
+    const nativeLang = LANG_NAMES[((profile as any)?.ui_language ?? "en") as string] ?? "English";
     const country = (profile?.country ?? null) as string | null;
     const ownedTitles = (libRows ?? [])
       .map((r: any) => [r.anime?.title_en, r.anime?.title_romaji, r.anime?.title_jp].filter(Boolean))
@@ -127,6 +129,8 @@ Recommendation rules:
 - Vary picks: don't recommend ${wantCount} near-identical shows.
 
 For each pick, the "reason" must explicitly reference which library anime (or pattern across the library) inspired it AND note why it fits the user's level.
+
+Write every "reason" in ${nativeLang}.
 
 Return ONLY JSON in this exact shape: {"suggestions":[{"title":"...","reason":"one short sentence connecting it to their library and level"}]}.`;
 

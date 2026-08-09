@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Sparkles, Send, X, BrainCircuit } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
+import { useI18n } from "@/i18n";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -34,6 +35,7 @@ export type TutorChatProps = {
 
 export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: TutorChatProps) {
   const { user, profile } = useAuth();
+  const { lang } = useI18n();
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -139,6 +141,7 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
           vocab,
           jlpt_level: profile?.jlpt_level ?? "none",
           focus_word: focusWord ?? null,
+          ui_language: lang,
         }),
       });
 

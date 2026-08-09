@@ -12,6 +12,7 @@ type Profile = {
   total_words_known: number;
   study_streak: number;
   country: string | null;
+  ui_language: string;
 };
 
 type AuthCtx = {

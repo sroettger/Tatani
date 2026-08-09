@@ -7,6 +7,7 @@ import { Plus, ChevronRight, Sparkles, Trash2, GripVertical } from "lucide-react
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
+import { useI18n } from "@/i18n";
 import { AddAnimeDialog } from "@/components/AddAnimeDialog";
 import {
   AlertDialog,
@@ -58,6 +59,7 @@ function SortableLibraryCard({
   onOpen: () => void;
   onRemove: (e: React.MouseEvent) => void;
 }) {
+  const { t } = useI18n();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.id });
   const total = entry.anime.episode_count || 0;
   const pct = total > 0 ? Math.round((entry.processed / total) * 100) : 0;
@@ -78,7 +80,7 @@ function SortableLibraryCard({
           <button
             type="button"
             className="flex items-center justify-center -ml-1 text-muted-foreground hover:text-foreground touch-none cursor-grab active:cursor-grabbing flex-shrink-0"
-            aria-label="Drag to reorder"
+            aria-label={t("home.dragToReorder")}
             onClick={(e) => e.stopPropagation()}
             {...attributes}
             {...listeners}
@@ -88,13 +90,13 @@ function SortableLibraryCard({
           <div className="w-14 h-20 rounded-lg overflow-hidden bg-muted flex-shrink-0">
             {entry.anime.cover_url ? (
               <img src={entry.anime.cover_url} alt={entry.anime.title_romaji} className="w-full h-full object-cover" loading="lazy" />
-            ) : <div className="w-full h-full grid place-items-center text-muted-foreground text-xs">No cover</div>}
+            ) : <div className="w-full h-full grid place-items-center text-muted-foreground text-xs">{t("home.noCover")}</div>}
           </div>
           <div className="flex-1 min-w-0">
             <div className="font-semibold truncate">{entry.anime.title_en ?? entry.anime.title_romaji}</div>
             {entry.anime.title_jp && <div className="font-jp text-xs text-muted-foreground truncate">{entry.anime.title_jp}</div>}
             <div className="text-xs text-muted-foreground mt-1 truncate">
-              {entry.processed} / {total || "?"} eps ready
+              {t("home.epsReady", { done: entry.processed, total: total || "?" })}
             </div>
             <Progress value={pct} className="h-1.5 mt-2" />
           </div>
@@ -105,7 +107,7 @@ function SortableLibraryCard({
               variant="ghost"
               className="h-8 w-8 text-muted-foreground hover:text-destructive"
               onClick={onRemove}
-              aria-label="Remove anime"
+              aria-label={t("home.removeAnime")}
             >
               <Trash2 className="h-4 w-4" />
             </Button>
@@ -118,6 +120,7 @@ function SortableLibraryCard({
 
 export default function Home() {
   const { user, profile } = useAuth();
+  const { t } = useI18n();
   const navigate = useNavigate();
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -141,11 +144,11 @@ export default function Home() {
       .eq("user_id", user.id);
     setRemoving(false);
     if (error) {
-      toast({ title: "Couldn't remove", description: error.message, variant: "destructive" });
+      toast({ title: t("home.removeFailed"), description: error.message, variant: "destructive" });
       return;
     }
     setLibrary(prev => prev.filter(e => e.id !== removeTarget.id));
-    toast({ title: "Removed", description: `${removeTarget.anime.title_en ?? removeTarget.anime.title_romaji} removed from your library.` });
+    toast({ title: t("home.removed"), description: t("home.removedBody", { title: removeTarget.anime.title_en ?? removeTarget.anime.title_romaji }) });
     setRemoveTarget(null);
   };
 
@@ -194,7 +197,7 @@ export default function Home() {
     );
     const failed = updates.find((r) => r.error);
     if (failed?.error) {
-      toast({ title: "Couldn't save order", description: failed.error.message, variant: "destructive" });
+      toast({ title: t("home.orderFailed"), description: failed.error.message, variant: "destructive" });
       load();
     }
   };
@@ -202,27 +205,27 @@ export default function Home() {
   return (
     <div className="max-w-2xl mx-auto">
       <PageHeader
-        title={`Welcome back${profile?.display_name ? `, ${profile.display_name.split(" ")[0]}` : ""}`}
-        subtitle={profile?.jlpt_level && profile.jlpt_level !== "none" ? `Level ${profile.jlpt_level}` : "Anime Trainer"}
+        title={profile?.display_name ? t("home.welcomeNamed", { name: profile.display_name.split(" ")[0] }) : t("home.welcome")}
+        subtitle={profile?.jlpt_level && profile.jlpt_level !== "none" ? t("home.level", { level: profile.jlpt_level }) : t("home.tagline")}
         icon={<Sparkles className="h-4 w-4" />}
       />
 
       <div className="px-5 mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Your anime</h2>
+        <h2 className="text-lg font-semibold">{t("home.yourAnime")}</h2>
         <Button size="sm" className="gradient-primary text-primary-foreground" onClick={() => setAddOpen(true)}>
-          <Plus className="h-4 w-4" /> Add
+          <Plus className="h-4 w-4" /> {t("common.add")}
         </Button>
       </div>
 
       <div className="px-5 grid gap-3 min-w-0">
-        {loading && <div className="text-muted-foreground text-sm">Loading…</div>}
+        {loading && <div className="text-muted-foreground text-sm">{t("common.loading")}</div>}
         {!loading && library.length === 0 && (
           <Card className="p-8 text-center gradient-card border-border/50">
             <div className="text-4xl mb-2">🎬</div>
-            <h3 className="font-semibold mb-1">No anime yet</h3>
-            <p className="text-sm text-muted-foreground mb-4">Add your first anime to get started.</p>
+            <h3 className="font-semibold mb-1">{t("home.noAnimeTitle")}</h3>
+            <p className="text-sm text-muted-foreground mb-4">{t("home.noAnimeBody")}</p>
             <Button onClick={() => setAddOpen(true)} className="gradient-primary text-primary-foreground">
-              <Plus className="h-4 w-4" /> Add anime
+              <Plus className="h-4 w-4" /> {t("home.addAnime")}
             </Button>
           </Card>
         )}
@@ -245,13 +248,13 @@ export default function Home() {
       <AlertDialog open={!!removeTarget} onOpenChange={(o) => !o && setRemoveTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove from library?</AlertDialogTitle>
+            <AlertDialogTitle>{t("home.removeTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              {removeTarget && `"${removeTarget.anime.title_en ?? removeTarget.anime.title_romaji}" will be removed from your library. Your study progress and learned words are kept.`}
+              {removeTarget && t("home.removeBody", { title: removeTarget.anime.title_en ?? removeTarget.anime.title_romaji })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={removing}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={removing}>{t("common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={(e) => { e.preventDefault(); removeAnime(); }}
               disabled={removing}

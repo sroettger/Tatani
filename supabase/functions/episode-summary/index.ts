@@ -1,5 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
+const LANG_NAMES: Record<string, string> = { en: "English", ja: "Japanese" };
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -50,11 +52,13 @@ Deno.serve(async (req) => {
     }
 
     // Gather context: episode info, sentences, studied words for this episode
-    const [{ data: ep }, { data: cache }, { data: chunks }] = await Promise.all([
+    const [{ data: ep }, { data: cache }, { data: chunks }, { data: prof }] = await Promise.all([
       supabase.from("episodes").select("episode_number,title_jp,title_en").eq("id", episode_id).maybeSingle(),
       supabase.from("episode_vocab_cache").select("vocab,sentences").eq("episode_id", episode_id).maybeSingle(),
       supabase.from("study_chunks").select("id").eq("user_id", user.id).eq("episode_id", episode_id).not("studied_at", "is", null),
+      supabase.from("profiles").select("ui_language").eq("user_id", user.id).maybeSingle(),
     ]);
+    const nativeLang = LANG_NAMES[(prof as any)?.ui_language ?? "en"] ?? "English";
 
     const chunkIds = (chunks ?? []).map((c: any) => c.id);
     let studiedWords: { word: string; reading: string; meaning: string }[] = [];
@@ -84,7 +88,8 @@ RULES:
 - Use the studied words list below — incorporate as many as you naturally can.
 - Wrap each used vocabulary word in **double asterisks** like **食べる** so the UI can highlight them.
 - Keep the Japanese natural and at a level appropriate to the words given.
-- Then provide an English translation that mirrors the Japanese (also wrap the corresponding English meaning of each highlighted word in **double asterisks**).
+- Then provide a translation into the learner's language (${nativeLang}) that mirrors the Japanese (also wrap the corresponding ${nativeLang} meaning of each highlighted word in **double asterisks**).
+- All explanations and non-Japanese text MUST be written in ${nativeLang}.
 - Return ONLY a JSON object, no extra text.`;
 
     const userPrompt = `Episode: ${ep?.episode_number ?? "?"}${ep?.title_en ? ` — ${ep.title_en}` : ""}
@@ -116,7 +121,7 @@ ${sentenceContext}`;
               type: "object",
               properties: {
                 summary_jp: { type: "string", description: "Japanese recap, 4-7 sentences, with **word** highlights." },
-                summary_en: { type: "string", description: "English translation with **word** highlights matching the JP version." },
+                summary_en: { type: "string", description: `Translation into ${nativeLang} with **word** highlights matching the JP version.` },
                 used_words: {
                   type: "array",
                   description: "List of vocabulary words from the studied list that were actually used in the summary.",
