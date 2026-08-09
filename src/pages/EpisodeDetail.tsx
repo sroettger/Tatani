@@ -171,9 +171,15 @@ export default function EpisodeDetail() {
     if (error) { setBusy(false); setProgressStage(""); toast.error(t("episode.fetchFailed"), { description: error.message }); return; }
     if (!data?.found) {
       setBusy(false); setProgressStage("");
-      toast.error(t("episode.noSubsFound"), { description: t("episode.tryAgainLater") });
+      const tried = Array.isArray((data as any)?.attempts)
+        ? (data as any).attempts.map((a: any) => a.provider).join(", ")
+        : "";
+      toast.error(t("episode.noSubsFound"), {
+        description: tried ? t("episode.noSubsTried", { providers: tried }) : t("episode.tryAgainLater"),
+      });
       return;
     }
+
     await startProcess(data.content);
   };
 
