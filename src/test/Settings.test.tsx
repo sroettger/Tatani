@@ -35,7 +35,7 @@ describe("Settings", () => {
   it("renders the whole page in Japanese when the UI language is 日本語", () => {
     renderWithProviders(<Settings />, { uiLanguage: "ja", learningLanguage: "de" });
     expect(screen.getByText("設定")).toBeInTheDocument();
-    expect(screen.getByText("CEFRレベル")).toBeInTheDocument();
+    expect(screen.getByText("CEFR レベル")).toBeInTheDocument();
     expect(screen.queryByText("Settings")).not.toBeInTheDocument();
   });
 
