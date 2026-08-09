@@ -79,7 +79,7 @@ Deno.serve(async (req) => {
 
     // Get profile + library
     const [{ data: profile }, { data: libRows }] = await Promise.all([
-      supa.from("profiles").select("jlpt_level, country").eq("user_id", userId).maybeSingle(),
+      supa.from("profiles").select("jlpt_level, country, ui_language").eq("user_id", userId).maybeSingle(),
       supa.from("user_anime").select("anime:anime_id(title_romaji,title_en,title_jp)").eq("user_id", userId),
     ]);
     const level = (profile?.jlpt_level ?? "none") as string;
