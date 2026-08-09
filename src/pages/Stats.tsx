@@ -7,7 +7,7 @@ import { BarChart3 } from "lucide-react";
 import { useI18n } from "@/i18n";
 
 export default function Stats() {
-  const { user, profile } = useAuth();
+  const { user, profile, learningLanguage } = useAuth();
   const { t } = useI18n();
   const [counts, setCounts] = useState({ known: 0, learning: 0, unknown: 0 });
   const [sessions, setSessions] = useState(0);
@@ -18,7 +18,7 @@ export default function Stats() {
       const states: Array<"known" | "learning" | "unknown"> = ["known", "learning", "unknown"];
       const next = { known: 0, learning: 0, unknown: 0 };
       for (const s of states) {
-        const { count } = await supabase.from("user_word_state").select("id", { count: "exact", head: true }).eq("user_id", user.id).eq("state", s);
+        const { count } = await supabase.from("user_word_state").select("id", { count: "exact", head: true }).eq("user_id", user.id).eq("learning_language", learningLanguage).eq("state", s);
         next[s] = count ?? 0;
       }
       setCounts(next);

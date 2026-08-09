@@ -67,6 +67,7 @@ export type Database = {
           created_at: string
           episode_id: string
           id: string
+          learning_language: string
           summary_en: string
           summary_jp: string
           updated_at: string
@@ -77,6 +78,7 @@ export type Database = {
           created_at?: string
           episode_id: string
           id?: string
+          learning_language?: string
           summary_en: string
           summary_jp: string
           updated_at?: string
@@ -87,6 +89,7 @@ export type Database = {
           created_at?: string
           episode_id?: string
           id?: string
+          learning_language?: string
           summary_en?: string
           summary_jp?: string
           updated_at?: string
@@ -101,6 +104,7 @@ export type Database = {
           episode_id: string
           grammar: Json
           id: string
+          language: string
           sentences: Json
           updated_at: string
           vocab: Json
@@ -110,6 +114,7 @@ export type Database = {
           episode_id: string
           grammar?: Json
           id?: string
+          language?: string
           sentences?: Json
           updated_at?: string
           vocab?: Json
@@ -119,6 +124,7 @@ export type Database = {
           episode_id?: string
           grammar?: Json
           id?: string
+          language?: string
           sentences?: Json
           updated_at?: string
           vocab?: Json
@@ -127,7 +133,7 @@ export type Database = {
           {
             foreignKeyName: "episode_vocab_cache_episode_id_fkey"
             columns: ["episode_id"]
-            isOneToOne: true
+            isOneToOne: false
             referencedRelation: "episodes"
             referencedColumns: ["id"]
           },
@@ -188,6 +194,7 @@ export type Database = {
           display_name: string | null
           id: string
           jlpt_level: Database["public"]["Enums"]["jlpt_level"]
+          learning_language: string
           placement_done: boolean
           study_streak: number
           total_words_known: number
@@ -202,6 +209,7 @@ export type Database = {
           display_name?: string | null
           id?: string
           jlpt_level?: Database["public"]["Enums"]["jlpt_level"]
+          learning_language?: string
           placement_done?: boolean
           study_streak?: number
           total_words_known?: number
@@ -216,6 +224,7 @@ export type Database = {
           display_name?: string | null
           id?: string
           jlpt_level?: Database["public"]["Enums"]["jlpt_level"]
+          learning_language?: string
           placement_done?: boolean
           study_streak?: number
           total_words_known?: number
@@ -229,6 +238,7 @@ export type Database = {
         Row: {
           created_at: string
           id: string
+          learning_language: string
           quiz_kind: Database["public"]["Enums"]["quiz_type"]
           session_id: string
           user_id: string
@@ -238,6 +248,7 @@ export type Database = {
         Insert: {
           created_at?: string
           id?: string
+          learning_language?: string
           quiz_kind: Database["public"]["Enums"]["quiz_type"]
           session_id: string
           user_id: string
@@ -247,6 +258,7 @@ export type Database = {
         Update: {
           created_at?: string
           id?: string
+          learning_language?: string
           quiz_kind?: Database["public"]["Enums"]["quiz_type"]
           session_id?: string
           user_id?: string
@@ -305,7 +317,7 @@ export type Database = {
           example_sentence_en: string | null
           example_sentence_jp: string | null
           id: string
-          jlpt_level: Database["public"]["Enums"]["jlpt_level"] | null
+          level: string | null
           meaning: string | null
           part_of_speech: string | null
           position: number
@@ -318,7 +330,7 @@ export type Database = {
           example_sentence_en?: string | null
           example_sentence_jp?: string | null
           id?: string
-          jlpt_level?: Database["public"]["Enums"]["jlpt_level"] | null
+          level?: string | null
           meaning?: string | null
           part_of_speech?: string | null
           position: number
@@ -331,7 +343,7 @@ export type Database = {
           example_sentence_en?: string | null
           example_sentence_jp?: string | null
           id?: string
-          jlpt_level?: Database["public"]["Enums"]["jlpt_level"] | null
+          level?: string | null
           meaning?: string | null
           part_of_speech?: string | null
           position?: number
@@ -354,6 +366,7 @@ export type Database = {
           created_at: string
           episode_id: string
           id: string
+          learning_language: string
           studied_at: string | null
           updated_at: string
           user_id: string
@@ -364,6 +377,7 @@ export type Database = {
           created_at?: string
           episode_id: string
           id?: string
+          learning_language?: string
           studied_at?: string | null
           updated_at?: string
           user_id: string
@@ -374,6 +388,7 @@ export type Database = {
           created_at?: string
           episode_id?: string
           id?: string
+          learning_language?: string
           studied_at?: string | null
           updated_at?: string
           user_id?: string
@@ -387,6 +402,7 @@ export type Database = {
           episode_id: string | null
           finished_at: string | null
           id: string
+          learning_language: string
           mode: Database["public"]["Enums"]["study_mode"]
           started_at: string
           user_id: string
@@ -398,6 +414,7 @@ export type Database = {
           episode_id?: string | null
           finished_at?: string | null
           id?: string
+          learning_language?: string
           mode: Database["public"]["Enums"]["study_mode"]
           started_at?: string
           user_id: string
@@ -409,6 +426,7 @@ export type Database = {
           episode_id?: string | null
           finished_at?: string | null
           id?: string
+          learning_language?: string
           mode?: Database["public"]["Enums"]["study_mode"]
           started_at?: string
           user_id?: string
@@ -475,6 +493,7 @@ export type Database = {
           added_at: string
           anime_id: string
           id: string
+          learning_language: string
           position: number
           user_id: string
         }
@@ -482,6 +501,7 @@ export type Database = {
           added_at?: string
           anime_id: string
           id?: string
+          learning_language?: string
           position?: number
           user_id: string
         }
@@ -489,6 +509,7 @@ export type Database = {
           added_at?: string
           anime_id?: string
           id?: string
+          learning_language?: string
           position?: number
           user_id?: string
         }
@@ -501,6 +522,42 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      user_language_progress: {
+        Row: {
+          created_at: string
+          id: string
+          learning_language: string
+          level: string
+          placement_done: boolean
+          study_streak: number
+          total_words_known: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          learning_language: string
+          level?: string
+          placement_done?: boolean
+          study_streak?: number
+          total_words_known?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          learning_language?: string
+          level?: string
+          placement_done?: boolean
+          study_streak?: number
+          total_words_known?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
       }
       user_roles: {
         Row: {
@@ -528,9 +585,10 @@ export type Database = {
           correct_streak: number
           created_at: string
           id: string
-          jlpt_level: Database["public"]["Enums"]["jlpt_level"] | null
           known_source: string | null
           last_reviewed_at: string | null
+          learning_language: string
+          level: string | null
           marked_known_at: string | null
           preference: Database["public"]["Enums"]["word_preference"]
           reading: string | null
@@ -545,9 +603,10 @@ export type Database = {
           correct_streak?: number
           created_at?: string
           id?: string
-          jlpt_level?: Database["public"]["Enums"]["jlpt_level"] | null
           known_source?: string | null
           last_reviewed_at?: string | null
+          learning_language?: string
+          level?: string | null
           marked_known_at?: string | null
           preference?: Database["public"]["Enums"]["word_preference"]
           reading?: string | null
@@ -562,9 +621,10 @@ export type Database = {
           correct_streak?: number
           created_at?: string
           id?: string
-          jlpt_level?: Database["public"]["Enums"]["jlpt_level"] | null
           known_source?: string | null
           last_reviewed_at?: string | null
+          learning_language?: string
+          level?: string | null
           marked_known_at?: string | null
           preference?: Database["public"]["Enums"]["word_preference"]
           reading?: string | null

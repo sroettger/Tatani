@@ -34,7 +34,7 @@ export type TutorChatProps = {
 };
 
 export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: TutorChatProps) {
-  const { user, profile } = useAuth();
+  const { user, profile, learningLanguage } = useAuth();
   const { lang } = useI18n();
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
@@ -66,9 +66,10 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
     if (!user) return;
     const { data: existing } = await supabase
       .from("user_word_state")
-      .select("reading,jlpt_level")
+      .select("reading,level")
       .eq("user_id", user.id)
       .eq("word", word)
+      .eq("learning_language", learningLanguage)
       .maybeSingle();
     const v = vocab.find((x) => x.word === word);
     await supabase.from("user_word_state").upsert(
@@ -76,12 +77,13 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
         user_id: user.id,
         word,
         reading: existing?.reading ?? v?.reading ?? word,
-        jlpt_level: (existing?.jlpt_level ?? (v?.jlpt_level as any)) ?? null,
+        level: (existing?.level ?? v?.jlpt_level) ?? null,
+        learning_language: learningLanguage,
         state: "known",
         correct_streak: 3,
         last_reviewed_at: new Date().toISOString(),
       },
-      { onConflict: "user_id,word" },
+      { onConflict: "user_id,word,learning_language" },
     );
     toast.success(`Marked "${word}" as known`);
     onWordMarkedKnown?.(word);

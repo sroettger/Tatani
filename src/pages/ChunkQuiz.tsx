@@ -12,7 +12,7 @@ import { toast } from "sonner";
 type Chunk = { id: string; chunk_index: number; word_count: number; studied_at: string | null };
 type ChunkWord = {
   word: string; reading: string | null; meaning: string | null;
-  jlpt_level: string | null; part_of_speech: string | null;
+  level: string | null; part_of_speech: string | null;
 };
 
 const KANJI_THRESHOLD = 2;
@@ -20,7 +20,7 @@ const KANJI_THRESHOLD = 2;
 export default function ChunkQuiz() {
   const { episodeId } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, learningLanguage } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [chunks, setChunks] = useState<Chunk[]>([]);
@@ -81,7 +81,7 @@ export default function ChunkQuiz() {
 
     const wordKeys = shuffled.map(w => w.word);
     const { data: states } = await supabase
-      .from("user_word_state").select("word,correct_streak").in("word", wordKeys).eq("user_id", user.id);
+      .from("user_word_state").select("word,correct_streak").in("word", wordKeys).eq("user_id", user.id).eq("learning_language", learningLanguage);
     const pStreak: Record<string, number> = {};
     (states ?? []).forEach((s: any) => {
       pStreak[s.word] = s.correct_streak ?? 0;
@@ -135,9 +135,9 @@ export default function ChunkQuiz() {
       const newStreak = isCorrect ? prev + 1 : 0;
       const newState = isCorrect && newStreak >= 3 ? "known" : (isCorrect ? "learning" : "learning");
       await supabase.from("user_word_state").upsert({
-        user_id: user.id, word: card.word, reading: card.reading ?? null, jlpt_level: (card.jlpt_level as any) ?? null,
+        user_id: user.id, word: card.word, reading: card.reading ?? null, level: card.level ?? null, learning_language: learningLanguage,
         state: newState as any, correct_streak: newStreak, last_reviewed_at: new Date().toISOString(),
-      }, { onConflict: "user_id,word" });
+      }, { onConflict: "user_id,word,learning_language" });
       setPersistStreak(s => ({ ...s, [card.word]: newStreak }));
     }
 

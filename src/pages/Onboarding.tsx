@@ -23,7 +23,7 @@ const LEVEL_RANK: Record<Question["jlpt_level"], number> = { N5: 1, N4: 2, N3: 3
 const RANK_TO_LEVEL: Record<number, Question["jlpt_level"]> = { 1: "N5", 2: "N4", 3: "N3", 4: "N2", 5: "N1" };
 
 export default function Onboarding() {
-  const { user, refreshProfile, profile } = useAuth();
+  const { user, refreshProfile, profile, learningLanguage } = useAuth();
   const navigate = useNavigate();
   const [phase, setPhase] = useState<Phase>("intro");
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -85,10 +85,11 @@ export default function Onboarding() {
             word: a.q.jp_word,
             reading: a.q.reading,
             state: "known" as const,
-            jlpt_level: a.q.jlpt_level,
+            level: a.q.jlpt_level,
+            learning_language: learningLanguage,
           }));
         if (seedRows.length) {
-          await supabase.from("user_word_state").upsert(seedRows, { onConflict: "user_id,word" });
+          await supabase.from("user_word_state").upsert(seedRows, { onConflict: "user_id,word,learning_language" });
         }
         await supabase.from("profiles").update({ jlpt_level: level, placement_done: true }).eq("user_id", user.id);
         await refreshProfile();

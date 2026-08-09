@@ -19,7 +19,7 @@ type VocabItem = {
 export default function StudySession() {
   const { episodeId } = useParams();
   const navigate = useNavigate();
-  const { user, profile } = useAuth();
+  const { user, profile, learningLanguage } = useAuth();
   const [vocab, setVocab] = useState<VocabItem[]>([]);
   const [knownWords, setKnownWords] = useState<Set<string>>(new Set());
   // word -> current correct_streak; words at >=2 show kanji, otherwise hiragana
@@ -51,7 +51,8 @@ export default function StudySession() {
       const { data: states } = await supabase
         .from("user_word_state")
         .select("word,state,correct_streak")
-        .eq("user_id", user.id);
+        .eq("user_id", user.id)
+        .eq("learning_language", learningLanguage);
       const knownSet = new Set((states ?? []).filter((k: any) => k.state === "known").map((k: any) => k.word));
       // Words the user has explicitly interacted with (added back, learning, etc.) — never auto-skip these.
       const trackedSet = new Set((states ?? []).map((k: any) => k.word));
@@ -77,7 +78,7 @@ export default function StudySession() {
         .select("id").single();
       if (sess) setSessionId(sess.id);
     })();
-  }, [episodeId, user, profile?.jlpt_level]);
+  }, [episodeId, user, profile?.jlpt_level, learningLanguage]);
 
   // Quiz only shows words the user hasn't already marked as known (either before
   // this session or during the review tab). Review keeps the original list so users
@@ -93,15 +94,15 @@ export default function StudySession() {
   const recordWord = async (word: string, reading: string, jlpt: string, gotItRight: boolean) => {
     if (!user) return;
     const { data: existing } = await supabase
-      .from("user_word_state").select("correct_streak").eq("user_id", user.id).eq("word", word).maybeSingle();
+      .from("user_word_state").select("correct_streak").eq("user_id", user.id).eq("word", word).eq("learning_language", learningLanguage).maybeSingle();
     const prevStreak = existing?.correct_streak ?? 0;
     const newStreak = gotItRight ? prevStreak + 1 : 0;
 
     // Note: state is only changed via manual marking on the episode page.
     await supabase.from("user_word_state").upsert({
-      user_id: user.id, word, reading, jlpt_level: (jlpt as any) ?? null,
+      user_id: user.id, word, reading, level: jlpt ?? null, learning_language: learningLanguage,
       correct_streak: newStreak, last_reviewed_at: new Date().toISOString(),
-    }, { onConflict: "user_id,word" });
+    }, { onConflict: "user_id,word,learning_language" });
     setStreaks(prev => ({ ...prev, [word]: newStreak }));
   };
 

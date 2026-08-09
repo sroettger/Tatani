@@ -44,7 +44,7 @@ type WordRow = { word: string; state: WordState; preference: WordPref; known_sou
 export default function EpisodeDetail() {
   const { episodeId } = useParams();
   const navigate = useNavigate();
-  const { user, profile } = useAuth();
+  const { user, profile, learningLanguage } = useAuth();
   const { chunkSize: CHUNK_SIZE, queueSize: QUEUE_SIZE } = useStudyPrefs();
   const pollRef = useRef<number | null>(null);
   const [episode, setEpisode] = useState<{ id: string; episode_number: number; processing_status: string; processing_chunks_total: number; processing_chunks_done: number } | null>(null);
@@ -79,7 +79,7 @@ export default function EpisodeDetail() {
     const { data: cache } = await supabase.from("episode_vocab_cache").select("vocab,sentences").eq("episode_id", episodeId).maybeSingle();
     setVocab(((cache?.vocab ?? []) as VocabItem[]));
     setSentences(((cache?.sentences ?? []) as SentenceItem[]));
-    const { data: words } = await supabase.from("user_word_state").select("word,state,preference,known_source,srs_level,srs_due_at").eq("user_id", user.id);
+    const { data: words } = await supabase.from("user_word_state").select("word,state,preference,known_source,srs_level,srs_due_at").eq("user_id", user.id).eq("learning_language", learningLanguage);
     const map = new Map<string, WordRow>();
     (words ?? []).forEach((w: any) => map.set(w.word, {
       word: w.word, state: w.state, preference: w.preference,
@@ -265,7 +265,8 @@ export default function EpisodeDetail() {
       user_id: user.id,
       word: v.word,
       reading: v.reading,
-      jlpt_level: (v.jlpt_level as any) ?? null,
+      level: v.jlpt_level ?? null,
+      learning_language: learningLanguage,
       state: next.state,
       preference: next.preference,
       known_source: next.known_source,
@@ -273,7 +274,7 @@ export default function EpisodeDetail() {
       srs_due_at: next.srs_due_at,
     };
     if (extra?.marked_known_at !== undefined) payload.marked_known_at = extra.marked_known_at;
-    const { error: upsertErr } = await supabase.from("user_word_state").upsert(payload, { onConflict: "user_id,word" });
+    const { error: upsertErr } = await supabase.from("user_word_state").upsert(payload, { onConflict: "user_id,word,learning_language" });
     if (upsertErr) console.error("user_word_state upsert failed:", upsertErr, payload);
   };
 
@@ -306,7 +307,8 @@ export default function EpisodeDetail() {
         user_id: user.id,
         word: v.word,
         reading: v.reading,
-        jlpt_level: (v.jlpt_level as any) ?? null,
+        level: v.jlpt_level ?? null,
+        learning_language: learningLanguage,
         state: "learning" as WordState,
         preference: s.preference,
         known_source: "learned" as KnownSource,
@@ -315,7 +317,7 @@ export default function EpisodeDetail() {
         correct_streak: 0,
       };
     });
-    await supabase.from("user_word_state").upsert(updates as any, { onConflict: "user_id,word" });
+    await supabase.from("user_word_state").upsert(updates as any, { onConflict: "user_id,word,learning_language" });
     setWordStates(m => {
       const nm = new Map(m);
       for (const u of updates) {
@@ -378,7 +380,7 @@ export default function EpisodeDetail() {
         word: v.word,
         reading: v.reading,
         meaning: v.meaning,
-        jlpt_level: (v.jlpt_level as any) ?? null,
+        level: v.jlpt_level ?? null,
         part_of_speech: v.part_of_speech,
         example_sentence_jp: v.example_sentence_jp,
         example_sentence_en: v.example_sentence_en,
