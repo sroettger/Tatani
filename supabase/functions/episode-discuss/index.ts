@@ -1,5 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
+const LANG_NAMES: Record<string, string> = { en: "English", ja: "Japanese" };
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -38,7 +40,7 @@ Deno.serve(async (req) => {
     const [{ data: ep }, { data: cache }, { data: profile }, { data: chunks }] = await Promise.all([
       supabase.from("episodes").select("episode_number,title_jp,title_en").eq("id", episode_id).maybeSingle(),
       supabase.from("episode_vocab_cache").select("vocab,sentences").eq("episode_id", episode_id).maybeSingle(),
-      supabase.from("profiles").select("jlpt_level,display_name").eq("user_id", user.id).maybeSingle(),
+      supabase.from("profiles").select("jlpt_level,display_name,ui_language").eq("user_id", user.id).maybeSingle(),
       supabase.from("study_chunks").select("id").eq("user_id", user.id).eq("episode_id", episode_id).not("studied_at", "is", null),
     ]);
 
@@ -52,6 +54,7 @@ Deno.serve(async (req) => {
       studiedWords = (cw ?? []) as any;
     }
 
+    const nativeLang = LANG_NAMES[(profile as any)?.ui_language ?? "en"] ?? "English";
     const jlpt = profile?.jlpt_level && profile.jlpt_level !== "none" ? profile.jlpt_level : "N5";
     // Use as many cached sentences as we can — these ARE the episode's plot for the AI.
     const allSentences = ((cache?.sentences ?? []) as any[]);
@@ -74,8 +77,9 @@ YOUR ROLE:
 - ACTIVELY weave in 1-3 of the learner's recently studied words in EVERY reply (including the opening question). Pick words that fit the topic naturally — don't force awkward usage. Bold each studied word you use with **word** so the UI highlights it.
 - Try to rotate through different studied words across the conversation rather than reusing the same ones.
 - Keep responses SHORT (2-4 sentences max) so it feels like a real conversation.
-- If the learner writes in English, gently encourage Japanese: respond mostly in Japanese.
-- After your Japanese reply, on a NEW LINE, add an English translation in italics like: *(English: ...)* — this helps the learner check understanding without breaking the Japanese flow.
+- The learner's own language is ${nativeLang}. Any explanation, translation or meta-comment must be written in ${nativeLang}.
+- If the learner writes in ${nativeLang} instead of Japanese, gently encourage Japanese: respond mostly in Japanese.
+- After your Japanese reply, on a NEW LINE, add a ${nativeLang} translation in italics like: *(${nativeLang}: ...)* — this helps the learner check understanding without breaking the Japanese flow.
 - If you use a vocabulary word from their studied list, you may bold it with **word** so the UI can highlight it.
 - Be warm, curious, and fun — like a friend who just watched the episode with them.
 
@@ -83,10 +87,10 @@ GENTLE CORRECTIONS (only when the learner writes Japanese):
 - If their last message contains unnatural grammar, wrong particles, awkward word choice, or a clear mistake, gently correct it BEFORE your normal reply.
 - Format the correction block on its own lines at the very TOP of your response, like this exactly:
   > 💡 もっと自然に: 「<corrected Japanese>」
-  > *(You wrote "<their original phrase>" — <very brief reason in English, max 1 short sentence>)*
-- Then leave a blank line and continue with your normal Japanese reply + English translation.
+  > *(You wrote "<their original phrase>" — <very brief reason in ${nativeLang}, max 1 short sentence>)*
+- Then leave a blank line and continue with your normal Japanese reply + ${nativeLang} translation.
 - Only correct ACTUAL mistakes — never nitpick, never correct stylistic choices, never correct beginners for not using advanced grammar. If their Japanese is fine (even if simple), skip the correction entirely.
-- Never correct English messages — just reply normally and encourage Japanese.
+- Never correct messages written in ${nativeLang} — just reply normally and encourage Japanese.
 - At most ONE correction per reply, focused on the single most important issue.
 
 LEARNER'S RECENTLY STUDIED WORDS (use these when natural):
