@@ -42,9 +42,9 @@ export default function Settings() {
     if (code === lang) return;
     try {
       await setLang(code);
-      toast.success(t("settings.languageUpdated"));
+      toast.success(DICTS[code]?.["settings.languageUpdated"] ?? t("settings.languageUpdated"));
     } catch {
-      toast.error(t("settings.languageFailed"));
+      toast.error(DICTS[code]?.["settings.languageFailed"] ?? t("settings.languageFailed"));
     }
   };
 
