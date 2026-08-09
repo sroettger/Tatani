@@ -1,33 +1,38 @@
+# Learning language: Japanese, Spanish, French, German
 
+Today Tatani is Japanese-only end to end: JLPT levels, furigana/kanji UI, a Japanese tokenizer, and Jimaku as the only subtitle source. This plan generalizes the app so a user can pick which language they are learning, with progress tracked separately per language.
 
-## Goal
-Replace AI-guessed JLPT levels with the **official JLPT vocab list** when the word is on it. Fall back to the AI's level only if the word isn't found.
+## What the user gets
 
-## Approach
+- A "Language I'm learning" setting (Japanese, Spanish, French, German), separate from the existing "language I speak" setting.
+- Everything downstream follows the choice: subtitle fetching, vocabulary extraction, flashcards, quizzes, episode summary, discussion, tutor chat, recommendations.
+- Progress is per language. Switching to Spanish shows an empty Spanish library/word list; switching back to Japanese restores all existing Japanese data untouched.
+- Proficiency levels adapt: JLPT N5-N1 for Japanese, CEFR A1-C2 for Spanish/French/German. Placement/onboarding asks in the right scale.
+- Japanese-specific UI (furigana, kanji-only word preference, reading field) only appears when learning Japanese.
 
-1. **Source data**: Use a public JLPT vocabulary dataset. The cleanest one is [jonowo/jlpt-resources](https://github.com/jonowo/jlpt-resources) or [elzup/jlpt-word-list](https://github.com/elzup/jlpt-word-list) — both list ~8000 words across N5–N1 with kanji + reading.
-2. **Storage**: Build a single JSON file `supabase/functions/_shared/jlpt-vocab.json` keyed by `"word|reading"` (or just `word` with array fallback) → `"N5"|"N4"|"N3"|"N2"|"N1"`. Roughly 200–400 KB gzipped, fine to bundle into the edge function.
-3. **Lookup priority**:
-   - Exact match on `word + reading` → official level.
-   - Fallback: exact match on `word` alone (handles cases where AI gave a different reading) → official level.
-   - No match → keep AI's `jlpt_level`.
-4. **Where to apply**: In `process-episode` edge function, right after Gemini returns the vocab list, run each item through the lookup and overwrite `jlpt_level` if found. This means: future processing → official levels. Already-cached episodes → unchanged unless re-processed.
-5. **Optional**: Add a one-shot "re-tag levels" pass that walks `episode_vocab_cache`, applies the lookup, and updates rows in place. Cheap, no AI calls.
+## Data model
 
-## Files to change
+- `learning_language` column on `profiles` (default `ja`) — the active choice.
+- New `user_language_progress` table keyed by (user_id, learning_language): proficiency level, placement_done, total_words_known, study_streak. Existing profile values migrate into a `ja` row so nothing is lost.
+- Add `learning_language` to `user_word_state`, `study_chunks`, `study_sessions`, `quiz_results`, `user_anime`, `episode_summaries`; backfill existing rows to `ja`. Unique constraint on words becomes (user_id, word, learning_language).
+- `episode_vocab_cache` and `subtitles` get a `language` dimension so one episode can be processed in several languages.
+- Proficiency stored as a plain text code (`N5`..`N1`, `A1`..`C2`) rather than the Japanese-only enum, with a shared mapping table in code.
 
-- New: `supabase/functions/_shared/jlpt-vocab.json` (built from the public dataset; I'll fetch it and trim to `{word, reading, level}` rows).
-- New: `supabase/functions/_shared/jlpt-lookup.ts` — exports `getOfficialJlptLevel(word, reading)`.
-- Edit: `supabase/functions/process-episode/index.ts` — call the lookup after AI extraction.
-- Edit: `supabase/functions/_shared/jlpt-vocab.json` is read via Deno's `import ... assert { type: "json" }`.
+## Pipeline generalization
 
-## Open questions
+- Subtitle sources become pluggable per language: Jimaku stays for Japanese; for Spanish/French/German the fetcher uses OpenSubtitles-style/manual upload, with upload as the guaranteed fallback. Manual `.srt`/`.ass` upload works for every language.
+- Tokenization becomes a per-language adapter: the existing kuromoji path for Japanese, a whitespace + lemma-normalizing path for the European languages.
+- Level tagging: JLPT lookup for Japanese; AI-assigned CEFR levels for the others, cached in `episode_vocab_cache`.
+- All AI edge functions receive both `learning_language` and the user's UI language, and are told which language to teach and which to explain in.
 
-1. **Re-tag existing cached episodes?** Two options:
-   - (a) Only apply to *future* processing — old caches keep AI levels until re-processed.
-   - (b) Add a one-time backfill that re-tags every row in `episode_vocab_cache` right now (no AI cost, just a SQL update powered by the lookup table).
+## UI changes
 
-2. **Reading mismatch policy** — if the AI gave reading "じなん" but the official list has "次男" with reading "じなん" (matches) vs. an entry with a different reading (e.g. okurigana variant), should we:
-   - (a) Strict: only match when reading matches exactly → safer, fewer matches.
-   - (b) Lenient: match by surface word alone if reading mismatch → more coverage, occasional wrong level for homographs.
+- Settings: new "Learning" card with the four languages; switching reloads library/progress for that language.
+- Onboarding: language pick first, then placement in the matching level scale.
+- Level chips, Stats labels, and study screens read the level scale from the active language instead of hardcoding JLPT.
+- Furigana rendering and the "kanji only" word preference are gated to Japanese.
+- New i18n keys for all added strings in both `en` and `ja`.
 
+## Scope note
+
+This is a large change touching schema, all edge functions, and most screens. Suggested build order: (1) schema + per-language progress, (2) setting + UI gating, (3) subtitle/tokenizer adapters, (4) AI functions. Each stage stays working for Japanese throughout.
