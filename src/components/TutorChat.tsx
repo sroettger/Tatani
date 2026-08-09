@@ -35,6 +35,7 @@ export type TutorChatProps = {
 
 export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: TutorChatProps) {
   const { user, profile } = useAuth();
+  const { lang } = useI18n();
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([]);
