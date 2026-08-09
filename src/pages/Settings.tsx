@@ -4,11 +4,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/PageHeader";
 import { useAuth } from "@/context/AuthContext";
-import { Settings as SettingsIcon, LogOut, RotateCw, Trash2, Film, Layers, Languages } from "lucide-react";
+import { Settings as SettingsIcon, LogOut, RotateCw, Trash2, Film, Layers, Languages, GraduationCap } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useI18n, SUPPORTED_LANGUAGES, LangCode } from "@/i18n";
+import { LEARNING_LANGUAGES, LearningLangCode, levelsFor, scaleLabel, formatLevel } from "@/lib/languages";
 import {
   useStudyPrefs,
   CHUNK_SIZE_MIN,
@@ -18,9 +19,6 @@ import {
   DEFAULT_CHUNK_SIZE,
   DEFAULT_QUEUE_SIZE,
 } from "@/hooks/use-study-prefs";
-
-const JLPT_LEVELS = ["N5", "N4", "N3", "N2", "N1"] as const;
-type JlptLevel = typeof JLPT_LEVELS[number];
 
 // Common countries for streaming-region filtering. Extendable.
 const COUNTRIES = [
@@ -35,7 +33,7 @@ const COUNTRIES = [
 ] as const;
 
 export default function Settings() {
-  const { profile, signOut, refreshProfile, user } = useAuth();
+  const { profile, signOut, refreshProfile, user, learningLanguage, learningLanguageInfo, progress, setLearningLanguage } = useAuth();
   const navigate = useNavigate();
   const { t, lang, setLang } = useI18n();
   const { chunkSize, queueSize, setChunkSize, setQueueSize } = useStudyPrefs();
@@ -50,18 +48,30 @@ export default function Settings() {
     }
   };
 
-  const setJlptLevel = async (level: JlptLevel) => {
-    if (!user || profile?.jlpt_level === level) return;
+  const changeLearningLanguage = async (code: LearningLangCode) => {
+    if (code === learningLanguage) return;
+    try {
+      await setLearningLanguage(code);
+      const info = LEARNING_LANGUAGES.find((l) => l.code === code)!;
+      toast.success(t("settings.learningUpdated", { lang: info.native }));
+    } catch {
+      toast.error(t("settings.learningFailed"));
+    }
+  };
+
+  const setLevel = async (level: string) => {
+    if (!user || progress?.level === level) return;
     const { error } = await supabase
-      .from("profiles")
-      .update({ jlpt_level: level, placement_done: true })
-      .eq("user_id", user.id);
+      .from("user_language_progress")
+      .update({ level, placement_done: true })
+      .eq("user_id", user.id)
+      .eq("learning_language", learningLanguage);
     if (error) {
-      toast.error(t("settings.jlptFailed"));
+      toast.error(t("settings.levelFailed"));
       return;
     }
     await refreshProfile();
-    toast.success(t("settings.jlptUpdated", { level }));
+    toast.success(t("settings.levelUpdated", { level }));
   };
 
   const setCountry = async (code: string | null) => {
@@ -80,7 +90,11 @@ export default function Settings() {
 
   const retakePlacement = async () => {
     if (!user) return;
-    await supabase.from("profiles").update({ placement_done: false, jlpt_level: "none" }).eq("user_id", user.id);
+    await supabase
+      .from("user_language_progress")
+      .update({ placement_done: false, level: "none" })
+      .eq("user_id", user.id)
+      .eq("learning_language", learningLanguage);
     await refreshProfile();
     toast.success(t("settings.retakeToast"));
     navigate("/onboarding");
@@ -91,14 +105,15 @@ export default function Settings() {
     if (!confirm(t("settings.resetConfirm"))) return;
     try {
       await Promise.all([
-        supabase.from("user_word_state").delete().eq("user_id", user.id),
-        supabase.from("quiz_results").delete().eq("user_id", user.id),
-        supabase.from("study_sessions").delete().eq("user_id", user.id),
+        supabase.from("user_word_state").delete().eq("user_id", user.id).eq("learning_language", learningLanguage),
+        supabase.from("quiz_results").delete().eq("user_id", user.id).eq("learning_language", learningLanguage),
+        supabase.from("study_sessions").delete().eq("user_id", user.id).eq("learning_language", learningLanguage),
       ]);
       await supabase
-        .from("profiles")
-        .update({ placement_done: false, jlpt_level: "none", total_words_known: 0, study_streak: 0 })
-        .eq("user_id", user.id);
+        .from("user_language_progress")
+        .update({ placement_done: false, level: "none", total_words_known: 0, study_streak: 0 })
+        .eq("user_id", user.id)
+        .eq("learning_language", learningLanguage);
       await refreshProfile();
       toast.success(t("settings.resetDone"));
       navigate("/onboarding");
@@ -130,7 +145,9 @@ export default function Settings() {
             {profile?.avatar_url && <img src={profile.avatar_url} alt="" className="h-12 w-12 rounded-full" />}
             <div>
               <div className="font-semibold">{profile?.display_name ?? t("settings.user")}</div>
-              <div className="text-xs text-muted-foreground">JLPT {profile?.jlpt_level === "none" ? "—" : profile?.jlpt_level}</div>
+              <div className="text-xs text-muted-foreground">
+                {learningLanguageInfo.flag} {learningLanguageInfo.native} · {scaleLabel(learningLanguage)} {formatLevel(progress?.level)}
+              </div>
             </div>
           </div>
         </Card>
@@ -154,14 +171,32 @@ export default function Settings() {
         </Card>
 
         <Card className="p-4 gradient-card border-border/50">
-          <h3 className="font-semibold mb-1">{t("settings.jlpt")}</h3>
-          <p className="text-xs text-muted-foreground mb-3">{t("settings.jlptHelp")}</p>
-          <div className="grid grid-cols-5 gap-2">
-            {JLPT_LEVELS.map((lvl) => (
+          <h3 className="font-semibold mb-1 flex items-center gap-2"><GraduationCap className="h-4 w-4" /> {t("settings.learning")}</h3>
+          <p className="text-xs text-muted-foreground mb-3">{t("settings.learningHelp")}</p>
+          <div className="flex flex-wrap gap-2">
+            {LEARNING_LANGUAGES.map((l) => (
+              <Button
+                key={l.code}
+                size="sm"
+                variant={learningLanguage === l.code ? "default" : "outline"}
+                onClick={() => changeLearningLanguage(l.code)}
+                className="h-9"
+              >
+                <span className="mr-1">{l.flag}</span> {l.native}
+              </Button>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="p-4 gradient-card border-border/50">
+          <h3 className="font-semibold mb-1">{t("settings.level", { scale: scaleLabel(learningLanguage) })}</h3>
+          <p className="text-xs text-muted-foreground mb-3">{t("settings.levelHelp")}</p>
+          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+            {levelsFor(learningLanguage).map((lvl) => (
               <Button
                 key={lvl}
-                variant={profile?.jlpt_level === lvl ? "default" : "outline"}
-                onClick={() => setJlptLevel(lvl)}
+                variant={progress?.level === lvl ? "default" : "outline"}
+                onClick={() => setLevel(lvl)}
                 className="h-10"
               >
                 {lvl}

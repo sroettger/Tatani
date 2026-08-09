@@ -1,5 +1,6 @@
 // Recommend anime via Lovable AI based on JLPT level + exclusions
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { getUserLanguages, uiLanguageName } from "../_shared/languages.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -32,7 +33,13 @@ const LEVEL_GUIDE: Record<string, string> = {
   N3: "Intermediate. Standard slice-of-life, romance, light shounen with everyday speech (e.g. Toradora, Your Lie in April, Barakamon, K-On).",
   N2: "Upper-intermediate. Most mainstream anime, including drama, action, slightly technical themes (e.g. Spy x Family, Haikyuu, Erased).",
   N1: "Advanced. Complex dialogue, dense vocabulary, period pieces, politics, philosophy (e.g. Monogatari, Legend of the Galactic Heroes, Mushishi, Psycho-Pass).",
-  none: "Unknown level — assume beginner-friendly slice-of-life with simple Japanese.",
+  A1: "Absolute beginner. Very simple, slow, everyday dialogue (slice-of-life for kids/families).",
+  A2: "Beginner. Simple slice-of-life, school comedies with clear daily-life vocabulary.",
+  B1: "Intermediate. Standard slice-of-life, romance, light shounen with everyday speech.",
+  B2: "Upper-intermediate. Most mainstream anime, including drama, action, slightly technical themes.",
+  C1: "Advanced. Complex dialogue, dense vocabulary, period pieces, politics, philosophy.",
+  C2: "Near-native. Complex, literary, or highly idiomatic dialogue.",
+  none: "Unknown level — assume beginner-friendly slice-of-life with simple dialogue.",
 };
 
 // Map AniList externalLinks into normalized streaming platform tags.
@@ -78,13 +85,16 @@ Deno.serve(async (req) => {
     } catch { /* no body */ }
 
     // Get profile + library
+    const { learning, uiLanguage, level } = await getUserLanguages(supa, userId);
     const [{ data: profile }, { data: libRows }] = await Promise.all([
-      supa.from("profiles").select("jlpt_level, country, ui_language").eq("user_id", userId).maybeSingle(),
-      supa.from("user_anime").select("anime:anime_id(title_romaji,title_en,title_jp)").eq("user_id", userId),
+      supa.from("profiles").select("country").eq("user_id", userId).maybeSingle(),
+      supa
+        .from("user_anime")
+        .select("anime:anime_id(title_romaji,title_en,title_jp)")
+        .eq("user_id", userId)
+        .eq("learning_language", learning.code),
     ]);
-    const level = (profile?.jlpt_level ?? "none") as string;
-    const LANG_NAMES: Record<string, string> = { en: "English", ja: "Japanese" };
-    const nativeLang = LANG_NAMES[((profile as any)?.ui_language ?? "en") as string] ?? "English";
+    const nativeLang = uiLanguageName(uiLanguage);
     const country = (profile?.country ?? null) as string | null;
     const ownedTitles = (libRows ?? [])
       .map((r: any) => [r.anime?.title_en, r.anime?.title_romaji, r.anime?.title_jp].filter(Boolean))
@@ -96,6 +106,7 @@ Deno.serve(async (req) => {
     }
 
     const guide = LEVEL_GUIDE[level] ?? LEVEL_GUIDE.none;
+    const scaleLabel = learning.scale === "jlpt" ? "JLPT" : "CEFR";
     const libraryByAnime = (libRows ?? []).map((r: any) => {
       const a = r.anime ?? {};
       return [a.title_en, a.title_romaji, a.title_jp].filter(Boolean);
@@ -115,7 +126,7 @@ ${libraryByAnime.map((titles) => `- ${titles.join(" / ")}`).join("\n")}`
     // Ask for more candidates when filtering, since some won't match the platform.
     const wantCount = streamingFilters.length ? 16 : 8;
 
-    const prompt = `Recommend ${wantCount} anime to a Japanese learner at JLPT ${level}.
+    const prompt = `Recommend ${wantCount} anime (dubbed or subtitled in ${learning.name}, or originally in ${learning.name}) to a ${learning.name} learner at ${scaleLabel} ${level}.
 Level guidance: ${guide}
 
 ${librarySection}
@@ -124,7 +135,7 @@ ${exclusionSection}
 
 Recommendation rules:
 - Base picks on what the library reveals about the user's taste (genres, tone, themes, art style, era). If the library is mixed, cover the main threads.
-- Stay appropriate in linguistic difficulty for JLPT ${level}.
+- Stay appropriate in linguistic difficulty for ${scaleLabel} ${level}.
 - Prefer well-known anime easy to find on AniList (use the most common English or romaji title).
 - Vary picks: don't recommend ${wantCount} near-identical shows.
 

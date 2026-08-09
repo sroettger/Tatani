@@ -8,10 +8,16 @@ import { ChevronLeft, Mic, MicOff, Play, Pause, SkipForward, Volume2, RotateCw, 
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
+import { useI18n } from "@/i18n";
+import { levelRank } from "@/lib/languages";
+import { cn } from "@/lib/utils";
+
+const TTS_LANG: Record<string, string> = { ja: "ja-JP", es: "es-ES", fr: "fr-FR", de: "de-DE" };
+const ttsLangFor = (code: string) => TTS_LANG[code] ?? "en-US";
 
 type VocabItem = {
   word: string; reading: string; meaning: string; part_of_speech: string;
-  jlpt_level: string; example_sentence_jp: string; example_sentence_en: string;
+  jlpt_level?: string; level?: string; example_sentence_jp: string; example_sentence_en: string;
 };
 
 type Mode = "review" | "quiz";
@@ -42,13 +48,13 @@ const matchesMeaning = (tokens: string[]) => hasAny(tokens, MEANING_TOKENS);
 const matchesPause = (tokens: string[]) => hasAny(tokens, PAUSE_TOKENS);
 const matchesResume = (tokens: string[]) => hasAny(tokens, RESUME_TOKENS);
 
-const JLPT_RANK: Record<string, number> = { N5: 1, N4: 2, N3: 3, N2: 4, N1: 5, none: 6 };
 const KANJI_THRESHOLD = 2;
 
 export default function VoiceStudySession() {
   const { episodeId } = useParams();
   const navigate = useNavigate();
-  const { user, profile, learningLanguage } = useAuth();
+  const { user, learningLanguage, learningLanguageInfo, progress } = useAuth();
+  const { t } = useI18n();
 
   const [vocab, setVocab] = useState<VocabItem[]>([]);
   const [streaks, setStreaks] = useState<Record<string, number>>({});
@@ -66,6 +72,8 @@ export default function VoiceStudySession() {
   const [supported, setSupported] = useState<boolean>(true);
   const [permissionDenied, setPermissionDenied] = useState<boolean>(false);
   const [recognitionError, setRecognitionError] = useState<string>("");
+
+  const getLevel = (v: VocabItem) => v.level ?? v.jlpt_level ?? "none";
 
   // refs to keep latest values inside SpeechRecognition handlers
   const recognitionRef = useRef<any>(null);
@@ -89,29 +97,29 @@ export default function VoiceStudySession() {
       const { data: states } = await supabase
         .from("user_word_state")
         .select("word,state,correct_streak")
-        .eq("user_id", user.id);
+        .eq("user_id", user.id)
+        .eq("learning_language", learningLanguage);
       const knownSet = new Set((states ?? []).filter((k: any) => k.state === "known").map((k: any) => k.word));
       const trackedSet = new Set((states ?? []).map((k: any) => k.word));
       const streakMap: Record<string, number> = {};
       (states ?? []).forEach((s: any) => { streakMap[s.word] = s.correct_streak ?? 0; });
       setStreaks(streakMap);
 
-      const myLevel = profile?.jlpt_level && profile.jlpt_level !== "none" ? profile.jlpt_level : null;
-      const myRank = myLevel ? JLPT_RANK[myLevel] : 0;
-      const isBelowLevel = (lvl: string) => myRank > 0 && (JLPT_RANK[lvl] ?? 99) < myRank;
+      const myRank = levelRank(learningLanguage, progress?.level);
+      const isBelowLevel = (lvl: string) => myRank > 0 && (levelRank(learningLanguage, lvl) || 99) < myRank;
 
       setVocab(all.filter(v =>
         !knownSet.has(v.word) &&
-        (!isBelowLevel(v.jlpt_level) || trackedSet.has(v.word))
+        (!isBelowLevel(getLevel(v)) || trackedSet.has(v.word))
       ));
 
       const { data: sess } = await supabase
         .from("study_sessions")
-        .insert({ user_id: user.id, episode_id: episodeId, mode: "review", words_studied: 0, words_mastered: 0 })
+        .insert({ user_id: user.id, episode_id: episodeId, mode: "review", words_studied: 0, words_mastered: 0, learning_language: learningLanguage })
         .select("id").single();
       if (sess) setSessionId(sess.id);
     })();
-  }, [episodeId, user, profile?.jlpt_level, learningLanguage]);
+  }, [episodeId, user, progress?.level, learningLanguage]);
 
   // ---------- speech recognition setup ----------
   useEffect(() => {
@@ -157,7 +165,7 @@ export default function VoiceStudySession() {
         setPermissionDenied(true);
         setRunning(false);
         runningRef.current = false;
-        toast.error("Microphone permission denied");
+        toast.error(t("voice.micDeniedToast"));
         return;
       }
     };
@@ -193,7 +201,7 @@ export default function VoiceStudySession() {
   };
 
   // ---------- TTS ----------
-  const speak = (text: string, lang = "ja-JP", rate = 0.95) =>
+  const speak = (text: string, lang = ttsLangFor(learningLanguage), rate = 0.95) =>
     new Promise<void>((resolve) => {
       if (!("speechSynthesis" in window)) return resolve();
       const u = new SpeechSynthesisUtterance(text);
@@ -209,7 +217,7 @@ export default function VoiceStudySession() {
   const showKanji = card ? ((streaks[card.word] ?? 0) >= KANJI_THRESHOLD || card.word === card.reading) : false;
 
   // ---------- DB write ----------
-  const recordWord = async (word: string, reading: string, jlpt: string, gotItRight: boolean) => {
+  const recordWord = async (word: string, reading: string, level: string, gotItRight: boolean) => {
     if (!user) return;
     const { data: existing } = await supabase
       .from("user_word_state").select("correct_streak").eq("user_id", user.id).eq("word", word).eq("learning_language", learningLanguage).maybeSingle();
@@ -218,7 +226,7 @@ export default function VoiceStudySession() {
 
     // Note: state is only changed via manual marking on the episode page.
     await supabase.from("user_word_state").upsert({
-      user_id: user.id, word, reading, level: jlpt ?? null, learning_language: learningLanguage,
+      user_id: user.id, word, reading, level: level === "none" ? null : level, learning_language: learningLanguage,
       correct_streak: newStreak, last_reviewed_at: new Date().toISOString(),
     }, { onConflict: "user_id,word,learning_language" });
     setStreaks(prev => ({ ...prev, [word]: newStreak }));
@@ -283,7 +291,7 @@ export default function VoiceStudySession() {
   };
 
   const showKanjiFor = (c: VocabItem) =>
-    (streaks[c.word] ?? 0) >= KANJI_THRESHOLD || c.word === c.reading;
+    learningLanguageInfo.hasRuby && ((streaks[c.word] ?? 0) >= KANJI_THRESHOLD || c.word === c.reading);
 
   const repeatPrompt = async () => {
     const c = vocabRef.current[idxRef.current];
@@ -318,8 +326,9 @@ export default function VoiceStudySession() {
     stopRecognition();
     const c = vocabRef.current[idxRef.current];
     if (!c) return;
-    await recordWord(c.word, c.reading, c.jlpt_level, known);
+    await recordWord(c.word, c.reading, getLevel(c), known);
     setLastResult(known ? "known" : "learning");
+    if (known) setReviewedKnown(n => n + 1);
     await speak(`${known ? "Got it." : "Keep learning."} ${c.reading}, ${c.meaning}.`, "en-US", 1);
     await advance();
   };
@@ -332,10 +341,10 @@ export default function VoiceStudySession() {
     if (sessionId && user) {
       await supabase.from("quiz_results").insert({
         session_id: sessionId, user_id: user.id, word: c.word,
-        was_correct: correct, quiz_kind: "jp_to_meaning",
+        was_correct: correct, quiz_kind: "jp_to_meaning", learning_language: learningLanguage,
       });
     }
-    await recordWord(c.word, c.reading, c.jlpt_level, correct);
+    await recordWord(c.word, c.reading, getLevel(c), correct);
     await speak(`${correct ? "Correct!" : "The answer was"} ${c.meaning}.`, "en-US", 1);
     await advance();
   };
@@ -358,14 +367,14 @@ export default function VoiceStudySession() {
   };
 
   const start = async () => {
-    if (!supported) { toast.error("Voice recognition isn't supported in this browser. Try Chrome on Android or desktop."); return; }
+    if (!supported) { toast.error(t("voice.notSupportedToast")); return; }
     if (vocab.length === 0) return;
     try {
       // proactively prompt mic permission so we can show a clear error
       await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
       setPermissionDenied(true);
-      toast.error("Microphone access is required for voice mode");
+      toast.error(t("voice.micRequiredToast"));
       return;
     }
     setPermissionDenied(false);
@@ -409,8 +418,8 @@ export default function VoiceStudySession() {
   if (vocab.length === 0) {
     return (
       <div className="max-w-2xl mx-auto px-5 py-10 text-center">
-        <p className="text-muted-foreground mb-4">No new words to study — you already know everything in this episode!</p>
-        <Button onClick={() => navigate(-1)}>Back</Button>
+        <p className="text-muted-foreground mb-4">{t("study.noNewTitle")}</p>
+        <Button onClick={() => navigate(-1)}>{t("study.back")}</Button>
       </div>
     );
   }
@@ -420,16 +429,16 @@ export default function VoiceStudySession() {
       <div className="max-w-md mx-auto px-5 py-10 text-center">
         <Card className="p-8 gradient-card border-border/50 shadow-card animate-fade-in">
           <div className="text-5xl mb-3">🧼</div>
-          <h2 className="text-2xl font-bold mb-2">Hands clean, brain full</h2>
+          <h2 className="text-2xl font-bold mb-2">{t("voice.handsCleanTitle")}</h2>
           <p className="text-sm text-muted-foreground mb-6">
             {mode === "review"
-              ? `You marked ${reviewedKnown} as known out of ${vocab.length}.`
-              : `You got ${quizCorrect} / ${vocab.length} correct.`}
+              ? t("voice.markedKnownOf", { known: reviewedKnown, total: vocab.length })
+              : t("voice.gotCorrectOf", { correct: quizCorrect, total: vocab.length })}
           </p>
           <div className="grid gap-2">
-            <Button onClick={() => navigate(`/episode/${episodeId}`)} className="gradient-primary text-primary-foreground">Back to episode</Button>
+            <Button onClick={() => navigate(`/episode/${episodeId}`)} className="gradient-primary text-primary-foreground">{t("study.backToEpisode")}</Button>
             <Button variant="outline" onClick={restart}>
-              <RotateCw className="h-4 w-4" /> Go again
+              <RotateCw className="h-4 w-4" /> {t("voice.goAgain")}
             </Button>
           </div>
         </Card>
@@ -441,7 +450,7 @@ export default function VoiceStudySession() {
     <div className="max-w-md mx-auto px-5 pt-4 pb-10">
       <div className="flex items-center justify-between mb-4">
         <Button variant="ghost" size="icon" onClick={() => { pause(); navigate(-1); }}><ChevronLeft className="h-5 w-5" /></Button>
-        <div className="text-sm text-muted-foreground">Hands-free study</div>
+        <div className="text-sm text-muted-foreground">{t("voice.handsFreeStudy")}</div>
         <div className="w-9" />
       </div>
 
@@ -450,8 +459,8 @@ export default function VoiceStudySession() {
           <div className="flex gap-2 items-start">
             <AlertTriangle className="h-4 w-4 text-destructive mt-0.5" />
             <div className="text-sm">
-              <div className="font-semibold mb-1">Voice recognition not supported</div>
-              <div className="text-muted-foreground">This browser doesn't support speech recognition. Try Chrome on Android or desktop, or fall back to the regular study mode.</div>
+              <div className="font-semibold mb-1">{t("voice.notSupportedTitle")}</div>
+              <div className="text-muted-foreground">{t("voice.notSupportedBody")}</div>
             </div>
           </div>
         </Card>
@@ -462,8 +471,8 @@ export default function VoiceStudySession() {
           <div className="flex gap-2 items-start">
             <AlertTriangle className="h-4 w-4 text-destructive mt-0.5" />
             <div className="text-sm">
-              <div className="font-semibold mb-1">Microphone blocked</div>
-              <div className="text-muted-foreground">Allow microphone access in your browser settings, then reload this page.</div>
+              <div className="font-semibold mb-1">{t("voice.micBlockedTitle")}</div>
+              <div className="text-muted-foreground">{t("voice.micBlockedBody")}</div>
             </div>
           </div>
         </Card>
@@ -474,8 +483,8 @@ export default function VoiceStudySession() {
           <div className="flex gap-2 items-start">
             <AlertTriangle className="h-4 w-4 text-destructive mt-0.5" />
             <div className="text-sm">
-              <div className="font-semibold mb-1">Voice recognition failed</div>
-              <div className="text-muted-foreground">The browser speech service returned: <span className="font-mono">{recognitionError}</span>.</div>
+              <div className="font-semibold mb-1">{t("voice.recognitionFailedTitle")}</div>
+              <div className="text-muted-foreground">{t("voice.recognitionFailedBody", { error: recognitionError })}</div>
             </div>
           </div>
         </Card>
@@ -483,8 +492,8 @@ export default function VoiceStudySession() {
 
       <Tabs value={mode} onValueChange={(v) => switchMode(v as Mode)} className="w-full">
         <TabsList className="grid grid-cols-2 w-full mb-6">
-          <TabsTrigger value="review">Review</TabsTrigger>
-          <TabsTrigger value="quiz">Quiz</TabsTrigger>
+          <TabsTrigger value="review">{t("study.review")}</TabsTrigger>
+          <TabsTrigger value="quiz">{t("study.quiz")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value={mode}>
@@ -496,41 +505,41 @@ export default function VoiceStudySession() {
             lastResult === "learning" || lastResult === "wrong" ? "border-destructive/40" : ""
           }`}>
             <div>
-              <div className="font-jp text-5xl font-bold mb-2">
-                {showKanji ? card?.word : card?.reading}
+              <div className={cn("text-5xl font-bold mb-2", learningLanguageInfo.hasRuby && "font-jp")}>
+                {learningLanguageInfo.hasRuby ? (showKanji ? card?.word : card?.reading) : card?.word}
               </div>
-              {showKanji
+              {learningLanguageInfo.hasRuby && (showKanji
                 ? <div className="font-jp text-muted-foreground">{card?.reading}</div>
                 : card && card.word !== card.reading && (
-                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Hiragana mode</div>
-                )}
-              <div className="text-xs text-muted-foreground italic mt-3">{card?.part_of_speech} • {card?.jlpt_level}</div>
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("study.hiraganaMode")}</div>
+                ))}
+              <div className="text-xs text-muted-foreground italic mt-3">{card?.part_of_speech} • {getLevel(card ?? { word: "", reading: "", meaning: "", part_of_speech: "", example_sentence_jp: "", example_sentence_en: "" })}</div>
             </div>
           </Card>
 
           <div className="flex items-center justify-center gap-2 mb-4 text-xs text-muted-foreground flex-wrap">
             <span className={`inline-flex items-center gap-1 ${listening ? "text-primary" : ""}`}>
               {listening ? <Mic className="h-3.5 w-3.5" /> : <MicOff className="h-3.5 w-3.5" />}
-              {listening ? "Listening" : "Mic off"}
+              {listening ? t("voice.listening") : t("voice.micOff")}
             </span>
-            <span>• {heard ? `heard: "${heard}"` : "heard: nothing yet"}</span>
+            <span>• {heard ? t("voice.heard", { text: heard }) : t("voice.heardNothing")}</span>
           </div>
 
           <div className="grid grid-cols-3 gap-2 mb-3">
             {!running ? (
               <Button onClick={start} className="col-span-3 h-12 gradient-primary text-primary-foreground">
-                <Play className="h-4 w-4" /> Start hands-free
+                <Play className="h-4 w-4" /> {t("voice.startHandsFree")}
               </Button>
             ) : (
               <>
                 <Button variant="outline" onClick={pause} className="h-12">
-                  <Pause className="h-4 w-4" /> Pause
+                  <Pause className="h-4 w-4" /> {t("voice.pause")}
                 </Button>
                 <Button variant="outline" onClick={() => repeatPrompt()} className="h-12">
-                  <Volume2 className="h-4 w-4" /> Repeat
+                  <Volume2 className="h-4 w-4" /> {t("voice.repeat")}
                 </Button>
                 <Button variant="outline" onClick={() => advance()} className="h-12">
-                  <SkipForward className="h-4 w-4" /> Skip
+                  <SkipForward className="h-4 w-4" /> {t("voice.skip")}
                 </Button>
               </>
             )}
@@ -540,10 +549,10 @@ export default function VoiceStudySession() {
           {running && mode === "review" && (
             <div className="grid grid-cols-2 gap-2 mb-4">
               <Button variant="outline" onClick={() => gradeReview(false)} className="h-11">
-                Still learning
+                {t("study.stillLearning")}
               </Button>
               <Button onClick={() => gradeReview(true)} className="h-11 bg-success text-success-foreground hover:bg-success/90">
-                I know this
+                {t("study.iKnowThis")}
               </Button>
             </div>
           )}
@@ -551,29 +560,29 @@ export default function VoiceStudySession() {
           {/* Hint for iframe contexts where mic is blocked by parent */}
           {window.self !== window.top && (
             <Card className="p-3 mb-4 border-accent/40 bg-accent/5 text-xs">
-              <div className="font-semibold mb-1">Tip for the Lovable preview</div>
+              <div className="font-semibold mb-1">{t("voice.previewTip")}</div>
               <div className="text-muted-foreground">
-                The mic may be blocked inside the editor iframe. Open the preview URL in a new tab on your phone for full voice support.
+                {t("voice.previewTipBody")}
               </div>
             </Card>
           )}
 
           <Card className="p-3 gradient-card border-border/50 text-xs text-muted-foreground">
-            <div className="font-semibold text-foreground mb-1">Voice commands</div>
+            <div className="font-semibold text-foreground mb-1">{t("voice.commandsTitle")}</div>
             {mode === "review" ? (
               <ul className="space-y-0.5">
-                <li>• <span className="text-foreground">"yes" / "know"</span> — I know this word</li>
-                <li>• <span className="text-foreground">"no" / "skip"</span> — still learning</li>
-                <li>• <span className="text-foreground">"meaning"</span> — hear the answer</li>
-                <li>• <span className="text-foreground">"repeat"</span> — say the word again</li>
-                <li>• <span className="text-foreground">"pause"</span> / <span className="text-foreground">"resume"</span></li>
+                <li>• {t("voice.cmdReview1")}</li>
+                <li>• {t("voice.cmdReview2")}</li>
+                <li>• {t("voice.cmdReview3")}</li>
+                <li>• {t("voice.cmdReview4")}</li>
+                <li>• {t("voice.cmdReview5")}</li>
               </ul>
             ) : (
               <ul className="space-y-0.5">
-                <li>• Just <span className="text-foreground">say the meaning in English</span></li>
-                <li>• <span className="text-foreground">"I don't know"</span> / <span className="text-foreground">"skip"</span></li>
-                <li>• <span className="text-foreground">"repeat"</span> — hear word again</li>
-                <li>• <span className="text-foreground">"pause"</span> / <span className="text-foreground">"resume"</span></li>
+                <li>• {t("voice.cmdQuiz1")}</li>
+                <li>• {t("voice.cmdQuiz2")}</li>
+                <li>• {t("voice.cmdQuiz3")}</li>
+                <li>• {t("voice.cmdQuiz4")}</li>
               </ul>
             )}
           </Card>

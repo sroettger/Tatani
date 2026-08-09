@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ChevronLeft, Play } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/context/AuthContext";
+import { useI18n } from "@/i18n";
 
 type Anime = {
   id: string; title_romaji: string; title_en: string | null; title_jp: string | null;
@@ -16,6 +18,8 @@ type Episode = { id: string; episode_number: number; processing_status: string; 
 export default function AnimeDetail() {
   const { animeId } = useParams();
   const navigate = useNavigate();
+  const { learningLanguageInfo } = useAuth();
+  const { t } = useI18n();
   const [anime, setAnime] = useState<Anime | null>(null);
   const [seasons, setSeasons] = useState<Season[]>([]);
   const [episodesBySeason, setEpisodesBySeason] = useState<Record<string, Episode[]>>({});
@@ -61,7 +65,7 @@ export default function AnimeDetail() {
           </div>
           <div className="flex-1 pt-12">
             <h1 className="text-xl font-bold leading-tight">{anime?.title_en ?? anime?.title_romaji}</h1>
-            {anime?.title_jp && <div className="font-jp text-sm text-muted-foreground">{anime.title_jp}</div>}
+            {anime?.title_jp && learningLanguageInfo.hasRuby && <div className="font-jp text-sm text-muted-foreground">{anime.title_jp}</div>}
             <div className="text-xs text-muted-foreground mt-1">{anime?.year ?? "—"}</div>
           </div>
         </div>
@@ -73,7 +77,7 @@ export default function AnimeDetail() {
         {seasons.map((season) => (
           <div key={season.id} className="mb-6">
             <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-              Season {season.season_number}
+              {t("anime.season", { n: season.season_number })}
             </h2>
             <div className="grid gap-2">
               {(episodesBySeason[season.id] ?? []).map((ep) => (
@@ -88,19 +92,19 @@ export default function AnimeDetail() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="font-medium text-sm truncate">
-                        {ep.title_en ?? ep.title_jp ?? `Episode ${ep.episode_number}`}
+                        {ep.title_en ?? (learningLanguageInfo.hasRuby ? ep.title_jp : null) ?? t("anime.episodeFallback", { n: ep.episode_number })}
                       </div>
-                      {ep.title_jp && (
+                      {ep.title_jp && learningLanguageInfo.hasRuby && (
                         <div className="font-jp text-[11px] text-muted-foreground truncate">{ep.title_jp}</div>
                       )}
-                      <StatusBadge status={ep.processing_status} />
+                      <StatusBadge status={ep.processing_status} t={t} />
                     </div>
                   </div>
                   <Play className="h-4 w-4 text-muted-foreground" />
                 </Card>
               ))}
               {(episodesBySeason[season.id] ?? []).length === 0 && (
-                <div className="text-sm text-muted-foreground">No episodes listed.</div>
+                <div className="text-sm text-muted-foreground">{t("anime.noEpisodes")}</div>
               )}
             </div>
           </div>
@@ -110,12 +114,12 @@ export default function AnimeDetail() {
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, t }: { status: string; t: (k: any, vars?: any) => string }) {
   const map: Record<string, { label: string; cls: string }> = {
-    not_processed: { label: "Not processed", cls: "bg-muted text-muted-foreground" },
-    processing: { label: "Processing…", cls: "bg-warning/20 text-warning" },
-    ready: { label: "Ready", cls: "bg-success/20 text-success" },
-    failed: { label: "Failed", cls: "bg-destructive/20 text-destructive" },
+    not_processed: { label: t("anime.statusNotProcessed"), cls: "bg-muted text-muted-foreground" },
+    processing: { label: t("anime.statusProcessing"), cls: "bg-warning/20 text-warning" },
+    ready: { label: t("anime.statusReady"), cls: "bg-success/20 text-success" },
+    failed: { label: t("anime.statusFailed"), cls: "bg-destructive/20 text-destructive" },
   };
   const v = map[status] ?? map.not_processed;
   return <Badge className={`text-[10px] mt-0.5 ${v.cls} border-0`} variant="secondary">{v.label}</Badge>;

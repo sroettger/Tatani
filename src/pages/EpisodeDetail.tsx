@@ -14,10 +14,12 @@ import { EpisodeSummary } from "@/components/EpisodeSummary";
 import { EpisodeDiscussion } from "@/components/EpisodeDiscussion";
 import { cn } from "@/lib/utils";
 import { useStudyPrefs } from "@/hooks/use-study-prefs";
+import { useI18n } from "@/i18n";
+import { levelRank, scaleLabel, formatLevel } from "@/lib/languages";
 
-// JLPT difficulty rank — higher number = harder. "none" treated as harder than N1
-// so unclassified/proper-noun vocab is never auto-skipped.
-const JLPT_RANK: Record<string, number> = { N5: 1, N4: 2, N3: 3, N2: 4, N1: 5, none: 6 };
+const TTS_LANG: Record<string, string> = { ja: "ja-JP", es: "es-ES", fr: "fr-FR", de: "de-DE" };
+const ttsLangFor = (code: string) => TTS_LANG[code] ?? "en-US";
+
 // SRS intervals in days (Leitner-style). Index = srs_level.
 const SRS_INTERVALS_DAYS = [1, 3, 7, 14, 30, 60, 120, 240, 480];
 const dueAtForLevel = (level: number) => {
@@ -30,7 +32,8 @@ type VocabItem = {
   reading: string;
   meaning: string;
   part_of_speech: string;
-  jlpt_level: string;
+  jlpt_level?: string;
+  level?: string;
   example_sentence_jp: string;
   example_sentence_en: string;
   frequency?: number;
@@ -44,7 +47,8 @@ type WordRow = { word: string; state: WordState; preference: WordPref; known_sou
 export default function EpisodeDetail() {
   const { episodeId } = useParams();
   const navigate = useNavigate();
-  const { user, profile, learningLanguage } = useAuth();
+  const { user, learningLanguage, learningLanguageInfo, progress } = useAuth();
+  const { t } = useI18n();
   const { chunkSize: CHUNK_SIZE, queueSize: QUEUE_SIZE } = useStudyPrefs();
   const pollRef = useRef<number | null>(null);
   const [episode, setEpisode] = useState<{ id: string; episode_number: number; processing_status: string; processing_chunks_total: number; processing_chunks_done: number } | null>(null);
@@ -61,6 +65,8 @@ export default function EpisodeDetail() {
   const [chunkifying, setChunkifying] = useState(false);
   const [allQuery, setAllQuery] = useState("");
   const [knownQuery, setKnownQuery] = useState("");
+
+  const getLevel = (v: VocabItem) => v.level ?? v.jlpt_level ?? "none";
 
   const matchesQuery = (v: VocabItem, q: string) => {
     const needle = q.trim().toLowerCase();
@@ -122,17 +128,17 @@ export default function EpisodeDetail() {
   useEffect(() => {
     if (episode?.processing_status === "processing" && !pollRef.current) {
       setBusy(true);
-      setProgressStage("Extracting vocabulary with AI…");
+      setProgressStage(t("episode.extracting"));
       pollRef.current = window.setInterval(async () => {
         const ep = await load();
         if ((ep as any)?.processing_status === "ready") {
           if (pollRef.current) { window.clearInterval(pollRef.current); pollRef.current = null; }
           setBusy(false); setProgressStage("");
-          toast.success("Episode processed!");
+          toast.success(t("episode.processed"));
         } else if ((ep as any)?.processing_status === "failed") {
           if (pollRef.current) { window.clearInterval(pollRef.current); pollRef.current = null; }
           setBusy(false); setProgressStage("");
-          toast.error("Processing failed", { description: "Please try again." });
+          toast.error(t("episode.processFailed"), { description: t("episode.tryAgain") });
         }
       }, 3000);
     }
@@ -141,31 +147,31 @@ export default function EpisodeDetail() {
   const startProcess = async (subText: string) => {
     if (!episodeId) return;
     setBusy(true);
-    setProgressStage("Sending subtitles to AI…");
+    setProgressStage(t("episode.sendingSubs"));
     const { data, error } = await supabase.functions.invoke("process-episode", {
       body: { episode_id: episodeId, subtitle_text: subText },
     });
-    if (error) { setBusy(false); setProgressStage(""); toast.error("Processing failed", { description: error.message }); return; }
-    if ((data as any)?.error) { setBusy(false); setProgressStage(""); toast.error("Processing failed", { description: (data as any).error }); return; }
+    if (error) { setBusy(false); setProgressStage(""); toast.error(t("episode.processFailed"), { description: error.message }); return; }
+    if ((data as any)?.error) { setBusy(false); setProgressStage(""); toast.error(t("episode.processFailed"), { description: (data as any).error }); return; }
     if ((data as any)?.cached) {
       setBusy(false); setProgressStage("");
-      toast.success("Loaded from cache");
+      toast.success(t("episode.loadedFromCache"));
       load();
       return;
     }
-    setProgressStage("Extracting vocabulary with AI… (this can take 1–2 minutes)");
+    setProgressStage(t("episode.extractingLong"));
     await load();
   };
 
   const tryAutoFetch = async () => {
     if (!episodeId) return;
     setBusy(true);
-    setProgressStage("Fetching Japanese subtitles…");
+    setProgressStage(t("episode.fetchingSubs"));
     const { data, error } = await supabase.functions.invoke("fetch-subtitles", { body: { episode_id: episodeId } });
-    if (error) { setBusy(false); setProgressStage(""); toast.error("Subtitle fetch failed", { description: error.message }); return; }
+    if (error) { setBusy(false); setProgressStage(""); toast.error(t("episode.fetchFailed"), { description: error.message }); return; }
     if (!data?.found) {
       setBusy(false); setProgressStage("");
-      toast.error("No subtitles found", { description: "Try again later." });
+      toast.error(t("episode.noSubsFound"), { description: t("episode.tryAgainLater") });
       return;
     }
     await startProcess(data.content);
@@ -174,22 +180,21 @@ export default function EpisodeDetail() {
   const speak = (text: string) => {
     if (!("speechSynthesis" in window)) return;
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = "ja-JP";
+    u.lang = ttsLangFor(learningLanguage);
     speechSynthesis.cancel();
     speechSynthesis.speak(u);
   };
 
-  // Level-based defaulting: words below user's JLPT level default to "known" unless user overrode.
-  const myLevel = profile?.jlpt_level && profile.jlpt_level !== "none" ? profile.jlpt_level : null;
-  const myRank = myLevel ? JLPT_RANK[myLevel] : 0;
-  const isBelowLevel = (lvl: string) => myRank > 0 && (JLPT_RANK[lvl] ?? 99) < myRank;
+  // Level-based defaulting: words below the user's level default to "known" unless user overrode.
+  const myRank = levelRank(learningLanguage, progress?.level);
+  const isBelowLevel = (lvl: string) => myRank > 0 && (levelRank(learningLanguage, lvl) || 99) < myRank;
 
   // Effective bucket for a word: "known" | "new" (with preference)
   const bucketOf = (v: VocabItem): "known" | "new" => {
     const s = wordStates.get(v.word);
     if (s?.state === "known") return "known";
     if (s) return "new"; // user explicitly set it as not-known
-    if (isBelowLevel(v.jlpt_level)) return "known"; // auto-skip default
+    if (isBelowLevel(getLevel(v))) return "known"; // auto-skip default
     return "new";
   };
 
@@ -197,9 +202,14 @@ export default function EpisodeDetail() {
 
   // Importance score: how central is this word to the episode's story.
   // Signals: (a) how often it appears across the AI-extracted example sentences for THIS episode,
-  // (b) JLPT commonness (lower JLPT level = more common Japanese word = more likely to recur).
+  // (b) level commonness (lower/easier level = more common word = more likely to recur).
   // Higher = more important.
-  const JLPT_COMMONNESS: Record<string, number> = { N5: 5, N4: 4, N3: 3, N2: 2, N1: 1, none: 0 };
+  const levelCommonness = (lvl: string) => {
+    const rank = levelRank(learningLanguage, lvl);
+    if (!rank) return 0;
+    const total = 6;
+    return Math.max(0, total - rank);
+  };
   const { importance, frequency } = useMemo(() => {
     const corpus = [
       ...vocab.flatMap(v => [v.example_sentence_jp ?? ""]),
@@ -219,7 +229,7 @@ export default function EpisodeDetail() {
         }
       }
       freqMap.set(v.word, freq);
-      score.set(v.word, freq * 10 + (JLPT_COMMONNESS[v.jlpt_level] ?? 0));
+      score.set(v.word, freq * 10 + levelCommonness(getLevel(v)));
     }
     return { importance: score, frequency: freqMap };
   }, [vocab, sentences]);
@@ -265,7 +275,7 @@ export default function EpisodeDetail() {
       user_id: user.id,
       word: v.word,
       reading: v.reading,
-      level: v.jlpt_level ?? null,
+      level: getLevel(v) === "none" ? null : getLevel(v),
       learning_language: learningLanguage,
       state: next.state,
       preference: next.preference,
@@ -307,7 +317,7 @@ export default function EpisodeDetail() {
         user_id: user.id,
         word: v.word,
         reading: v.reading,
-        level: v.jlpt_level ?? null,
+        level: getLevel(v) === "none" ? null : getLevel(v),
         learning_language: learningLanguage,
         state: "learning" as WordState,
         preference: s.preference,
@@ -342,8 +352,8 @@ export default function EpisodeDetail() {
     setRewatching(true);
     const n = await demoteDueWords(vocab);
     setRewatching(false);
-    if (n > 0) toast.success(`${n} word${n === 1 ? "" : "s"} back in your queue`);
-    else toast.message("Nothing due yet", { description: "All learned words are still within their review interval." });
+    if (n > 0) toast.success(t("episode.wordsBackInQueue", { n }));
+    else toast.message(t("episode.nothingDueYet"), { description: t("episode.nothingDueBody") });
   };
 
   // Auto-demote on first open: only if user has never created chunks for this episode
@@ -362,7 +372,7 @@ export default function EpisodeDetail() {
     if (!user || !episodeId) return;
     const studyable = queueVocab;
     if (studyable.length === 0) {
-      toast.error("No words to chunkify");
+      toast.error(t("episode.noWordsToChunkify"));
       return;
     }
     setChunkifying(true);
@@ -374,22 +384,22 @@ export default function EpisodeDetail() {
         .from("study_chunks")
         .insert({ user_id: user.id, episode_id: episodeId, chunk_index: idx + 1, word_count: groups[idx].length })
         .select("id").single();
-      if (cErr || !chunk) { toast.error("Failed to create chunk"); setChunkifying(false); return; }
+      if (cErr || !chunk) { toast.error(t("episode.chunkCreateFailed")); setChunkifying(false); return; }
       const wordRows = groups[idx].map((v, pos) => ({
         chunk_id: chunk.id,
         word: v.word,
         reading: v.reading,
         meaning: v.meaning,
-        level: v.jlpt_level ?? null,
+        level: getLevel(v) === "none" ? null : getLevel(v),
         part_of_speech: v.part_of_speech,
         example_sentence_jp: v.example_sentence_jp,
         example_sentence_en: v.example_sentence_en,
         position: pos,
       }));
       const { error: wErr } = await supabase.from("study_chunk_words").insert(wordRows);
-      if (wErr) { toast.error("Failed to save chunk words"); setChunkifying(false); return; }
+      if (wErr) { toast.error(t("episode.chunkWordsFailed")); setChunkifying(false); return; }
     }
-    toast.success(`Created ${groups.length} chunk${groups.length === 1 ? "" : "s"}`);
+    toast.success(t("episode.chunksCreated", { n: groups.length }));
     setChunkifying(false);
     await load();
   };
@@ -398,7 +408,7 @@ export default function EpisodeDetail() {
     <div className="max-w-2xl mx-auto px-5 pt-4 pb-10">
       <div className="flex items-center justify-between mb-6">
         <Button variant="ghost" size="icon" onClick={() => navigate(-1)}><ChevronLeft className="h-5 w-5" /></Button>
-        <div className="text-sm text-muted-foreground">Episode {episode?.episode_number}</div>
+        <div className="text-sm text-muted-foreground">{t("episode.number", { n: episode?.episode_number ?? "" })}</div>
         {vocab.length > 0 ? (
           <Button
             variant="ghost"
@@ -406,10 +416,10 @@ export default function EpisodeDetail() {
             className="h-9 px-2 text-xs gap-1"
             onClick={handleRewatch}
             disabled={rewatching}
-            title="Re-evaluate learned words: any past their review interval will return to your queue"
+            title={t("episode.rewatchHint")}
           >
             {rewatching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Repeat className="h-4 w-4" />}
-            Rewatch
+            {t("episode.rewatch")}
           </Button>
         ) : (
           <div className="w-9" />
@@ -420,12 +430,12 @@ export default function EpisodeDetail() {
         <Card className="p-6 text-center gradient-card border-border/50 shadow-card">
           <Sparkles className="h-10 w-10 mx-auto text-primary mb-3" />
           <h2 className="text-lg font-semibold mb-1">
-            {busy ? "Processing episode…" : "Process this episode"}
+            {busy ? t("episode.processing") : t("episode.processThis")}
           </h2>
           <p className="text-sm text-muted-foreground mb-5">
             {busy
-              ? (progressStage || "Working on it…")
-              : "We'll auto-fetch the Japanese subtitles, extract vocabulary with AI, and generate flashcards just for you."}
+              ? (progressStage || t("episode.workingOnIt"))
+              : t("episode.autoFetchExplain")}
           </p>
           {busy && (() => {
             const total = episode?.processing_chunks_total ?? 0;
@@ -442,15 +452,15 @@ export default function EpisodeDetail() {
                 </div>
                 <p className="text-xs text-muted-foreground mt-2">
                   {hasChunks
-                    ? `Processed ${done} of ${total} chunks (${pct}%) — you can leave this page, processing continues in the background.`
-                    : "You can leave this page — processing continues in the background."}
+                    ? t("episode.processedChunks", { done, total, pct })
+                    : t("episode.leavePage")}
                 </p>
               </div>
             );
           })()}
           <div className="grid gap-2">
             <Button onClick={tryAutoFetch} disabled={busy} className="gradient-primary text-primary-foreground h-12">
-              {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> Working…</> : <><Sparkles className="h-4 w-4" /> Auto-fetch & process</>}
+              {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> {t("episode.workingEllipsis")}</> : <><Sparkles className="h-4 w-4" /> {t("episode.autoFetchProcess")}</>}
             </Button>
           </div>
         </Card>
@@ -458,21 +468,21 @@ export default function EpisodeDetail() {
         <>
           <div className="grid grid-cols-3 gap-2 mb-4">
             <StatBox
-              label="To learn"
+              label={t("episode.toLearn")}
               value={`${queueVocab.length}/${newVocab.length}`}
               accent="text-primary"
               active={showQueue}
               onClick={() => { setShowQueue(s => !s); setShowAll(false); setShowKnown(false); }}
             />
             <StatBox
-              label="Known"
+              label={t("episode.known")}
               value={knownVocab.length}
               accent="text-success"
               active={showKnown}
               onClick={() => { setShowKnown(s => !s); setShowAll(false); setShowQueue(false); }}
             />
             <StatBox
-              label="All"
+              label={t("episode.all")}
               value={vocab.length}
               accent="text-foreground"
               active={showAll}
@@ -484,20 +494,20 @@ export default function EpisodeDetail() {
             <Card className="p-3 mb-4 gradient-card border-border/50">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-xs uppercase tracking-wider text-muted-foreground">
-                  To learn next ({queueVocab.length})
+                  {t("episode.toLearnNext", { n: queueVocab.length })}
                   {newVocab.length > QUEUE_SIZE && (
-                    <span className="ml-1 normal-case tracking-normal text-muted-foreground/70">· {newVocab.length - QUEUE_SIZE} more queued</span>
+                    <span className="ml-1 normal-case tracking-normal text-muted-foreground/70">· {t("episode.moreQueued", { n: newVocab.length - QUEUE_SIZE })}</span>
                   )}
                 </div>
                 <div className="text-[10px] text-muted-foreground/80 flex items-center gap-2">
-                  <span className="inline-flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />known</span>
+                  <span className="inline-flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />{t("episode.known").toLowerCase()}</span>
                 </div>
               </div>
               {queueVocab.length === 0 ? (
-                <div className="text-sm text-muted-foreground">Queue empty — you've mastered everything in this episode!</div>
+                <div className="text-sm text-muted-foreground">{t("episode.queueEmpty")}</div>
               ) : (
                 <div className="grid gap-1 max-h-96 overflow-y-auto">
-                  {queueVocab.map((v) => renderQueueRow(v, studiedWords.has(v.word) ? markKnownLearned : markKnownPrior, frequency.get(v.word) ?? 0))}
+                  {queueVocab.map((v) => renderQueueRow(v, studiedWords.has(v.word) ? markKnownLearned : markKnownPrior, frequency.get(v.word) ?? 0, t, learningLanguageInfo.hasRuby))}
                 </div>
               )}
             </Card>
@@ -505,11 +515,11 @@ export default function EpisodeDetail() {
 
           {showAll && (
             <Card className="p-3 mb-4 gradient-card border-border/50">
-              <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">All words ({vocab.length})</div>
+              <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">{t("episode.allWords", { n: vocab.length })}</div>
               <Input
                 value={allQuery}
                 onChange={(e) => setAllQuery(e.target.value)}
-                placeholder="Search Japanese or English…"
+                placeholder={t("episode.searchPlaceholder")}
                 className="h-8 mb-2"
               />
               <div className="grid gap-1 max-h-96 overflow-y-auto">
@@ -518,22 +528,22 @@ export default function EpisodeDetail() {
                   return (
                     <div key={`${v.word}-${v.reading}`} className="flex items-start gap-2 py-1.5 border-b border-border/30 last:border-0">
                       <div className="min-w-0 flex-1">
-                        <div className="font-jp text-sm truncate">
-                          {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
+                        <div className={cn("text-sm truncate", learningLanguageInfo.hasRuby && "font-jp")}>
+                          {v.word} {learningLanguageInfo.hasRuby && <span className="text-muted-foreground text-xs">{v.reading}</span>}
                         </div>
                         <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
                         <div className="flex items-center gap-1.5 mt-1">
-                          <FreqBadge freq={frequency.get(v.word) ?? 0} />
-                          <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
+                          <FreqBadge freq={frequency.get(v.word) ?? 0} title={t("episode.appearsN", { n: frequency.get(v.word) ?? 0 })} />
+                          <Badge variant="secondary" className="text-[10px] shrink-0">{formatLevel(v.level ?? v.jlpt_level)}</Badge>
                         </div>
                       </div>
                       {bucket === "known" ? (
                         <Button size="sm" variant="ghost" className="h-7 px-2 shrink-0" onClick={() => markNew(v)}>
-                          <Plus className="h-3 w-3" /> New
+                          <Plus className="h-3 w-3" /> {t("episode.new")}
                         </Button>
                       ) : (
                         <Button size="sm" variant="ghost" className="h-7 px-2 shrink-0 hover:text-success" onClick={() => markKnownLearned(v)}>
-                          <CheckCircle2 className="h-3 w-3" /> Known
+                          <CheckCircle2 className="h-3 w-3" /> {t("episode.known")}
                         </Button>
                       )}
                     </div>
@@ -545,31 +555,31 @@ export default function EpisodeDetail() {
 
           {showKnown && (
             <Card className="p-3 mb-4 gradient-card border-border/50">
-              <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Known words ({knownVocab.length})</div>
+              <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">{t("episode.knownWords", { n: knownVocab.length })}</div>
               {knownVocab.length === 0 ? (
-                <div className="text-sm text-muted-foreground">No known words yet.</div>
+                <div className="text-sm text-muted-foreground">{t("episode.noKnownYet")}</div>
               ) : (
                 <>
                   <Input
                     value={knownQuery}
                     onChange={(e) => setKnownQuery(e.target.value)}
-                    placeholder="Search Japanese or English…"
+                    placeholder={t("episode.searchPlaceholder")}
                     className="h-8 mb-2"
                   />
                   <div className="grid gap-1 max-h-96 overflow-y-auto">
                     {knownVocab.filter((v) => matchesQuery(v, knownQuery)).map((v) => {
                       const s = wordStates.get(v.word);
-                      const reason = s?.state === "known" ? "known" : "below your level";
+                      const reason = s?.state === "known" ? t("episode.reasonKnown") : t("episode.reasonBelowLevel");
                       return (
                         <div key={`${v.word}-${v.reading}`} className="flex items-start gap-2 py-1.5 border-b border-border/30 last:border-0">
                           <div className="min-w-0 flex-1">
-                            <div className="font-jp text-sm truncate">
-                              {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
+                            <div className={cn("text-sm truncate", learningLanguageInfo.hasRuby && "font-jp")}>
+                              {v.word} {learningLanguageInfo.hasRuby && <span className="text-muted-foreground text-xs">{v.reading}</span>}
                             </div>
                             <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
                             <div className="flex items-center gap-1.5 mt-1">
-                              <FreqBadge freq={frequency.get(v.word) ?? 0} />
-                              <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
+                              <FreqBadge freq={frequency.get(v.word) ?? 0} title={t("episode.appearsN", { n: frequency.get(v.word) ?? 0 })} />
+                              <Badge variant="secondary" className="text-[10px] shrink-0">{formatLevel(v.level ?? v.jlpt_level)}</Badge>
                               <span className="text-[10px] text-muted-foreground/70">{reason}</span>
                             </div>
                           </div>
@@ -578,9 +588,9 @@ export default function EpisodeDetail() {
                             variant="ghost"
                             className="h-7 px-2 shrink-0"
                             onClick={() => markNew(v)}
-                            title="Move back to new"
+                            title={t("episode.moveToNew")}
                           >
-                            <Plus className="h-3 w-3" /> New
+                            <Plus className="h-3 w-3" /> {t("episode.new")}
                           </Button>
                         </div>
                       );
@@ -599,13 +609,13 @@ export default function EpisodeDetail() {
                 onClick={chunkify}
                 disabled={chunkifying || studyableCount === 0}
               >
-                {chunkifying ? <><Loader2 className="h-4 w-4 animate-spin" /> Creating chunks…</> : <><Layers className="h-4 w-4" /> Create chunks ({studyableCount} word{studyableCount === 1 ? "" : "s"})</>}
+                {chunkifying ? <><Loader2 className="h-4 w-4 animate-spin" /> {t("episode.creatingChunks")}</> : <><Layers className="h-4 w-4" /> {t("episode.createChunks", { n: studyableCount })}</>}
               </Button>
             ) : (
               <>
                 <div className="flex items-center justify-between mb-1">
                   <h3 className="font-semibold flex items-center gap-2">
-                    <Layers className="h-4 w-4 text-primary" /> Study chunks
+                    <Layers className="h-4 w-4 text-primary" /> {t("episode.studyChunks")}
                   </h3>
                   <Button
                     size="sm"
@@ -615,12 +625,12 @@ export default function EpisodeDetail() {
                     disabled={chunkifying || studyableCount === 0}
                   >
                     {chunkifying ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCw className="h-3 w-3" />}
-                    Re-chunkify
+                    {t("episode.rechunkify")}
                   </Button>
                 </div>
                 {chunksStale && (
                   <div className="text-xs text-accent mb-1">
-                    Word list changed ({studyableCount} now vs {chunkedCount} chunked). Re-chunkify to refresh.
+                    {t("episode.wordListChanged", { now: studyableCount, chunked: chunkedCount })}
                   </div>
                 )}
                 <div className="grid gap-2">
@@ -632,12 +642,12 @@ export default function EpisodeDetail() {
                     >
                       <div>
                         <div className="font-medium text-sm flex items-center gap-2">
-                          Chunk {c.chunk_index}
+                          {t("episode.chunkN", { n: c.chunk_index })}
                           {c.studied_at && <Check className="h-3.5 w-3.5 text-success" />}
                         </div>
                         <div className="text-xs text-muted-foreground">
-                          {c.word_count} word{c.word_count === 1 ? "" : "s"}
-                          {c.studied_at ? " · Studied" : " · Not yet"}
+                          {t("episode.wordCount", { n: c.word_count })}
+                          {c.studied_at ? ` · ${t("episode.studied")}` : ` · ${t("episode.notYet")}`}
                         </div>
                       </div>
                       <BookOpen className="h-4 w-4 text-muted-foreground" />
@@ -650,7 +660,7 @@ export default function EpisodeDetail() {
                   onClick={() => navigate(`/episode/${episodeId}/quiz`)}
                   disabled={!chunks.some(c => c.studied_at)}
                 >
-                  <BrainCircuit className="h-4 w-4" /> Quiz studied chunks
+                  <BrainCircuit className="h-4 w-4" /> {t("episode.quizStudiedChunks")}
                 </Button>
               </>
             )}
@@ -660,14 +670,14 @@ export default function EpisodeDetail() {
               onClick={() => navigate(`/study/${episodeId}/voice`)}
               disabled={studyableCount === 0}
             >
-              <Mic className="h-4 w-4" /> Hands-free voice mode
+              <Mic className="h-4 w-4" /> {t("episode.handsFreeVoice")}
             </Button>
             <Button
               variant="outline"
               className="w-full h-11"
               onClick={() => navigate(`/episode/${episodeId}/watch`)}
             >
-              <Tv className="h-4 w-4" /> Watch mode (Bingo)
+              <Tv className="h-4 w-4" /> {t("episode.watchModeBingo")}
             </Button>
           </div>
 
@@ -685,12 +695,12 @@ export default function EpisodeDetail() {
             />
           )}
 
-          <h3 className="font-semibold mb-2 flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-primary" /> Sentences</h3>
+          <h3 className="font-semibold mb-2 flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-primary" /> {t("episode.sentences")}</h3>
           <div className="grid gap-2 mb-6">
             {sentences.slice(0, 8).map((s, i) => (
               <Card key={i} className="p-3 gradient-card border-border/50">
                 <div className="flex items-start justify-between gap-2">
-                  <div className="font-jp text-base flex-1">{s.jp}</div>
+                  <div className={cn("text-base flex-1", learningLanguageInfo.hasRuby && "font-jp")}>{s.jp}</div>
                   <Button size="icon" variant="ghost" onClick={() => speak(s.jp)}><Volume2 className="h-4 w-4" /></Button>
                 </div>
                 <div className="text-xs text-muted-foreground mt-1">{s.en}</div>
@@ -734,7 +744,7 @@ function StatBox({ label, value, accent, active, onClick }: { label: string; val
   );
 }
 
-function FreqBadge({ freq }: { freq: number }) {
+function FreqBadge({ freq, title }: { freq: number; title: string }) {
   // Visual heat: 0 = neutral, 1 = subtle, 2 = warm, 3+ = hot.
   const tone =
     freq >= 3 ? "bg-primary/15 text-primary"
@@ -744,7 +754,7 @@ function FreqBadge({ freq }: { freq: number }) {
   return (
     <span
       className={cn("text-[10px] px-1.5 py-0.5 rounded-full shrink-0 tabular-nums", tone)}
-      title={`Appears ${freq}× in this episode`}
+      title={title}
     >
       ×{freq}
     </span>
@@ -755,25 +765,27 @@ function renderQueueRow(
   v: VocabItem,
   markKnown: (v: VocabItem) => void,
   freq: number,
+  t: (k: any, vars?: any) => string,
+  hasRuby: boolean,
 ) {
   return (
     <div key={`${v.word}-${v.reading}`} className="flex flex-wrap items-center gap-2 py-2 border-b border-border/30 last:border-0">
       <div className="min-w-0 flex-1">
-        <div className="font-jp text-sm truncate">
-          {v.word} <span className="text-muted-foreground text-xs">{v.reading}</span>
+        <div className={cn("text-sm truncate", hasRuby && "font-jp")}>
+          {v.word} {hasRuby && <span className="text-muted-foreground text-xs">{v.reading}</span>}
         </div>
         <div className="text-xs text-muted-foreground truncate">{v.meaning}</div>
       </div>
-      <FreqBadge freq={freq} />
-      <Badge variant="secondary" className="text-[10px] shrink-0">{v.jlpt_level}</Badge>
+      <FreqBadge freq={freq} title={t("episode.appearsN", { n: freq })} />
+      <Badge variant="secondary" className="text-[10px] shrink-0">{formatLevel(v.level ?? v.jlpt_level)}</Badge>
       <Button
         size="sm"
         variant="outline"
         className="h-7 px-2 text-[11px] gap-1 shrink-0 hover:text-success"
         onClick={() => markKnown(v)}
-        title="Mark as known"
+        title={t("episode.markAsKnown")}
       >
-        <CheckCircle2 className="h-3 w-3" /> Known
+        <CheckCircle2 className="h-3 w-3" /> {t("episode.known")}
       </Button>
     </div>
   );

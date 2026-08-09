@@ -5,9 +5,10 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { BarChart3 } from "lucide-react";
 import { useI18n } from "@/i18n";
+import { scaleLabel, formatLevel } from "@/lib/languages";
 
 export default function Stats() {
-  const { user, profile, learningLanguage } = useAuth();
+  const { user, learningLanguage, progress } = useAuth();
   const { t } = useI18n();
   const [counts, setCounts] = useState({ known: 0, learning: 0, unknown: 0 });
   const [sessions, setSessions] = useState(0);
@@ -35,8 +36,8 @@ export default function Stats() {
         <StatCard label={t("stats.learning")} value={counts.learning} accent="text-warning" />
         <StatCard label={t("stats.encountered")} value={counts.known + counts.learning + counts.unknown} accent="text-primary" />
         <StatCard label={t("stats.sessions")} value={sessions} accent="text-accent" />
-        <StatCard label={t("stats.jlpt")} value={profile?.jlpt_level === "none" ? "—" : (profile?.jlpt_level ?? "—")} accent="text-secondary" />
-        <StatCard label={t("stats.streak")} value={`${profile?.study_streak ?? 0}d`} accent="text-primary" />
+        <StatCard label={t("stats.level", { scale: scaleLabel(learningLanguage) })} value={formatLevel(progress?.level)} accent="text-secondary" />
+        <StatCard label={t("stats.streak")} value={`${progress?.study_streak ?? 0}d`} accent="text-primary" />
       </div>
     </div>
   );

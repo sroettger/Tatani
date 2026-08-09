@@ -261,7 +261,7 @@ export default function Home() {
               disabled={removing}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {removing ? "Removing…" : "Remove"}
+              {removing ? t("home.removing") : t("common.remove")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

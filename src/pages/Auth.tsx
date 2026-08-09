@@ -10,9 +10,11 @@ import { lovable } from "@/integrations/lovable";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Sparkles, Eye, EyeOff, Mail } from "lucide-react";
+import { useI18n } from "@/i18n";
 
 export default function Auth() {
   const { user, loading } = useAuth();
+  const { t } = useI18n();
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
@@ -32,10 +34,10 @@ export default function Auth() {
         redirect_uri: window.location.origin,
       });
       if ((result as any)?.error) {
-        toast.error("Sign-in failed", { description: String((result as any).error?.message ?? "Unknown error") });
+        toast.error(t("auth.signInFailed"), { description: String((result as any).error?.message ?? t("auth.unknownError")) });
       }
     } catch (e) {
-      toast.error("Sign-in failed", { description: e instanceof Error ? e.message : "Unknown error" });
+      toast.error(t("auth.signInFailed"), { description: e instanceof Error ? e.message : t("auth.unknownError") });
     } finally {
       setBusy(false);
     }
@@ -53,14 +55,14 @@ export default function Auth() {
         });
         if (error) throw error;
         setConfirmSent(true);
-        toast.success("Check your email", { description: "We sent a confirmation link to your inbox." });
+        toast.success(t("auth.checkEmail"), { description: t("auth.checkEmailBody") });
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
       }
     } catch (e: any) {
-      toast.error(isSignUp ? "Sign-up failed" : "Sign-in failed", {
-        description: e?.message ?? "Unknown error",
+      toast.error(isSignUp ? t("auth.signUpFailed") : t("auth.signInFailed"), {
+        description: e?.message ?? t("auth.unknownError"),
       });
     } finally {
       setBusy(false);
@@ -69,7 +71,7 @@ export default function Auth() {
 
   const forgotPassword = async () => {
     if (!email) {
-      toast.error("Enter your email first");
+      toast.error(t("auth.enterEmailFirst"));
       return;
     }
     setBusy(true);
@@ -78,9 +80,9 @@ export default function Auth() {
     });
     setBusy(false);
     if (error) {
-      toast.error("Failed to send reset email", { description: error.message });
+      toast.error(t("auth.resetFailedTitle"), { description: error.message });
     } else {
-      toast.success("Reset email sent", { description: "Check your inbox for the link." });
+      toast.success(t("auth.resetSentTitle"), { description: t("auth.resetSentBody") });
     }
   };
 
@@ -93,12 +95,12 @@ export default function Auth() {
               <Mail className="h-7 w-7 text-primary-foreground" />
             </div>
           </div>
-          <h1 className="text-2xl font-bold mb-2">Check your email</h1>
+          <h1 className="text-2xl font-bold mb-2">{t("auth.checkEmail")}</h1>
           <p className="text-sm text-muted-foreground mb-6">
-            We sent a confirmation link to <span className="text-foreground font-medium">{email}</span>. Tap the link to verify your account.
+            {t("auth.confirmEmailBody", { email })}
           </p>
           <Button variant="ghost" onClick={() => setConfirmSent(false)} className="w-full">
-            Back to sign in
+            {t("auth.backToSignIn")}
           </Button>
         </Card>
       </main>
@@ -113,26 +115,26 @@ export default function Auth() {
             <Sparkles className="h-7 w-7 text-primary-foreground" />
           </div>
         </div>
-        <h1 className="text-2xl font-bold text-center mb-2">Tatani</h1>
+        <h1 className="text-2xl font-bold text-center mb-2">{t("auth.appName")}</h1>
         <p className="text-sm text-muted-foreground text-center mb-8">
-          Learn Japanese from the anime you actually want to watch. Personalized flashcards, adaptive to your level.
+          {t("auth.tagline")}
         </p>
 
         <form onSubmit={handleEmailSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
+            <Label htmlFor="email">{t("auth.email")}</Label>
             <Input
               id="email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
+              placeholder={t("auth.emailPlaceholder")}
               required
               autoComplete="email"
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="password">Password</Label>
+            <Label htmlFor="password">{t("auth.password")}</Label>
             <div className="relative">
               <Input
                 id="password"
@@ -149,7 +151,7 @@ export default function Auth() {
                 type="button"
                 onClick={() => setShowPw((s) => !s)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-                aria-label="Toggle password visibility"
+                aria-label={t("auth.togglePw")}
               >
                 {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
@@ -158,25 +160,25 @@ export default function Auth() {
 
           {!isSignUp && (
             <button type="button" onClick={forgotPassword} className="text-xs text-primary hover:underline w-full text-right">
-              Forgot password?
+              {t("auth.forgotPassword")}
             </button>
           )}
 
           <Button type="submit" disabled={busy} className="w-full h-11 gradient-primary text-primary-foreground hover:opacity-90 transition-opacity">
-            {busy ? (isSignUp ? "Creating account…" : "Signing in…") : (isSignUp ? "Create account" : "Sign in")}
+            {busy ? (isSignUp ? t("auth.creatingAccount") : t("auth.signingIn")) : (isSignUp ? t("auth.createAccount") : t("auth.signIn"))}
           </Button>
         </form>
 
         <p className="text-sm text-center mt-4">
-          {isSignUp ? "Already have an account?" : "Don't have an account?"}{" "}
+          {isSignUp ? t("auth.alreadyHaveAccount") : t("auth.noAccount")}{" "}
           <button type="button" onClick={() => setIsSignUp((s) => !s)} className="text-primary hover:underline font-medium">
-            {isSignUp ? "Sign in" : "Sign up"}
+            {isSignUp ? t("auth.signIn") : t("auth.createAccount")}
           </button>
         </p>
 
         <div className="flex items-center gap-3 my-6">
           <Separator className="flex-1" />
-          <span className="text-xs text-muted-foreground">or</span>
+          <span className="text-xs text-muted-foreground">{t("auth.or")}</span>
           <Separator className="flex-1" />
         </div>
 
@@ -187,7 +189,7 @@ export default function Auth() {
             <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.3 0-9.7-3.1-11.3-7.5l-6.5 5C9.5 39.6 16.2 44 24 44z"/>
             <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.2-4.2 5.6l6.2 5.2C40 35.5 44 30.3 44 24c0-1.3-.1-2.3-.4-3.5z"/>
           </svg>
-          Continue with Google
+          {t("auth.continueGoogle")}
         </Button>
       </Card>
     </main>
