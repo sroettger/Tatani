@@ -191,6 +191,7 @@ export type Database = {
           placement_done: boolean
           study_streak: number
           total_words_known: number
+          ui_language: string
           updated_at: string
           user_id: string
         }
@@ -204,6 +205,7 @@ export type Database = {
           placement_done?: boolean
           study_streak?: number
           total_words_known?: number
+          ui_language?: string
           updated_at?: string
           user_id: string
         }
@@ -217,6 +219,7 @@ export type Database = {
           placement_done?: boolean
           study_streak?: number
           total_words_known?: number
+          ui_language?: string
           updated_at?: string
           user_id?: string
         }
