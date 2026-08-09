@@ -154,7 +154,7 @@ Return ONLY JSON in this exact shape: {"suggestions":[{"title":"...","reason":"o
       body: JSON.stringify({
         model: "google/gemini-2.5-flash",
         messages: [
-          { role: "system", content: "You are an expert in anime and Japanese language learning. Reply with valid JSON only." },
+          { role: "system", content: `You are an expert in anime and ${learning.name} language learning. Reply with valid JSON only.` },
           { role: "user", content: prompt },
         ],
         response_format: { type: "json_object" },
