@@ -8,7 +8,7 @@ import { Settings as SettingsIcon, LogOut, RotateCw, Trash2, Film, Layers, Langu
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { useI18n, SUPPORTED_LANGUAGES, LangCode } from "@/i18n";
+import { useI18n, SUPPORTED_LANGUAGES, LangCode, DICTS } from "@/i18n";
 import { LEARNING_LANGUAGES, LearningLangCode, levelsFor, scaleLabel, formatLevel } from "@/lib/languages";
 import {
   useStudyPrefs,
@@ -42,9 +42,9 @@ export default function Settings() {
     if (code === lang) return;
     try {
       await setLang(code);
-      toast.success(t("settings.languageUpdated"));
+      toast.success(DICTS[code]?.["settings.languageUpdated"] ?? t("settings.languageUpdated"));
     } catch {
-      toast.error(t("settings.languageFailed"));
+      toast.error(DICTS[code]?.["settings.languageFailed"] ?? t("settings.languageFailed"));
     }
   };
 
