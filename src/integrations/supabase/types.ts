@@ -317,7 +317,7 @@ export type Database = {
           example_sentence_en: string | null
           example_sentence_jp: string | null
           id: string
-          jlpt_level: Database["public"]["Enums"]["jlpt_level"] | null
+          level: string | null
           meaning: string | null
           part_of_speech: string | null
           position: number
@@ -330,7 +330,7 @@ export type Database = {
           example_sentence_en?: string | null
           example_sentence_jp?: string | null
           id?: string
-          jlpt_level?: Database["public"]["Enums"]["jlpt_level"] | null
+          level?: string | null
           meaning?: string | null
           part_of_speech?: string | null
           position: number
@@ -343,7 +343,7 @@ export type Database = {
           example_sentence_en?: string | null
           example_sentence_jp?: string | null
           id?: string
-          jlpt_level?: Database["public"]["Enums"]["jlpt_level"] | null
+          level?: string | null
           meaning?: string | null
           part_of_speech?: string | null
           position?: number
@@ -585,10 +585,10 @@ export type Database = {
           correct_streak: number
           created_at: string
           id: string
-          jlpt_level: Database["public"]["Enums"]["jlpt_level"] | null
           known_source: string | null
           last_reviewed_at: string | null
           learning_language: string
+          level: string | null
           marked_known_at: string | null
           preference: Database["public"]["Enums"]["word_preference"]
           reading: string | null
@@ -603,10 +603,10 @@ export type Database = {
           correct_streak?: number
           created_at?: string
           id?: string
-          jlpt_level?: Database["public"]["Enums"]["jlpt_level"] | null
           known_source?: string | null
           last_reviewed_at?: string | null
           learning_language?: string
+          level?: string | null
           marked_known_at?: string | null
           preference?: Database["public"]["Enums"]["word_preference"]
           reading?: string | null
@@ -621,10 +621,10 @@ export type Database = {
           correct_streak?: number
           created_at?: string
           id?: string
-          jlpt_level?: Database["public"]["Enums"]["jlpt_level"] | null
           known_source?: string | null
           last_reviewed_at?: string | null
           learning_language?: string
+          level?: string | null
           marked_known_at?: string | null
           preference?: Database["public"]["Enums"]["word_preference"]
           reading?: string | null
