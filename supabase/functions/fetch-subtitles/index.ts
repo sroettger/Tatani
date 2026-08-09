@@ -31,11 +31,14 @@ Deno.serve(async (req) => {
     if (claimsErr || !claims?.claims) return json({ error: "Unauthorized" }, 401);
     const userId = claims.claims.sub as string;
 
-    const { episode_id } = await req.json();
+    const { episode_id, language } = await req.json();
     if (!episode_id) return json({ error: "episode_id required" }, 400);
 
     const supabase = createClient(SUPABASE_URL, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-    const { learning } = await getUserLanguages(supabase, userId);
+    const { learning: profileLearning } = await getUserLanguages(supabase, userId);
+    // Optional override, mainly for testing a specific subtitle language.
+    const learning = typeof language === "string" && language ? langInfo(language) : profileLearning;
+
 
     const { data: ep, error } = await supabase
       .from("episodes")
