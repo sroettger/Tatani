@@ -186,6 +186,8 @@ export const en = {
   "episode.fetchFailed": "Subtitle fetch failed",
   "episode.noSubsFound": "No subtitles found",
   "episode.tryAgainLater": "Try again later.",
+  "episode.noSubsTried": "Tried: {providers}. You can upload a subtitle file manually.",
+
   "home.removing": "Removing…",
 
   "watch.title": "Watch · Ep {n}",
@@ -559,6 +561,8 @@ export const ja: Record<StringKey, string> = {
   "episode.fetchFailed": "字幕の取得に失敗しました",
   "episode.noSubsFound": "字幕が見つかりませんでした",
   "episode.tryAgainLater": "後でもう一度お試しください。",
+  "episode.noSubsTried": "検索先: {providers}。字幕ファイルを手動でアップロードできます。",
+
   "home.removing": "削除中…",
 
   "watch.title": "視聴 · 第{n}話",
