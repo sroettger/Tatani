@@ -186,6 +186,8 @@ export const en = {
   "episode.fetchFailed": "Subtitle fetch failed",
   "episode.noSubsFound": "No subtitles found",
   "episode.tryAgainLater": "Try again later.",
+  "episode.noSubsTried": "Tried: {providers}. You can upload a subtitle file manually.",
+
   "home.removing": "Removing…",
 
   "watch.title": "Watch · Ep {n}",
