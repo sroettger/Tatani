@@ -14,6 +14,9 @@ if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js").catch(() => {});
     });
   } else {
-    navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r) => r.unregister()));
+    navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r) => {
+      const worker = r.active ?? r.waiting ?? r.installing;
+      if (worker && new URL(worker.scriptURL).pathname === "/sw.js") r.unregister();
+    }));
   }
 }

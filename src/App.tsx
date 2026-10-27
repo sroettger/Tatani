@@ -18,6 +18,7 @@ import VoiceStudySession from "./pages/VoiceStudySession";
 import StudyChunk from "./pages/StudyChunk";
 import ChunkQuiz from "./pages/ChunkQuiz";
 import WatchEpisode from "./pages/WatchEpisode";
+import NotificationReview from "./pages/NotificationReview";
 
 import Stats from "./pages/Stats";
 import Settings from "./pages/Settings";
@@ -53,6 +54,7 @@ const App = () => (
               <Route path="/recommendations" element={<Recommendations />} />
               <Route path="/stats" element={<Stats />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/notifications/review/:deliveryId" element={<NotificationReview />} />
               <Route path="/anime/:animeId" element={<AnimeDetail />} />
               <Route path="/episode/:episodeId" element={<EpisodeDetail />} />
               <Route path="/study/:episodeId" element={<StudySession />} />

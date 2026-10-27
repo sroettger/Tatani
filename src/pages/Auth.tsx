@@ -24,7 +24,11 @@ export default function Auth() {
   const [confirmSent, setConfirmSent] = useState(false);
 
   useEffect(() => {
-    if (!loading && user) navigate("/", { replace: true });
+    if (!loading && user) {
+      const returnTo = sessionStorage.getItem("tatani-review-return");
+      sessionStorage.removeItem("tatani-review-return");
+      navigate(returnTo?.startsWith("/notifications/review/") ? returnTo : "/", { replace: true });
+    }
   }, [user, loading, navigate]);
 
   const signInGoogle = async () => {

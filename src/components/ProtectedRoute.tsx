@@ -1,7 +1,8 @@
-import { Navigate } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 
 export function ProtectedRoute({ children }: { children: JSX.Element }) {
+  const location = useLocation();
   const { user, loading, progress } = useAuth();
   if (loading) {
     return (
@@ -10,7 +11,10 @@ export function ProtectedRoute({ children }: { children: JSX.Element }) {
       </div>
     );
   }
-  if (!user) return <Navigate to="/auth" replace />;
+  if (!user) {
+    if (location.pathname.startsWith("/notifications/review/")) sessionStorage.setItem("tatani-review-return", location.pathname);
+    return <Navigate to="/auth" replace />;
+  }
   // Placement is tracked per learning language.
   if (progress && !progress.placement_done) return <Navigate to="/onboarding" replace />;
   return children;
