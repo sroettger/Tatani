@@ -186,6 +186,116 @@ export type Database = {
           },
         ]
       }
+      flashcard_push_deliveries: {
+        Row: {
+          created_at: string
+          device_id: string
+          example_sentence: string | null
+          id: string
+          learning_language: string
+          level: string | null
+          meaning: string | null
+          reading: string | null
+          reviewed_at: string | null
+          slot: string
+          status: string
+          user_id: string
+          word: string
+        }
+        Insert: {
+          created_at?: string
+          device_id: string
+          example_sentence?: string | null
+          id?: string
+          learning_language: string
+          level?: string | null
+          meaning?: string | null
+          reading?: string | null
+          reviewed_at?: string | null
+          slot: string
+          status?: string
+          user_id: string
+          word: string
+        }
+        Update: {
+          created_at?: string
+          device_id?: string
+          example_sentence?: string | null
+          id?: string
+          learning_language?: string
+          level?: string | null
+          meaning?: string | null
+          reading?: string | null
+          reviewed_at?: string | null
+          slot?: string
+          status?: string
+          user_id?: string
+          word?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "flashcard_push_deliveries_device_id_fkey"
+            columns: ["device_id"]
+            isOneToOne: false
+            referencedRelation: "flashcard_push_devices"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      flashcard_push_devices: {
+        Row: {
+          cards_per_day: number
+          enabled: boolean
+          end_hour: number
+          id: string
+          start_hour: number
+          timezone: string
+          token: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          cards_per_day?: number
+          enabled?: boolean
+          end_hour?: number
+          id?: string
+          start_hour?: number
+          timezone?: string
+          token: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          cards_per_day?: number
+          enabled?: boolean
+          end_hour?: number
+          id?: string
+          start_hour?: number
+          timezone?: string
+          token?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      flashcard_push_jobs: {
+        Row: {
+          claimed_at: string | null
+          created_at: string
+          id: string
+        }
+        Insert: {
+          claimed_at?: string | null
+          created_at?: string
+          id?: string
+        }
+        Update: {
+          claimed_at?: string | null
+          created_at?: string
+          id?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -647,6 +757,10 @@ export type Database = {
           _role: Database["public"]["Enums"]["app_role"]
           _user_id: string
         }
+        Returns: boolean
+      }
+      review_flashcard_delivery: {
+        Args: { delivery_id: string; owner_id: string; remembered: boolean }
         Returns: boolean
       }
     }
