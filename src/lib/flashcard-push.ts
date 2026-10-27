@@ -29,6 +29,19 @@ export async function enableFlashcardPush(): Promise<{ status: "registered"; tok
   if (permission !== "granted") return { status: "denied" };
   if (!(await isSupported())) return { status: "unsupported" };
   const registration = await navigator.serviceWorker.register(`/firebase-messaging-sw.js?${new URLSearchParams(config)}`, { scope: "/push/" });
+  if (!registration.active) {
+    await new Promise<void>((resolve, reject) => {
+      const worker = registration.installing ?? registration.waiting;
+      if (!worker) { reject(new Error("Notification worker is unavailable")); return; }
+      const timeout = window.setTimeout(() => reject(new Error("Notification worker activation timed out")), 20000);
+      const check = () => {
+        if (worker.state === "activated") { window.clearTimeout(timeout); resolve(); }
+        else if (worker.state === "redundant") { window.clearTimeout(timeout); reject(new Error("Notification worker could not activate")); }
+      };
+      worker.addEventListener("statechange", check);
+      check();
+    });
+  }
   const existing = getApps().find(app => app.name === "tatani-push");
   const app = existing ?? initializeApp(config, "tatani-push");
   const token = await getToken(getMessaging(app), { vapidKey, serviceWorkerRegistration: registration });
