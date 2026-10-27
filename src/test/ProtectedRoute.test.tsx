@@ -12,6 +12,15 @@ const routes = [
 ];
 
 describe("ProtectedRoute", () => {
+  it("retains a notification review destination through sign-in", () => {
+    sessionStorage.removeItem("tatani-review-return");
+    renderWithProviders(<ProtectedRoute><Guarded /></ProtectedRoute>, {
+      route: "/notifications/review/24fb1784-a0e0-48f6-9dc2-0d56cc98259f",
+      auth: { user: null, progress: null }, routes,
+    });
+    expect(sessionStorage.getItem("tatani-review-return")).toBe("/notifications/review/24fb1784-a0e0-48f6-9dc2-0d56cc98259f");
+    sessionStorage.removeItem("tatani-review-return");
+  });
   it("renders children when placement is done for the active language", () => {
     renderWithProviders(
       <ProtectedRoute>
