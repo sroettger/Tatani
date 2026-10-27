@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/PageHeader";
+import { NotificationSettings } from "@/components/NotificationSettings";
 import { useAuth } from "@/context/AuthContext";
 import { Settings as SettingsIcon, LogOut, RotateCw, Trash2, Film, Layers, Languages, GraduationCap } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -140,6 +141,7 @@ export default function Settings() {
     <div className="max-w-2xl mx-auto">
       <PageHeader title={t("settings.title")} subtitle={t("settings.subtitle")} icon={<SettingsIcon className="h-4 w-4" />} />
       <div className="px-5 grid gap-3">
+        <NotificationSettings />
         <Card className="p-4 gradient-card border-border/50">
           <div className="flex items-center gap-3">
             {profile?.avatar_url && <img src={profile.avatar_url} alt="" className="h-12 w-12 rounded-full" />}
