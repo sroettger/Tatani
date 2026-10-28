@@ -17,6 +17,8 @@ const Input = z.discriminatedUnion("action", [
 ]);
 
 async function sendCard(device: any, slot: string): Promise<string> {
+  const expireBefore = new Date(Date.now() - (slot.startsWith("test-") ? 0 : 2 * 3600_000)).toISOString();
+  await db.from("flashcard_push_deliveries").update({ status: "expired" }).eq("user_id", device.user_id).is("reviewed_at", null).in("status", ["pending", "sent"]).lt("created_at", expireBefore);
   const { data: unhandled, error: pendingError } = await db.from("flashcard_push_deliveries").select("status,reviewed_at").eq("user_id", device.user_id).is("reviewed_at", null).in("status", ["pending", "sent"]).limit(1);
   if (pendingError) throw pendingError;
   if (hasUnhandledDelivery(unhandled ?? [])) return "unhandled";
