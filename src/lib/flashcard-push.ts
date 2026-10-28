@@ -3,7 +3,7 @@ import { getMessaging, getToken, isSupported } from "firebase/messaging";
 import { FunctionsHttpError } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 
-export type DeviceSchedule = { id: string; enabled: boolean; timezone: string; start_hour: number; end_hour: number; cards_per_day: number };
+export type DeviceSchedule = { id: string; enabled: boolean; timezone: string; start_hour: number; end_hour: number; cards_per_hour: number };
 export async function notificationRequest<T>(body: Record<string, unknown>): Promise<T> {
   const { data, error } = await supabase.functions.invoke("flashcard-notifications", { body });
   if (error) {
