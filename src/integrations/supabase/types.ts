@@ -245,6 +245,7 @@ export type Database = {
       flashcard_push_devices: {
         Row: {
           cards_per_day: number
+          cards_per_hour: number
           enabled: boolean
           end_hour: number
           id: string
@@ -256,6 +257,7 @@ export type Database = {
         }
         Insert: {
           cards_per_day?: number
+          cards_per_hour?: number
           enabled?: boolean
           end_hour?: number
           id?: string
@@ -267,6 +269,7 @@ export type Database = {
         }
         Update: {
           cards_per_day?: number
+          cards_per_hour?: number
           enabled?: boolean
           end_hour?: number
           id?: string
