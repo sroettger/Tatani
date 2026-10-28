@@ -13,7 +13,7 @@ export function currentSlot(schedule: PushSchedule, date: Date): string | null {
   const minute = Number(get("minute"));
   if (hour < schedule.start_hour || hour >= schedule.end_hour) return null;
   const minutes = scheduleMinutes(schedule.cards_per_hour);
-  const bucket = minutes.findLastIndex(m => m <= minute);
+  const bucket = Math.max(0, minutes.filter(m => m <= minute).length - 1);
   return `${get("year")}-${get("month")}-${get("day")}-${hour}-${minutes[bucket]}`;
 }
 

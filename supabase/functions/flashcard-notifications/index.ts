@@ -1,11 +1,11 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders } from "npm:@supabase/supabase-js@2/cors";
 import { z } from "npm:zod@3";
-import { currentSlot, eligibleWord } from "../_shared/push-schedule.ts";
+import { currentSlot, eligibleWord, hasUnhandledDelivery } from "../_shared/push-schedule.ts";
 
 const db = createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "");
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-const Schedule = z.object({ timezone: z.string().max(100).refine(v => { try { new Intl.DateTimeFormat("en", { timeZone: v }); return true; } catch { return false; } }), start_hour: z.number().int().min(0).max(23), end_hour: z.number().int().min(0).max(23), cards_per_day: z.number().int().min(1).max(12) }).refine(s => s.end_hour > s.start_hour && s.cards_per_day <= s.end_hour - s.start_hour + 1);
+const Schedule = z.object({ timezone: z.string().max(100).refine(v => { try { new Intl.DateTimeFormat("en", { timeZone: v }); return true; } catch { return false; } }), start_hour: z.number().int().min(0).max(23), end_hour: z.number().int().min(0).max(23), cards_per_hour: z.number().int().min(1).max(60) }).refine(s => s.end_hour > s.start_hour);
 const Input = z.discriminatedUnion("action", [
   z.object({ action: z.literal("settings"), device_id: z.string().uuid().optional() }),
   z.object({ action: z.literal("enable"), token: z.string().min(20).max(4096), schedule: Schedule }),
@@ -17,6 +17,9 @@ const Input = z.discriminatedUnion("action", [
 ]);
 
 async function sendCard(device: any, slot: string): Promise<string> {
+  const { data: unhandled, error: pendingError } = await db.from("flashcard_push_deliveries").select("status,reviewed_at").eq("user_id", device.user_id).is("reviewed_at", null).in("status", ["pending", "sent"]).limit(1);
+  if (pendingError) throw pendingError;
+  if (hasUnhandledDelivery(unhandled ?? [])) return "unhandled";
   const { data: profile, error: profileError } = await db.from("profiles").select("learning_language,ui_language").eq("user_id", device.user_id).single();
   if (profileError) throw profileError;
   const language = profile.learning_language;
@@ -36,17 +39,25 @@ async function sendCard(device: any, slot: string): Promise<string> {
   const fresh = candidates.filter(w => !recentWords.has(w.word));
   const pool = fresh.length ? fresh : candidates;
   const card = pool[Math.floor(Math.random() * pool.length)];
-  const { data: delivery, error: insertError } = await db.from("flashcard_push_deliveries").insert({ user_id: device.user_id, device_id: device.id, slot, learning_language: language, word: card.word, reading: card.reading, meaning: card.meaning, example_sentence: card.example_sentence_jp, level: card.level }).select("id").single();
-  if (insertError?.code === "23505") return "duplicate";
-  if (insertError || !delivery) throw insertError ?? new Error("Delivery was not created");
   const projectKey = Deno.env.get("LOVABLE_API_KEY");
   const connectionKey = Deno.env.get("FIREBASE_MESSAGING_API_KEY");
   if (!projectKey || !connectionKey) throw new Error("Firebase is not configured");
+  const { data: delivery, error: insertError } = await db.from("flashcard_push_deliveries").insert({ user_id: device.user_id, device_id: device.id, slot, learning_language: language, word: card.word, reading: card.reading, meaning: card.meaning, example_sentence: card.example_sentence_jp, level: card.level }).select("id").single();
+  if (insertError?.code === "P0001") return "unhandled";
+  if (insertError?.code === "23505") return "duplicate";
+  if (insertError || !delivery) throw insertError ?? new Error("Delivery was not created");
   const path = `/notifications/review/${delivery.id}`;
-  const response = await fetch("https://connector-gateway.lovable.dev/firebase_messaging/v1/projects/_/messages:send", {
+  let response: Response;
+  try {
+  response = await fetch("https://connector-gateway.lovable.dev/firebase_messaging/v1/projects/_/messages:send", {
     method: "POST", headers: { Authorization: `Bearer ${projectKey}`, "X-Connection-Api-Key": connectionKey, "Content-Type": "application/json" },
     body: JSON.stringify({ message: { token: device.token, notification: { title: `Tatani · ${card.word}`, body: profile.ui_language === "ja" ? "意味を思い出せますか？" : "Can you remember the meaning?" }, data: { path }, webpush: { headers: { TTL: "3600" }, notification: { icon: "/icon-192.png", tag: delivery.id }, fcm_options: { link: `https://tatani.lovable.app${path}` } } } }),
   });
+  } catch (error) {
+    // Keep uncertain deliveries pending: a network timeout may still have delivered the card.
+    console.error("Firebase delivery outcome unknown", error);
+    throw error;
+  }
   if (!response.ok) {
     const details = await response.text();
     // INVALID_ARGUMENT can describe malformed payloads, not just stale tokens.
@@ -86,13 +97,13 @@ Deno.serve(async req => {
     if (authError || !auth.user) return reply({ error: "Unauthorized" }, 401);
     const uid = auth.user.id;
     if (input.action === "enable") {
-      const { data, error } = await db.from("flashcard_push_devices").upsert({ user_id: uid, token: input.token, enabled: true, ...input.schedule, updated_at: new Date().toISOString() }, { onConflict: "token" }).select("id,enabled,timezone,start_hour,end_hour,cards_per_day").single();
+      const { data, error } = await db.from("flashcard_push_devices").upsert({ user_id: uid, token: input.token, enabled: true, ...input.schedule, cards_per_day: 1, updated_at: new Date().toISOString() }, { onConflict: "token" }).select("id,enabled,timezone,start_hour,end_hour,cards_per_hour").single();
       if (error) throw error;
       return reply({ device: data });
     }
     if (input.action === "settings") {
       if (!input.device_id) return reply({ device: null });
-      const { data, error } = await db.from("flashcard_push_devices").select("id,enabled,timezone,start_hour,end_hour,cards_per_day").eq("user_id", uid).eq("id", input.device_id).maybeSingle();
+      const { data, error } = await db.from("flashcard_push_devices").select("id,enabled,timezone,start_hour,end_hour,cards_per_hour").eq("user_id", uid).eq("id", input.device_id).maybeSingle();
       if (error) throw error;
       return reply({ device: data });
     }
