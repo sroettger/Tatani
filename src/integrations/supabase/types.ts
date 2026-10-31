@@ -196,6 +196,7 @@ export type Database = {
           level: string | null
           meaning: string | null
           reading: string | null
+          review_token: string
           reviewed_at: string | null
           slot: string
           status: string
@@ -211,6 +212,7 @@ export type Database = {
           level?: string | null
           meaning?: string | null
           reading?: string | null
+          review_token?: string
           reviewed_at?: string | null
           slot: string
           status?: string
@@ -226,6 +228,7 @@ export type Database = {
           level?: string | null
           meaning?: string | null
           reading?: string | null
+          review_token?: string
           reviewed_at?: string | null
           slot?: string
           status?: string
