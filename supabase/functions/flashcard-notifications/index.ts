@@ -14,6 +14,7 @@ const Input = z.discriminatedUnion("action", [
   z.object({ action: z.literal("card"), delivery_id: z.string().uuid() }),
   z.object({ action: z.literal("review"), delivery_id: z.string().uuid(), remembered: z.boolean() }),
   z.object({ action: z.literal("dispatch"), job_id: z.string().uuid() }),
+  z.object({ action: z.literal("notification_review"), delivery_id: z.string().uuid(), token: z.string().uuid(), remembered: z.boolean() }),
 ]);
 
 async function sendCard(device: any, slot: string): Promise<string> {
@@ -44,16 +45,24 @@ async function sendCard(device: any, slot: string): Promise<string> {
   const projectKey = Deno.env.get("LOVABLE_API_KEY");
   const connectionKey = Deno.env.get("FIREBASE_MESSAGING_API_KEY");
   if (!projectKey || !connectionKey) throw new Error("Firebase is not configured");
-  const { data: delivery, error: insertError } = await db.from("flashcard_push_deliveries").insert({ user_id: device.user_id, device_id: device.id, slot, learning_language: language, word: card.word, reading: card.reading, meaning: card.meaning, example_sentence: card.example_sentence_jp, level: card.level }).select("id").single();
+  const { data: delivery, error: insertError } = await db.from("flashcard_push_deliveries").insert({ user_id: device.user_id, device_id: device.id, slot, learning_language: language, word: card.word, reading: card.reading, meaning: card.meaning, example_sentence: card.example_sentence_jp, level: card.level }).select("id,review_token").single();
   if (insertError?.code === "P0001") return "unhandled";
   if (insertError?.code === "23505") return "duplicate";
   if (insertError || !delivery) throw insertError ?? new Error("Delivery was not created");
   const path = `/notifications/review/${delivery.id}`;
+  const ja = profile.ui_language === "ja";
+  // Data-only message: the service worker renders it with Reveal / grade buttons and reviews in the background.
+  const data: Record<string, string> = {
+    path, delivery_id: delivery.id, token: delivery.review_token, api: `${Deno.env.get("SUPABASE_URL")}/functions/v1/flashcard-notifications`,
+    word: card.word, reading: card.reading ?? "", meaning: card.meaning ?? "", example: card.example_sentence_jp ?? "",
+    prompt: ja ? "意味を思い出せますか？" : "Can you remember the meaning?",
+    l_reveal: ja ? "答えを見る" : "Reveal", l_yes: ja ? "覚えた" : "Remembered", l_no: ja ? "もう一度" : "Study again",
+  };
   let response: Response;
   try {
   response = await fetch("https://connector-gateway.lovable.dev/firebase_messaging/v1/projects/_/messages:send", {
     method: "POST", headers: { Authorization: `Bearer ${projectKey}`, "X-Connection-Api-Key": connectionKey, "Content-Type": "application/json" },
-    body: JSON.stringify({ message: { token: device.token, notification: { title: `Tatani · ${card.word}`, body: profile.ui_language === "ja" ? "意味を思い出せますか？" : "Can you remember the meaning?" }, data: { path }, webpush: { headers: { TTL: "3600" }, notification: { icon: "/icon-192.png", tag: delivery.id }, fcm_options: { link: `https://tatani.lovable.app${path}` } } } }),
+    body: JSON.stringify({ message: { token: device.token, data, webpush: { headers: { TTL: "3600", Urgency: "high" } } } }),
   });
   } catch (error) {
     // Keep uncertain deliveries pending: a network timeout may still have delivered the card.
@@ -92,6 +101,15 @@ Deno.serve(async req => {
       }
       await db.from("flashcard_push_jobs").delete().lt("created_at", new Date(Date.now() - 86400000).toISOString());
       return reply({ results });
+    }
+    if (input.action === "notification_review") {
+      // The per-delivery secret sent only to this device authorizes grading straight from the notification.
+      const { data: card, error } = await db.from("flashcard_push_deliveries").select("id,user_id").eq("id", input.delivery_id).eq("review_token", input.token).maybeSingle();
+      if (error) throw error;
+      if (!card) return reply({ error: "Unauthorized" }, 401);
+      const { data: recorded, error: reviewError } = await db.rpc("review_flashcard_delivery", { delivery_id: card.id, owner_id: card.user_id, remembered: input.remembered });
+      if (reviewError) throw reviewError;
+      return reply({ recorded });
     }
     const jwt = req.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
     if (!jwt) return reply({ error: "Unauthorized" }, 401);
