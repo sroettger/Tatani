@@ -101,4 +101,14 @@ describe("notification quiz actions", () => {
       expect(w.openWindow).not.toHaveBeenCalled();
     } finally { vi.useRealTimers(); }
   });
+  it("stops retrying an expired card without claiming it was graded", async () => {
+    const w = worker();
+    w.fetch.mockResolvedValue({ ok: false, status: 410 } as any);
+    let task = Promise.resolve();
+    w.click({ action: "answer_0", notification: { data: { ...w.data, stage: "quiz" }, close: vi.fn() }, waitUntil: (p: Promise<void>) => { task = p; } });
+    await task;
+    expect(w.entries.size).toBe(0);
+    expect(w.showNotification.mock.calls[1][1].data.stage).toBe("failed");
+    expect(w.openWindow).not.toHaveBeenCalled();
+  });
 });
