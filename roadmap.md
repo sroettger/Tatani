@@ -10,3 +10,5 @@
 - [x] Replace reveal/self-grading with a single multiple-choice notification and matching fallback.
 - [x] Calculate recall and spaced repetition from answers and test persistence.
 - [ ] Verify new quiz buttons on Android — requires the user's phone.
+- [x] Save notification answers locally and sync without waiting for the network.
+- [x] Test offline retries, duplicate safety, and slow-response feedback.

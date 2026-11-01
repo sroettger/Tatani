@@ -1,8 +1,11 @@
 import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
 import "./index.css";
+import { resumePushAnswers } from "./lib/resume-push-answers";
 
-createRoot(document.getElementById("root")!).render(<App />);
+const root = document.getElementById("root");
+if (root) createRoot(root).render(<App />);
+resumePushAnswers();
 
 // PWA service worker — only in production, never inside the editor iframe / preview hosts
 if ("serviceWorker" in navigator) {

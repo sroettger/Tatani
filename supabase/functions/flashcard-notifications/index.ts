@@ -62,6 +62,8 @@ async function sendCard(device: any, slot: string): Promise<string> {
     quiz_options: JSON.stringify(quiz.options),
     prompt: ja ? "意味はどちらですか？" : "Which meaning is correct?",
     l_correct: ja ? "正解" : "Correct", l_incorrect: ja ? "不正解" : "Incorrect",
+    l_queued: ja ? "回答を端末に保存しました。同期待ちです。" : "Answer saved on this device. Waiting to sync.",
+    l_failed: ja ? "回答を同期できませんでした。タップしてカードを確認してください。" : "Answer could not sync. Tap to check the card.",
   };
   let response: Response;
   try {
@@ -175,5 +177,8 @@ Deno.serve(async req => {
     }
     if (!device.enabled) return reply({ error: "Notifications are disabled" }, 400);
     return reply({ result: await sendCard(device, `test-${crypto.randomUUID()}`) });
-  } catch (error) { return reply({ error: error instanceof Error ? error.message : "Request failed" }, 500); }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : (error as { message?: string })?.message ?? "Request failed";
+    return reply({ error: message }, message === "Quiz expired" ? 410 : 500);
+  }
 });
