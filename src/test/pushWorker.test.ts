@@ -39,6 +39,16 @@ describe("notification quiz actions", () => {
     expect(w.showNotification.mock.calls[1][1]).toMatchObject({ tag: "delivery", renotify: false });
     expect(w.openWindow).not.toHaveBeenCalled();
   });
+  it("submits \"I don't know\" as answer -1", async () => {
+    const w = worker();
+    await w.background({ data: w.data });
+    expect(w.showNotification.mock.calls[0][1].actions.map((a: { action: string }) => a.action)).toEqual(["answer_0", "answer_1", "answer_dk"]);
+    let task: Promise<unknown> = Promise.resolve();
+    w.click({ action: "answer_dk", notification: { data: { ...w.data, stage: "quiz" }, close: vi.fn() }, waitUntil: (p: Promise<unknown>) => { task = p; } });
+    await task;
+    expect(JSON.parse(w.fetch.mock.calls[0][1].body)).toEqual({ action: "quiz_answer", delivery_id: "delivery", token: "secret", answer: -1 });
+    expect(w.openWindow).not.toHaveBeenCalled();
+  });
   it("retains the selected answer offline instead of opening the website", async () => {
     const w = worker(false);
     let task: Promise<unknown> = Promise.resolve();
