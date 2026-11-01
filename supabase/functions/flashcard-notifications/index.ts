@@ -58,7 +58,7 @@ async function sendCard(device: any, slot: string): Promise<string> {
   // Answer key stays server-side; the worker submits only the selected option.
   const data: Record<string, string> = {
     path, delivery_id: delivery.id, token: delivery.review_token, api: `${Deno.env.get("SUPABASE_URL")}/functions/v1/flashcard-notifications`,
-    word: card.word, reading: card.reading ?? "", meaning: card.meaning ?? "", example: card.example_sentence_jp ?? "",
+    word: card.word, reading: card.reading ?? "",
     quiz_options: JSON.stringify(quiz.options),
     prompt: ja ? "意味はどちらですか？" : "Which meaning is correct?",
     l_correct: ja ? "正解" : "Correct", l_incorrect: ja ? "不正解" : "Incorrect",
@@ -128,9 +128,10 @@ Deno.serve(async req => {
     }
     if (input.action === "notification_review") {
       // The per-delivery secret sent only to this device authorizes grading straight from the notification.
-      const { data: card, error } = await db.from("flashcard_push_deliveries").select("id,user_id").eq("id", input.delivery_id).eq("review_token", input.token).maybeSingle();
+      const { data: card, error } = await db.from("flashcard_push_deliveries").select("id,user_id,quiz_options").eq("id", input.delivery_id).eq("review_token", input.token).maybeSingle();
       if (error) throw error;
       if (!card) return reply({ error: "Unauthorized" }, 401);
+      if (card.quiz_options) return reply({ error: "Select a quiz answer" }, 400);
       const { data: recorded, error: reviewError } = await db.rpc("review_flashcard_delivery", { delivery_id: card.id, owner_id: card.user_id, remembered: input.remembered });
       if (reviewError) throw reviewError;
       return reply({ recorded });
