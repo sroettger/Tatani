@@ -16,7 +16,7 @@ const Input = z.discriminatedUnion("action", [
   z.object({ action: z.literal("review"), delivery_id: z.string().uuid(), remembered: z.boolean() }),
   z.object({ action: z.literal("dispatch"), job_id: z.string().uuid() }),
   z.object({ action: z.literal("notification_review"), delivery_id: z.string().uuid(), token: z.string().uuid(), remembered: z.boolean() }),
-  z.object({ action: z.literal("quiz_answer"), delivery_id: z.string().uuid(), token: z.string().uuid().optional(), answer: z.number().int().min(0).max(1) }),
+  z.object({ action: z.literal("quiz_answer"), delivery_id: z.string().uuid(), token: z.string().uuid().optional(), answer: z.number().int().min(-1).max(1) }),
 ]);
 
 async function sendCard(device: any, slot: string): Promise<string> {
@@ -62,6 +62,7 @@ async function sendCard(device: any, slot: string): Promise<string> {
     quiz_options: JSON.stringify(quiz.options),
     prompt: ja ? "意味はどちらですか？" : "Which meaning is correct?",
     l_correct: ja ? "正解" : "Correct", l_incorrect: ja ? "不正解" : "Incorrect",
+    l_dont_know: ja ? "わからない" : "I don't know",
     l_queued: ja ? "回答を端末に保存しました。同期待ちです。" : "Answer saved on this device. Waiting to sync.",
     l_failed: ja ? "回答を同期できませんでした。タップしてカードを確認してください。" : "Answer could not sync. Tap to check the card.",
   };

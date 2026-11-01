@@ -30,7 +30,7 @@ messaging.onBackgroundMessage((payload) => {
     body: [d.prompt, ...JSON.parse(d.quiz_options || '[]').map((option, i) => `${i === 0 ? 'A' : 'B'}. ${option}`)].join('\n'),
     tag: d.delivery_id, icon: '/icon-192.png', renotify: true, requireInteraction: true,
     data: { ...d, stage: d.quiz_options ? 'quiz' : 'prompt' },
-    actions: d.quiz_options ? [{ action: 'answer_0', title: `A. ${JSON.parse(d.quiz_options)[0]}` }, { action: 'answer_1', title: `B. ${JSON.parse(d.quiz_options)[1]}` }] : [{ action: 'reveal', title: d.l_reveal }],
+    actions: d.quiz_options ? [{ action: 'answer_0', title: `A. ${JSON.parse(d.quiz_options)[0]}` }, { action: 'answer_1', title: `B. ${JSON.parse(d.quiz_options)[1]}` }, { action: 'answer_dk', title: d.l_dont_know }] : [{ action: 'reveal', title: d.l_reveal }],
   });
   return Promise.all([shown, flushAnswers().catch(requestRetry)]);
 });
@@ -41,14 +41,14 @@ self.addEventListener('notificationclick', (event) => {
   if (!d.delivery_id) return;
   n.close();
   if (d.stage === 'quiz') {
-    if (event.action !== 'answer_0' && event.action !== 'answer_1') return event.waitUntil(self.clients.openWindow(d.path));
+    if (event.action !== 'answer_0' && event.action !== 'answer_1' && event.action !== 'answer_dk') return event.waitUntil(self.clients.openWindow(d.path));
     event.waitUntil((async () => {
       try {
-        const answer = Number(event.action.slice(-1));
+        const answer = event.action === 'answer_dk' ? -1 : Number(event.action.slice(-1));
         await outbox.enqueue(d, answer);
         // Acknowledge the durable local save before any network request.
         await self.registration.showNotification(`Tatani · ${d.word}`, {
-          body: [d.l_queued, `${answer === 0 ? 'A' : 'B'}. ${JSON.parse(d.quiz_options)[answer]}`].filter(Boolean).join('\n'),
+          body: [d.l_queued, answer === -1 ? d.l_dont_know : `${answer === 0 ? 'A' : 'B'}. ${JSON.parse(d.quiz_options)[answer]}`].filter(Boolean).join('\n'),
           tag: d.delivery_id, icon: '/icon-192.png', renotify: false,
           data: { ...d, stage: 'queued' },
         });
