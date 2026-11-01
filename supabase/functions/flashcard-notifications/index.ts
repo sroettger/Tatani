@@ -62,6 +62,8 @@ async function sendCard(device: any, slot: string): Promise<string> {
     quiz_options: JSON.stringify(quiz.options),
     prompt: ja ? "意味はどちらですか？" : "Which meaning is correct?",
     l_correct: ja ? "正解" : "Correct", l_incorrect: ja ? "不正解" : "Incorrect",
+    l_queued: ja ? "回答を端末に保存しました。同期待ちです。" : "Answer saved on this device. Waiting to sync.",
+    l_failed: ja ? "回答を同期できませんでした。タップしてカードを確認してください。" : "Answer could not sync. Tap to check the card.",
   };
   let response: Response;
   try {

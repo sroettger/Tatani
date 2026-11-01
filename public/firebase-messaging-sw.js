@@ -1,18 +1,38 @@
 importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js');
+importScripts('/push-answer-outbox.js');
 firebase.initializeApp(Object.fromEntries(new URL(self.location).searchParams));
 const messaging = firebase.messaging();
+const outbox = self.TataniPushOutbox.createOutbox();
+const SYNC_TAG = 'tatani-push-answers';
+const feedback = (entry, result) => self.registration.showNotification(`Tatani · ${result.correct ? entry.data.l_correct : entry.data.l_incorrect}`, {
+  body: `${entry.data.word} — ${result.meaning}`, tag: entry.id, icon: '/icon-192.png', renotify: false,
+  data: { ...entry.data, stage: 'done' },
+});
+const rejected = (entry) => self.registration.showNotification(`Tatani · ${entry.data.word}`, {
+  body: entry.data.l_failed || entry.data.prompt, tag: entry.id, icon: '/icon-192.png', renotify: false,
+  data: { ...entry.data, stage: 'failed' },
+});
+const flushAnswers = () => outbox.flush(feedback, rejected);
+async function requestRetry() {
+  try { await self.registration.sync?.register(SYNC_TAG); } catch { /* Retry on the next push or app visit. */ }
+}
+self.addEventListener('sync', event => { if (event.tag === SYNC_TAG) event.waitUntil(flushAnswers()); });
+self.addEventListener('message', event => {
+  if (event.data?.type === 'FLUSH_PUSH_ANSWERS') event.waitUntil(flushAnswers().catch(requestRetry));
+});
 
 // Flashcards arrive as data-only messages so the whole review happens inside the notification.
 messaging.onBackgroundMessage((payload) => {
   const d = payload.data || {};
   if (!d.delivery_id) return;
-  return self.registration.showNotification(`Tatani · ${d.word}`, {
+  const shown = self.registration.showNotification(`Tatani · ${d.word}`, {
     body: [d.prompt, ...JSON.parse(d.quiz_options || '[]').map((option, i) => `${i === 0 ? 'A' : 'B'}. ${option}`)].join('\n'),
     tag: d.delivery_id, icon: '/icon-192.png', renotify: true, requireInteraction: true,
     data: { ...d, stage: d.quiz_options ? 'quiz' : 'prompt' },
     actions: d.quiz_options ? [{ action: 'answer_0', title: `A. ${JSON.parse(d.quiz_options)[0]}` }, { action: 'answer_1', title: `B. ${JSON.parse(d.quiz_options)[1]}` }] : [{ action: 'reveal', title: d.l_reveal }],
   });
+  return Promise.all([shown, flushAnswers().catch(requestRetry)]);
 });
 
 self.addEventListener('notificationclick', (event) => {
@@ -24,24 +44,26 @@ self.addEventListener('notificationclick', (event) => {
     if (event.action !== 'answer_0' && event.action !== 'answer_1') return event.waitUntil(self.clients.openWindow(d.path));
     event.waitUntil((async () => {
       try {
-        const response = await fetch(d.api, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'quiz_answer', delivery_id: d.delivery_id, token: d.token, answer: Number(event.action.slice(-1)) }),
-        });
-        if (!response.ok) throw new Error('Review failed');
-        const result = await response.json();
-        // Same notification tag, silent feedback, no second review or grading step.
-        await self.registration.showNotification(`Tatani · ${result.correct ? d.l_correct : d.l_incorrect}`, {
-          body: `${d.word} — ${result.meaning}`, tag: d.delivery_id, icon: '/icon-192.png', renotify: false,
-          data: { ...d, stage: 'done' },
+        const answer = Number(event.action.slice(-1));
+        await outbox.enqueue(d, answer);
+        // Acknowledge the durable local save before any network request.
+        await self.registration.showNotification(`Tatani · ${d.word}`, {
+          body: [d.l_queued, `${answer === 0 ? 'A' : 'B'}. ${JSON.parse(d.quiz_options)[answer]}`].filter(Boolean).join('\n'),
+          tag: d.delivery_id, icon: '/icon-192.png', renotify: false,
+          data: { ...d, stage: 'queued' },
         });
       } catch {
         await self.clients.openWindow(d.path);
+        return;
       }
+      await requestRetry();
+      await flushAnswers().catch(requestRetry);
     })());
     return;
   }
   if (d.stage === 'done') return;
+  if (d.stage === 'queued') return event.waitUntil(flushAnswers().catch(requestRetry));
+  if (d.stage === 'failed') return event.waitUntil(self.clients.openWindow(d.path));
   const showAnswer = () => self.registration.showNotification(`${d.word}${d.reading && d.reading !== d.word ? ` (${d.reading})` : ''}`, {
     body: [d.meaning, d.example].filter(Boolean).join('\n'), tag: d.delivery_id, icon: '/icon-192.png', requireInteraction: true,
     data: { ...d, stage: 'answer' },
