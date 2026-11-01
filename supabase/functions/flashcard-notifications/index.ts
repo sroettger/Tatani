@@ -2,6 +2,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders } from "npm:@supabase/supabase-js@2/cors";
 import { z } from "npm:zod@3";
 import { currentSlot, eligibleWord, hasUnhandledDelivery } from "../_shared/push-schedule.ts";
+import { buildNotificationQuiz } from "../_shared/push-quiz.ts";
 
 const db = createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "");
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -15,6 +16,7 @@ const Input = z.discriminatedUnion("action", [
   z.object({ action: z.literal("review"), delivery_id: z.string().uuid(), remembered: z.boolean() }),
   z.object({ action: z.literal("dispatch"), job_id: z.string().uuid() }),
   z.object({ action: z.literal("notification_review"), delivery_id: z.string().uuid(), token: z.string().uuid(), remembered: z.boolean() }),
+  z.object({ action: z.literal("quiz_answer"), delivery_id: z.string().uuid(), token: z.string().uuid().optional(), answer: z.number().int().min(0).max(1) }),
 ]);
 
 async function sendCard(device: any, slot: string): Promise<string> {
@@ -31,7 +33,7 @@ async function sendCard(device: any, slot: string): Promise<string> {
   if (!chunks?.length) return "empty";
   const { data: words, error: wordsError } = await db.from("study_chunk_words").select("word,reading,meaning,level,example_sentence_jp,chunk_id").in("chunk_id", chunks.map(c => c.id));
   if (wordsError) throw wordsError;
-  const { data: states, error: stateError } = await db.from("user_word_state").select("word,state,preference,last_reviewed_at").eq("user_id", device.user_id).eq("learning_language", language);
+  const { data: states, error: stateError } = await db.from("user_word_state").select("word,state,preference,last_reviewed_at,srs_due_at").eq("user_id", device.user_id).eq("learning_language", language);
   if (stateError) throw stateError;
   const stateMap = new Map((states ?? []).map(s => [s.word, s]));
   const studied = new Set(chunks.filter(c => c.studied_at).map(c => c.id));
@@ -42,21 +44,24 @@ async function sendCard(device: any, slot: string): Promise<string> {
   const fresh = candidates.filter(w => !recentWords.has(w.word));
   const pool = fresh.length ? fresh : candidates;
   const card = pool[Math.floor(Math.random() * pool.length)];
+  const quiz = buildNotificationQuiz(card.meaning, (words ?? []).map(w => w.meaning ?? ""));
+  if (!quiz) return "empty";
   const projectKey = Deno.env.get("LOVABLE_API_KEY");
   const connectionKey = Deno.env.get("FIREBASE_MESSAGING_API_KEY");
   if (!projectKey || !connectionKey) throw new Error("Firebase is not configured");
-  const { data: delivery, error: insertError } = await db.from("flashcard_push_deliveries").insert({ user_id: device.user_id, device_id: device.id, slot, learning_language: language, word: card.word, reading: card.reading, meaning: card.meaning, example_sentence: card.example_sentence_jp, level: card.level }).select("id,review_token").single();
+  const { data: delivery, error: insertError } = await db.from("flashcard_push_deliveries").insert({ user_id: device.user_id, device_id: device.id, slot, learning_language: language, word: card.word, reading: card.reading, meaning: card.meaning, example_sentence: card.example_sentence_jp, level: card.level, quiz_options: quiz.options, quiz_correct_index: quiz.correctIndex }).select("id,review_token").single();
   if (insertError?.code === "P0001") return "unhandled";
   if (insertError?.code === "23505") return "duplicate";
   if (insertError || !delivery) throw insertError ?? new Error("Delivery was not created");
   const path = `/notifications/review/${delivery.id}`;
   const ja = profile.ui_language === "ja";
-  // Data-only message: the service worker renders it with Reveal / grade buttons and reviews in the background.
+  // Answer key stays server-side; the worker submits only the selected option.
   const data: Record<string, string> = {
     path, delivery_id: delivery.id, token: delivery.review_token, api: `${Deno.env.get("SUPABASE_URL")}/functions/v1/flashcard-notifications`,
     word: card.word, reading: card.reading ?? "", meaning: card.meaning ?? "", example: card.example_sentence_jp ?? "",
-    prompt: ja ? "意味を思い出せますか？" : "Can you remember the meaning?",
-    l_reveal: ja ? "答えを見る" : "Reveal", l_yes: ja ? "覚えた" : "Remembered", l_no: ja ? "もう一度" : "Study again",
+    quiz_options: JSON.stringify(quiz.options),
+    prompt: ja ? "意味はどちらですか？" : "Which meaning is correct?",
+    l_correct: ja ? "正解" : "Correct", l_incorrect: ja ? "不正解" : "Incorrect",
   };
   let response: Response;
   try {
@@ -87,6 +92,25 @@ Deno.serve(async req => {
     const parsed = Input.safeParse(await req.json());
     if (!parsed.success) return reply({ error: "Invalid request", details: parsed.error.flatten() }, 400);
     const input = parsed.data;
+    if (input.action === "quiz_answer") {
+      let ownerId: string;
+      if (input.token) {
+        const { data: card, error } = await db.from("flashcard_push_deliveries").select("user_id").eq("id", input.delivery_id).eq("review_token", input.token).maybeSingle();
+        if (error) throw error;
+        if (!card) return reply({ error: "Unauthorized" }, 401);
+        ownerId = card.user_id;
+      } else {
+        const jwt = req.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
+        if (!jwt) return reply({ error: "Unauthorized" }, 401);
+        const { data: auth, error } = await db.auth.getUser(jwt);
+        if (error || !auth.user) return reply({ error: "Unauthorized" }, 401);
+        ownerId = auth.user.id;
+      }
+      const { data: result, error } = await db.rpc("answer_flashcard_quiz", { delivery_id: input.delivery_id, owner_id: ownerId, selected_answer: input.answer });
+      if (error) throw error;
+      if (!result) return reply({ error: "Not found" }, 404);
+      return reply(result);
+    }
     if (input.action === "dispatch") {
       // A one-use queue record created by the database scheduler authenticates this callback.
       const { data: job, error } = await db.from("flashcard_push_jobs").update({ claimed_at: new Date().toISOString() }).eq("id", input.job_id).is("claimed_at", null).gte("created_at", new Date(Date.now() - 300000).toISOString()).select("id").maybeSingle();
@@ -128,10 +152,14 @@ Deno.serve(async req => {
       return reply({ device: data });
     }
     if (input.action === "card" || input.action === "review") {
-      const { data: card, error } = await db.from("flashcard_push_deliveries").select("id,word,reading,meaning,example_sentence,learning_language,reviewed_at").eq("id", input.delivery_id).eq("user_id", uid).maybeSingle();
+      const { data: card, error } = await db.from("flashcard_push_deliveries").select("id,word,reading,meaning,example_sentence,learning_language,reviewed_at,quiz_options,quiz_selected_index,quiz_correct_index").eq("id", input.delivery_id).eq("user_id", uid).maybeSingle();
       if (error) throw error;
       if (!card) return reply({ error: "Not found" }, 404);
-      if (input.action === "card") return reply({ card });
+      if (input.action === "card") {
+        const { quiz_correct_index, ...visible } = card;
+        return reply({ card: { ...visible, meaning: card.reviewed_at || !card.quiz_options ? card.meaning : null } });
+      }
+      if (card.quiz_options) return reply({ error: "Select a quiz answer" }, 400);
       const { data: recorded, error: reviewError } = await db.rpc("review_flashcard_delivery", { delivery_id: card.id, owner_id: uid, remembered: input.remembered });
       if (reviewError) throw reviewError;
       return reply({ recorded });
