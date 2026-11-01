@@ -7,6 +7,6 @@
 - [x] Add authenticated reveal/review page and hourly delivery schedule.
 - [x] Test language isolation, scheduling, review persistence, and authenticated browser flow.
 - [x] Verify actual Android push delivery — user confirmed notifications work.
-- [ ] Replace reveal/self-grading with a single multiple-choice notification and matching fallback.
-- [ ] Calculate recall and spaced repetition from answers and test persistence.
+- [x] Replace reveal/self-grading with a single multiple-choice notification and matching fallback.
+- [x] Calculate recall and spaced repetition from answers and test persistence.
 - [ ] Verify new quiz buttons on Android — requires the user's phone.
