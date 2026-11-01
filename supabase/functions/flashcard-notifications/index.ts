@@ -177,5 +177,8 @@ Deno.serve(async req => {
     }
     if (!device.enabled) return reply({ error: "Notifications are disabled" }, 400);
     return reply({ result: await sendCard(device, `test-${crypto.randomUUID()}`) });
-  } catch (error) { return reply({ error: error instanceof Error ? error.message : "Request failed" }, 500); }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : (error as { message?: string })?.message ?? "Request failed";
+    return reply({ error: message }, message === "Quiz expired" ? 410 : 500);
+  }
 });
