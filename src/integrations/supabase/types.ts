@@ -195,6 +195,9 @@ export type Database = {
           learning_language: string
           level: string | null
           meaning: string | null
+          quiz_correct_index: number | null
+          quiz_options: Json | null
+          quiz_selected_index: number | null
           reading: string | null
           review_token: string
           reviewed_at: string | null
@@ -211,6 +214,9 @@ export type Database = {
           learning_language: string
           level?: string | null
           meaning?: string | null
+          quiz_correct_index?: number | null
+          quiz_options?: Json | null
+          quiz_selected_index?: number | null
           reading?: string | null
           review_token?: string
           reviewed_at?: string | null
@@ -227,6 +233,9 @@ export type Database = {
           learning_language?: string
           level?: string | null
           meaning?: string | null
+          quiz_correct_index?: number | null
+          quiz_options?: Json | null
+          quiz_selected_index?: number | null
           reading?: string | null
           review_token?: string
           reviewed_at?: string | null
@@ -758,6 +767,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      answer_flashcard_quiz: {
+        Args: { delivery_id: string; owner_id: string; selected_answer: number }
+        Returns: Json
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
