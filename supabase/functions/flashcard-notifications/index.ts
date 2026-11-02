@@ -60,11 +60,9 @@ async function sendCard(device: any, slot: string): Promise<string> {
     path, delivery_id: delivery.id, token: delivery.review_token, api: `${Deno.env.get("SUPABASE_URL")}/functions/v1/flashcard-notifications`,
     word: card.word, reading: card.reading ?? "",
     quiz_options: JSON.stringify(quiz.options),
-    prompt: ja ? "意味はどちらですか？" : "Which meaning is correct?",
     l_correct: ja ? "正解" : "Correct", l_incorrect: ja ? "不正解" : "Incorrect",
     l_dont_know: ja ? "わからない" : "I don't know",
-    l_queued: ja ? "回答を端末に保存しました。同期待ちです。" : "Answer saved on this device. Waiting to sync.",
-    l_failed: ja ? "回答を同期できませんでした。タップしてカードを確認してください。" : "Answer could not sync. Tap to check the card.",
+    l_failed: ja ? "同期できませんでした" : "Couldn't sync",
   };
   let response: Response;
   try {

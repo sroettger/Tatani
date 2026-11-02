@@ -7,12 +7,12 @@ const outbox = self.TataniPushOutbox.createOutbox();
 const SYNC_TAG = 'tatani-push-answers';
 // Show the hiragana reading next to the word when it differs (kanji words).
 const wordLabel = (d) => `${d.word}${d.reading && d.reading !== d.word ? ` (${d.reading})` : ''}`;
-const feedback = (entry, result) => self.registration.showNotification(`Tatani · ${result.correct ? entry.data.l_correct : entry.data.l_incorrect}`, {
+const feedback = (entry, result) => self.registration.showNotification(`${result.correct ? entry.data.l_correct : entry.data.l_incorrect}`, {
   body: `${entry.data.word} — ${result.meaning}`, tag: entry.id, icon: '/icon-192.png', renotify: false,
   data: { ...entry.data, stage: 'done' },
 });
-const rejected = (entry) => self.registration.showNotification(`Tatani · ${entry.data.word}`, {
-  body: entry.data.l_failed || entry.data.prompt, tag: entry.id, icon: '/icon-192.png', renotify: false,
+const rejected = (entry) => self.registration.showNotification(`${entry.data.word}`, {
+  body: entry.data.l_failed, tag: entry.id, icon: '/icon-192.png', renotify: false,
   data: { ...entry.data, stage: 'failed' },
 });
 const flushAnswers = () => outbox.flush(feedback, rejected);
@@ -28,8 +28,7 @@ self.addEventListener('message', event => {
 messaging.onBackgroundMessage((payload) => {
   const d = payload.data || {};
   if (!d.delivery_id) return;
-  const shown = self.registration.showNotification(`Tatani · ${wordLabel(d)}`, {
-    body: [d.prompt, ...JSON.parse(d.quiz_options || '[]').map((option, i) => `${i === 0 ? 'A' : 'B'}. ${option}`)].join('\n'),
+  const shown = self.registration.showNotification(`${wordLabel(d)}`, {
     tag: d.delivery_id, icon: '/icon-192.png', renotify: true, requireInteraction: true,
     data: { ...d, stage: d.quiz_options ? 'quiz' : 'prompt' },
     actions: d.quiz_options ? [{ action: 'answer_0', title: `A. ${JSON.parse(d.quiz_options)[0]}` }, { action: 'answer_1', title: `B. ${JSON.parse(d.quiz_options)[1]}` }, { action: 'answer_dk', title: d.l_dont_know }] : [{ action: 'reveal', title: d.l_reveal }],
@@ -49,8 +48,8 @@ self.addEventListener('notificationclick', (event) => {
         const answer = event.action === 'answer_dk' ? -1 : Number(event.action.slice(-1));
         await outbox.enqueue(d, answer);
         // Acknowledge the durable local save before any network request.
-        await self.registration.showNotification(`Tatani · ${wordLabel(d)}`, {
-          body: [d.l_queued, answer === -1 ? d.l_dont_know : `${answer === 0 ? 'A' : 'B'}. ${JSON.parse(d.quiz_options)[answer]}`].filter(Boolean).join('\n'),
+        await self.registration.showNotification(`${wordLabel(d)}`, {
+          body: answer === -1 ? d.l_dont_know : JSON.parse(d.quiz_options)[answer],
           tag: d.delivery_id, icon: '/icon-192.png', renotify: false,
           data: { ...d, stage: 'queued' },
         });
