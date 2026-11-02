@@ -7,12 +7,12 @@ const outbox = self.TataniPushOutbox.createOutbox();
 const SYNC_TAG = 'tatani-push-answers';
 // Show the hiragana reading next to the word when it differs (kanji words).
 const wordLabel = (d) => `${d.word}${d.reading && d.reading !== d.word ? ` (${d.reading})` : ''}`;
-const feedback = (entry, result) => self.registration.showNotification(`Tatani · ${result.correct ? entry.data.l_correct : entry.data.l_incorrect}`, {
+const feedback = (entry, result) => self.registration.showNotification(`${result.correct ? entry.data.l_correct : entry.data.l_incorrect}`, {
   body: `${entry.data.word} — ${result.meaning}`, tag: entry.id, icon: '/icon-192.png', renotify: false,
   data: { ...entry.data, stage: 'done' },
 });
-const rejected = (entry) => self.registration.showNotification(`Tatani · ${entry.data.word}`, {
-  body: entry.data.l_failed || entry.data.prompt, tag: entry.id, icon: '/icon-192.png', renotify: false,
+const rejected = (entry) => self.registration.showNotification(`${entry.data.word}`, {
+  body: entry.data.l_failed, tag: entry.id, icon: '/icon-192.png', renotify: false,
   data: { ...entry.data, stage: 'failed' },
 });
 const flushAnswers = () => outbox.flush(feedback, rejected);
