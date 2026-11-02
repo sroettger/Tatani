@@ -28,7 +28,7 @@ self.addEventListener('message', event => {
 messaging.onBackgroundMessage((payload) => {
   const d = payload.data || {};
   if (!d.delivery_id) return;
-  const shown = self.registration.showNotification(`Tatani · ${d.word}`, {
+  const shown = self.registration.showNotification(`Tatani · ${wordLabel(d)}`, {
     body: [d.prompt, ...JSON.parse(d.quiz_options || '[]').map((option, i) => `${i === 0 ? 'A' : 'B'}. ${option}`)].join('\n'),
     tag: d.delivery_id, icon: '/icon-192.png', renotify: true, requireInteraction: true,
     data: { ...d, stage: d.quiz_options ? 'quiz' : 'prompt' },
@@ -49,7 +49,7 @@ self.addEventListener('notificationclick', (event) => {
         const answer = event.action === 'answer_dk' ? -1 : Number(event.action.slice(-1));
         await outbox.enqueue(d, answer);
         // Acknowledge the durable local save before any network request.
-        await self.registration.showNotification(`Tatani · ${d.word}`, {
+        await self.registration.showNotification(`Tatani · ${wordLabel(d)}`, {
           body: [d.l_queued, answer === -1 ? d.l_dont_know : `${answer === 0 ? 'A' : 'B'}. ${JSON.parse(d.quiz_options)[answer]}`].filter(Boolean).join('\n'),
           tag: d.delivery_id, icon: '/icon-192.png', renotify: false,
           data: { ...d, stage: 'queued' },
