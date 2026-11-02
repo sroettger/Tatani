@@ -12,4 +12,4 @@
 - [x] Verify new quiz buttons on Android — user confirmed notifications work.
 - [x] Save notification answers locally and sync without waiting for the network.
 - [x] Test offline retries, duplicate safety, and slow-response feedback.
-- [ ] Restore foreground test notifications and verify the test button flow.
+- [x] Restore foreground test notifications and verify the signed-in test button and real browser foreground quiz display.
