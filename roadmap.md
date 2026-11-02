@@ -9,6 +9,7 @@
 - [x] Verify actual Android push delivery — user confirmed notifications work.
 - [x] Replace reveal/self-grading with a single multiple-choice notification and matching fallback.
 - [x] Calculate recall and spaced repetition from answers and test persistence.
-- [ ] Verify new quiz buttons on Android — requires the user's phone.
+- [x] Verify new quiz buttons on Android — user confirmed notifications work.
 - [x] Save notification answers locally and sync without waiting for the network.
 - [x] Test offline retries, duplicate safety, and slow-response feedback.
+- [x] Restore foreground test notifications and verify the signed-in test button and real browser foreground quiz display.
