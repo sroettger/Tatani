@@ -22,10 +22,11 @@ async function requestRetry() {
 self.addEventListener('sync', event => { if (event.tag === SYNC_TAG) event.waitUntil(flushAnswers()); });
 self.addEventListener('message', event => {
   if (event.data?.type === 'FLUSH_PUSH_ANSWERS') event.waitUntil(flushAnswers().catch(requestRetry));
+  if (event.data?.type === 'SHOW_PUSH_QUIZ') event.waitUntil(showPushQuiz({ data: event.data.data }));
 });
 
 // Flashcards arrive as data-only messages so the whole review happens inside the notification.
-messaging.onBackgroundMessage((payload) => {
+function showPushQuiz(payload) {
   const d = payload.data || {};
   if (!d.delivery_id) return;
   const shown = self.registration.showNotification(`${wordLabel(d)}`, {
@@ -34,7 +35,8 @@ messaging.onBackgroundMessage((payload) => {
     actions: d.quiz_options ? [{ action: 'answer_0', title: `A. ${JSON.parse(d.quiz_options)[0]}` }, { action: 'answer_1', title: `B. ${JSON.parse(d.quiz_options)[1]}` }, { action: 'answer_dk', title: d.l_dont_know }] : [{ action: 'reveal', title: d.l_reveal }],
   });
   return Promise.all([shown, flushAnswers().catch(requestRetry)]);
-});
+}
+messaging.onBackgroundMessage(showPushQuiz);
 
 self.addEventListener('notificationclick', (event) => {
   const n = event.notification;

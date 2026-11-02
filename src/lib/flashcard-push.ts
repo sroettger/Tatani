@@ -1,9 +1,30 @@
 import { initializeApp, getApps } from "firebase/app";
-import { getMessaging, getToken, isSupported } from "firebase/messaging";
+import { getMessaging, getToken, isSupported, onMessage } from "firebase/messaging";
 import { FunctionsHttpError } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 
 export type DeviceSchedule = { id: string; enabled: boolean; timezone: string; start_hour: number; end_hour: number; cards_per_hour: number };
+let stopForegroundMessages: (() => void) | undefined;
+
+// Firebase sends pushes to visible windows instead of onBackgroundMessage.
+// Forward them to the same worker so quizzes and answer handling stay identical.
+export async function resumeForegroundPush() {
+  if (!("serviceWorker" in navigator) || !(await isSupported())) return;
+  const registrations = await navigator.serviceWorker.getRegistrations();
+  const registration = registrations.find(r => {
+    const worker = r.active;
+    return worker && new URL(worker.scriptURL).pathname === "/firebase-messaging-sw.js";
+  });
+  const worker = registration?.active;
+  if (!worker) return;
+  const config = Object.fromEntries(new URL(worker.scriptURL).searchParams);
+  const app = getApps().find(app => app.name === "tatani-push") ?? initializeApp(config, "tatani-push");
+  stopForegroundMessages?.();
+  stopForegroundMessages = onMessage(getMessaging(app), payload => {
+    if (payload.data?.delivery_id) worker.postMessage({ type: "SHOW_PUSH_QUIZ", data: payload.data });
+  });
+}
+
 export async function notificationRequest<T>(body: Record<string, unknown>): Promise<T> {
   const { data, error } = await supabase.functions.invoke("flashcard-notifications", { body });
   if (error) {
@@ -45,5 +66,6 @@ export async function enableFlashcardPush(): Promise<{ status: "registered"; tok
   const existing = getApps().find(app => app.name === "tatani-push");
   const app = existing ?? initializeApp(config, "tatani-push");
   const token = await getToken(getMessaging(app), { vapidKey, serviceWorkerRegistration: registration });
+  await resumeForegroundPush();
   return token ? { status: "registered", token } : { status: "denied" };
 }

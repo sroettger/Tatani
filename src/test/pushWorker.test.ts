@@ -28,6 +28,15 @@ function worker(ok = true) {
 }
 
 describe("notification quiz actions", () => {
+  it("displays foreground test pushes through the same quiz worker", async () => {
+    const w = worker();
+    let task: Promise<unknown> = Promise.resolve();
+    w.listeners.message({ data: { type: "SHOW_PUSH_QUIZ", data: { ...w.data, word: "食べる", reading: "たべる", l_dont_know: "わからない" } }, waitUntil: (p: Promise<unknown>) => { task = p; } });
+    await task;
+    expect(w.showNotification).toHaveBeenCalledTimes(1);
+    expect(w.showNotification.mock.calls[0][0]).toBe("食べる (たべる)");
+    expect(w.showNotification.mock.calls[0][1]).toMatchObject({ tag: "delivery", data: { stage: "quiz" }, actions: [{ action: "answer_0" }, { action: "answer_1" }, { action: "answer_dk", title: "わからない" }] });
+  });
   it("submits the selected answer without a self-reported grade and keeps one silent notification", async () => {
     const w = worker();
     await w.background({ data: w.data });
