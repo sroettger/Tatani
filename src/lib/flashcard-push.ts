@@ -49,7 +49,7 @@ export async function enableFlashcardPush(): Promise<{ status: "registered"; tok
   const permission = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
   if (permission !== "granted") return { status: "denied" };
   if (!(await isSupported())) return { status: "unsupported" };
-  const registration = await navigator.serviceWorker.register(`/firebase-messaging-sw.js?${new URLSearchParams(config)}`, { scope: "/push/" });
+  const registration = await navigator.serviceWorker.register(`/firebase-messaging-sw.js?${new URLSearchParams(config)}`, { scope: "/push/", updateViaCache: "none" });
   if (!registration.active) {
     await new Promise<void>((resolve, reject) => {
       const worker = registration.installing ?? registration.waiting;
