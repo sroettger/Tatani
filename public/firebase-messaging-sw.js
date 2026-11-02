@@ -5,6 +5,9 @@ firebase.initializeApp(Object.fromEntries(new URL(self.location).searchParams));
 const messaging = firebase.messaging();
 const outbox = self.TataniPushOutbox.createOutbox();
 const SYNC_TAG = 'tatani-push-answers';
+// Activate updated notification handling right away instead of waiting for the old worker to idle.
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
 // Show the hiragana reading next to the word when it differs (kanji words).
 const wordLabel = (d) => `${d.word}${d.reading && d.reading !== d.word ? ` (${d.reading})` : ''}`;
 const feedback = (entry, result) => self.registration.showNotification(`${result.correct ? entry.data.l_correct : entry.data.l_incorrect}`, {
