@@ -47,7 +47,7 @@ async function sendCard(device: any, slot: string): Promise<string> {
   const projectKey = Deno.env.get("LOVABLE_API_KEY");
   const connectionKey = Deno.env.get("FIREBASE_MESSAGING_API_KEY");
   if (!projectKey || !connectionKey) throw new Error("Firebase is not configured");
-  const { data: delivery, error: insertError } = await db.from("flashcard_push_deliveries").insert({ user_id: device.user_id, device_id: device.id, slot, learning_language: language, word: card.word, reading: card.reading, meaning: card.meaning, example_sentence: card.example_sentence_jp, level: card.level, quiz_options: JSON.stringify([ja ? "知ってる" : "I know", ja ? "わからない" : "I don't know"]), quiz_correct_index: 0 }).select("id,review_token").single();
+  const { data: delivery, error: insertError } = await db.from("flashcard_push_deliveries").insert({ user_id: device.user_id, device_id: device.id, slot, learning_language: language, word: card.word, reading: card.reading, meaning: card.meaning, example_sentence: card.example_sentence_jp, level: card.level, quiz_options: [ja ? "知ってる" : "I know", ja ? "わからない" : "I don't know"], quiz_correct_index: 0 }).select("id,review_token").single();
   if (insertError?.code === "P0001") return "unhandled";
   if (insertError?.code === "23505") return "duplicate";
   if (insertError || !delivery) throw insertError ?? new Error("Delivery was not created");
