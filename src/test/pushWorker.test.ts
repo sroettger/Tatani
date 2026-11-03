@@ -23,7 +23,7 @@ function worker(ok = true) {
     list: async () => [...entries.values()], remove: async (id: string) => entries.delete(id),
   }, fetch);
   vm.runInNewContext(readFileSync("public/firebase-messaging-sw.js", "utf8"), context);
-  const data = { delivery_id: "delivery", word: "Katze", quiz_options: '["猫","犬"]', path: "/notifications/review/delivery", token: "secret", api: "https://example.test/review", l_correct: "正解", l_incorrect: "不正解" };
+  const data = { delivery_id: "delivery", word: "Katze", quiz_options: '["知ってる","わからない"]', path: "/notifications/review/delivery", token: "secret", api: "https://example.test/review", l_know: "知ってる", l_dont_know: "わからない", l_correct: "正解", l_incorrect: "不正解" };
   return { background, click, data, showNotification, openWindow, fetch, entries, register, listeners };
 }
 
@@ -35,7 +35,7 @@ describe("notification quiz actions", () => {
     await task;
     expect(w.showNotification).toHaveBeenCalledTimes(1);
     expect(w.showNotification.mock.calls[0][0]).toBe("食べる (たべる)");
-    expect(w.showNotification.mock.calls[0][1]).toMatchObject({ tag: "delivery", data: { stage: "quiz" }, actions: [{ action: "answer_0" }, { action: "answer_1" }, { action: "answer_dk", title: "わからない" }] });
+    expect(w.showNotification.mock.calls[0][1]).toMatchObject({ tag: "delivery", data: { stage: "quiz" }, actions: [{ action: "answer_0", title: "知ってる" }, { action: "answer_1", title: "わからない" }] });
   });
   it("submits the selected answer without a self-reported grade and keeps one silent notification", async () => {
     const w = worker();
@@ -45,17 +45,29 @@ describe("notification quiz actions", () => {
     await task;
     expect(JSON.parse(w.fetch.mock.calls[0][1].body)).toEqual({ action: "quiz_answer", delivery_id: "delivery", token: "secret", answer: 1 });
     expect(w.showNotification.mock.calls[0][1].tag).toBe("delivery");
-    expect(w.showNotification.mock.calls[1][1]).toMatchObject({ tag: "delivery", renotify: false });
+    expect(w.showNotification.mock.calls[1][1]).toMatchObject({ tag: "delivery", renotify: false, body: "わからない" });
     expect(w.openWindow).not.toHaveBeenCalled();
   });
-  it("submits \"I don't know\" as answer -1", async () => {
+  it("keeps the legacy meaning quiz with an extra \"I don't know\" for older deliveries", async () => {
     const w = worker();
-    await w.background({ data: w.data });
+    const legacy = { ...w.data, quiz_options: '["猫","犬"]' };
+    delete legacy.l_know;
+    await w.background({ data: legacy });
     expect(w.showNotification.mock.calls[0][1].actions.map((a: { action: string }) => a.action)).toEqual(["answer_0", "answer_1", "answer_dk"]);
     let task: Promise<unknown> = Promise.resolve();
-    w.click({ action: "answer_dk", notification: { data: { ...w.data, stage: "quiz" }, close: vi.fn() }, waitUntil: (p: Promise<unknown>) => { task = p; } });
+    w.click({ action: "answer_dk", notification: { data: { ...legacy, stage: "quiz" }, close: vi.fn() }, waitUntil: (p: Promise<unknown>) => { task = p; } });
     await task;
     expect(JSON.parse(w.fetch.mock.calls[0][1].body)).toEqual({ action: "quiz_answer", delivery_id: "delivery", token: "secret", answer: -1 });
+    expect(w.openWindow).not.toHaveBeenCalled();
+  });
+  it("acknowledges \"I know\" with its own label and answer 0", async () => {
+    const w = worker();
+    await w.background({ data: w.data });
+    let task: Promise<unknown> = Promise.resolve();
+    w.click({ action: "answer_0", notification: { data: { ...w.data, stage: "quiz" }, close: vi.fn() }, waitUntil: (p: Promise<unknown>) => { task = p; } });
+    await task;
+    expect(JSON.parse(w.fetch.mock.calls[0][1].body)).toEqual({ action: "quiz_answer", delivery_id: "delivery", token: "secret", answer: 0 });
+    expect(w.showNotification.mock.calls[1][1].body).toBe("知ってる");
     expect(w.openWindow).not.toHaveBeenCalled();
   });
   it("retains the selected answer offline instead of opening the website", async () => {
