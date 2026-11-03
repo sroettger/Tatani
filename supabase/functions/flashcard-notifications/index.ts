@@ -52,12 +52,11 @@ async function sendCard(device: any, slot: string): Promise<string> {
   if (insertError?.code === "23505") return "duplicate";
   if (insertError || !delivery) throw insertError ?? new Error("Delivery was not created");
   const path = `/notifications/review/${delivery.id}`;
-  const ja = profile.ui_language === "ja";
-  // Answer key stays server-side; the worker submits only the selected option.
+  // Answer key stays server-side; the worker submits only the chosen answer index.
   const data: Record<string, string> = {
     path, delivery_id: delivery.id, token: delivery.review_token, api: `${Deno.env.get("SUPABASE_URL")}/functions/v1/flashcard-notifications`,
     word: card.word, reading: card.reading ?? "",
-    quiz_options: JSON.stringify(quiz.options),
+    l_know: ja ? "知ってる" : "I know",
     l_correct: ja ? "正解" : "Correct", l_incorrect: ja ? "不正解" : "Incorrect",
     l_dont_know: ja ? "わからない" : "I don't know",
     l_failed: ja ? "同期できませんでした" : "Couldn't sync",

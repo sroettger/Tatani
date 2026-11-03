@@ -35,7 +35,10 @@ function showPushQuiz(payload) {
   const shown = self.registration.showNotification(`${wordLabel(d)}`, {
     tag: d.delivery_id, icon: '/icon-192.png', renotify: true, requireInteraction: true,
     data: { ...d, stage: d.quiz_options ? 'quiz' : 'prompt' },
-    actions: d.quiz_options ? [{ action: 'answer_0', title: `A. ${JSON.parse(d.quiz_options)[0]}` }, { action: 'answer_1', title: `B. ${JSON.parse(d.quiz_options)[1]}` }, { action: 'answer_dk', title: d.l_dont_know }] : [{ action: 'reveal', title: d.l_reveal }],
+    // New cards are self-reported ("I know" / "I don't know"); older deliveries keep the meaning quiz.
+    actions: d.l_know ? [{ action: 'answer_0', title: d.l_know }, { action: 'answer_1', title: d.l_dont_know }]
+      : d.quiz_options ? [{ action: 'answer_0', title: `A. ${JSON.parse(d.quiz_options)[0]}` }, { action: 'answer_1', title: `B. ${JSON.parse(d.quiz_options)[1]}` }, { action: 'answer_dk', title: d.l_dont_know }]
+      : [{ action: 'reveal', title: d.l_reveal }],
   });
   return Promise.all([shown, flushAnswers().catch(requestRetry)]);
 }
@@ -54,7 +57,7 @@ self.addEventListener('notificationclick', (event) => {
         await outbox.enqueue(d, answer);
         // Acknowledge the durable local save before any network request.
         await self.registration.showNotification(`${wordLabel(d)}`, {
-          body: answer === -1 ? d.l_dont_know : JSON.parse(d.quiz_options)[answer],
+          body: d.l_know ? (answer === 0 ? d.l_know : d.l_dont_know) : (answer === -1 ? d.l_dont_know : JSON.parse(d.quiz_options)[answer]),
           tag: d.delivery_id, icon: '/icon-192.png', renotify: false,
           data: { ...d, stage: 'queued' },
         });
