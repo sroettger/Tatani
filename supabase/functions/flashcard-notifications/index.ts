@@ -2,7 +2,6 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders } from "npm:@supabase/supabase-js@2/cors";
 import { z } from "npm:zod@3";
 import { currentSlot, eligibleWord, hasUnhandledDelivery } from "../_shared/push-schedule.ts";
-import { buildNotificationQuiz } from "../_shared/push-quiz.ts";
 
 const db = createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "");
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -44,12 +43,11 @@ async function sendCard(device: any, slot: string): Promise<string> {
   const fresh = candidates.filter(w => !recentWords.has(w.word));
   const pool = fresh.length ? fresh : candidates;
   const card = pool[Math.floor(Math.random() * pool.length)];
-  const quiz = buildNotificationQuiz(card.meaning, (words ?? []).map(w => w.meaning ?? ""));
-  if (!quiz) return "empty";
+  const ja = profile.ui_language === "ja";
   const projectKey = Deno.env.get("LOVABLE_API_KEY");
   const connectionKey = Deno.env.get("FIREBASE_MESSAGING_API_KEY");
   if (!projectKey || !connectionKey) throw new Error("Firebase is not configured");
-  const { data: delivery, error: insertError } = await db.from("flashcard_push_deliveries").insert({ user_id: device.user_id, device_id: device.id, slot, learning_language: language, word: card.word, reading: card.reading, meaning: card.meaning, example_sentence: card.example_sentence_jp, level: card.level, quiz_options: quiz.options, quiz_correct_index: quiz.correctIndex }).select("id,review_token").single();
+  const { data: delivery, error: insertError } = await db.from("flashcard_push_deliveries").insert({ user_id: device.user_id, device_id: device.id, slot, learning_language: language, word: card.word, reading: card.reading, meaning: card.meaning, example_sentence: card.example_sentence_jp, level: card.level, quiz_options: JSON.stringify([ja ? "知ってる" : "I know", ja ? "わからない" : "I don't know"]), quiz_correct_index: 0 }).select("id,review_token").single();
   if (insertError?.code === "P0001") return "unhandled";
   if (insertError?.code === "23505") return "duplicate";
   if (insertError || !delivery) throw insertError ?? new Error("Delivery was not created");
