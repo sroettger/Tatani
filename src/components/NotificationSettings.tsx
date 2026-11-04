@@ -15,6 +15,7 @@ export function NotificationSettings() {
   const [start, setStart] = useState(9);
   const [end, setEnd] = useState(21);
   const [count, setCount] = useState(1);
+  const [countText, setCountText] = useState("1");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -27,7 +28,7 @@ export function NotificationSettings() {
     if (!id) return;
     notificationRequest<{ device: DeviceSchedule | null }>({ action: "settings", device_id: id }).then(({ device }) => {
       if (!active || !device) return;
-      setDevice(device); setStart(device.start_hour); setEnd(device.end_hour); setCount(device.cards_per_hour);
+      setDevice(device); setStart(device.start_hour); setEnd(device.end_hour); setCount(device.cards_per_hour); setCountText(String(device.cards_per_hour));
     }).catch(() => { if (active) setMessage(t("push.failed")); });
     return () => { active = false; };
   }, [user?.id, key, t]);
@@ -60,7 +61,7 @@ export function NotificationSettings() {
     <div className="grid grid-cols-3 gap-3">
       <div><Label htmlFor="push-start">{t("push.start")}</Label><Input id="push-start" type="time" step="3600" value={`${String(start).padStart(2, "0")}:00`} onChange={e => setStart(Number(e.target.value.split(":")[0]))} className="mt-1 px-2" /></div>
       <div><Label htmlFor="push-end">{t("push.end")}</Label><Input id="push-end" type="time" step="3600" value={`${String(end).padStart(2, "0")}:00`} onChange={e => setEnd(Number(e.target.value.split(":")[0]))} className="mt-1 px-2" /></div>
-      <div><Label htmlFor="push-count">{t("push.count")}</Label><Input id="push-count" type="number" min={1} max={60} value={count} onChange={e => setCount(Number(e.target.value))} className="mt-1" /></div>
+      <div><Label htmlFor="push-count">{t("push.count")}</Label><Input id="push-count" type="number" min={1} max={60} value={countText} onChange={e => { setCountText(e.target.value); const n = Number(e.target.value); if (e.target.value !== "" && Number.isInteger(n)) setCount(n); }} onBlur={() => setCountText(String(count))} className="mt-1" /></div>
     </div>
     <p className="text-xs text-muted-foreground mt-2">{timezone} · {device?.enabled ? t("push.on") : t("push.off")}</p>
     {!valid && <p className="text-sm text-destructive mt-2">{t("push.invalid")}</p>}

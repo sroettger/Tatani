@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,6 +39,8 @@ export default function Settings() {
   const navigate = useNavigate();
   const { t, lang, setLang } = useI18n();
   const { chunkSize, queueSize, setChunkSize, setQueueSize } = useStudyPrefs();
+  const [queueText, setQueueText] = useState(String(queueSize));
+  const [chunkText, setChunkText] = useState(String(chunkSize));
 
   const changeLanguage = async (code: LangCode) => {
     if (code === lang) return;
@@ -246,11 +249,13 @@ export default function Settings() {
                 type="number"
                 min={QUEUE_SIZE_MIN}
                 max={QUEUE_SIZE_MAX}
-                value={queueSize}
+                value={queueText}
                 onChange={(e) => {
+                  setQueueText(e.target.value);
                   const n = Number(e.target.value);
-                  if (Number.isFinite(n)) setQueueSize(n);
+                  if (e.target.value !== "" && Number.isInteger(n)) setQueueSize(Math.min(QUEUE_SIZE_MAX, Math.max(QUEUE_SIZE_MIN, n)));
                 }}
+                onBlur={() => setQueueText(String(queueSize))}
                 className="mt-1 h-9 w-28"
               />
               <p className="text-[11px] text-muted-foreground mt-1">{t("settings.queueHelp")}</p>
@@ -267,11 +272,13 @@ export default function Settings() {
                 type="number"
                 min={CHUNK_SIZE_MIN}
                 max={CHUNK_SIZE_MAX}
-                value={chunkSize}
+                value={chunkText}
                 onChange={(e) => {
+                  setChunkText(e.target.value);
                   const n = Number(e.target.value);
-                  if (Number.isFinite(n)) setChunkSize(n);
+                  if (e.target.value !== "" && Number.isInteger(n)) setChunkSize(Math.min(CHUNK_SIZE_MAX, Math.max(CHUNK_SIZE_MIN, n)));
                 }}
+                onBlur={() => setChunkText(String(chunkSize))}
                 className="mt-1 h-9 w-28"
               />
               <p className="text-[11px] text-muted-foreground mt-1">{t("settings.chunkHelp")}</p>
