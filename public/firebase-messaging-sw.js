@@ -11,7 +11,8 @@ self.addEventListener('activate', event => event.waitUntil(self.clients.claim())
 // Show the hiragana reading next to the word when it differs (kanji words).
 const wordLabel = (d) => `${d.word}${d.reading && d.reading !== d.word ? ` (${d.reading})` : ''}`;
 const feedback = (entry, result) => self.registration.showNotification(`${result.correct ? entry.data.l_correct : entry.data.l_incorrect}`, {
-  body: `${entry.data.word} — ${result.meaning}`, tag: entry.id, icon: '/icon-192.png', renotify: false,
+  // Re-alert after the silent local acknowledgement so Android surfaces the translation.
+  body: `${wordLabel(entry.data)} — ${result.meaning}`, tag: entry.id, icon: '/icon-192.png', renotify: true, requireInteraction: true,
   data: { ...entry.data, stage: 'done' },
 });
 const rejected = (entry) => self.registration.showNotification(`${entry.data.word}`, {
@@ -34,7 +35,7 @@ function showPushQuiz(payload) {
   if (!d.delivery_id) return;
   const shown = self.registration.showNotification(`${wordLabel(d)}`, {
     tag: d.delivery_id, icon: '/icon-192.png', renotify: true, requireInteraction: true,
-    data: { ...d, stage: d.quiz_options ? 'quiz' : 'prompt' },
+    data: { ...d, stage: d.l_know || d.quiz_options ? 'quiz' : 'prompt' },
     // New cards are self-reported ("I know" / "I don't know"); older deliveries keep the meaning quiz.
     actions: d.l_know ? [{ action: 'answer_0', title: d.l_know }, { action: 'answer_1', title: d.l_dont_know }]
       : d.quiz_options ? [{ action: 'answer_0', title: `A. ${JSON.parse(d.quiz_options)[0]}` }, { action: 'answer_1', title: `B. ${JSON.parse(d.quiz_options)[1]}` }, { action: 'answer_dk', title: d.l_dont_know }]
@@ -49,7 +50,8 @@ self.addEventListener('notificationclick', (event) => {
   const d = n.data || {};
   if (!d.delivery_id) return;
   n.close();
-  if (d.stage === 'quiz') {
+  // Recognize self-check payloads even on notifications created by an older worker.
+  if (d.stage === 'quiz' || (d.l_know && d.stage === 'prompt')) {
     if (event.action !== 'answer_0' && event.action !== 'answer_1' && event.action !== 'answer_dk') return event.waitUntil(self.clients.openWindow(d.path));
     event.waitUntil((async () => {
       try {

@@ -1,4 +1,5 @@
 # Android flashcard notifications
+- [x] Restore translation feedback for current self-check payloads and older prompt-stage cards; test answer submission and online/offline feedback retries.
 - [x] Replace daily frequency with cards per hour and minute-based scheduling.
 - [x] Block new deliveries until the previous card is reviewed, including concurrent sends.
 - [x] Test frequency, pending-card blocking, and settings persistence.

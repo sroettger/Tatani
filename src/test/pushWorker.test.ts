@@ -37,7 +37,30 @@ describe("notification quiz actions", () => {
     expect(w.showNotification.mock.calls[0][0]).toBe("食べる (たべる)");
     expect(w.showNotification.mock.calls[0][1]).toMatchObject({ tag: "delivery", data: { stage: "quiz" }, actions: [{ action: "answer_0", title: "知ってる" }, { action: "answer_1", title: "わからない" }] });
   });
-  it("submits the selected answer without a self-reported grade and keeps one silent notification", async () => {
+  it("answers current self-check payloads without legacy quiz_options and shows the translation", async () => {
+    const w = worker();
+    const { quiz_options, ...data } = w.data;
+    await w.background({ data });
+    expect(w.showNotification.mock.calls[0][1].data.stage).toBe("quiz");
+    let task: Promise<unknown> = Promise.resolve();
+    w.click({ action: "answer_1", notification: { data: w.showNotification.mock.calls[0][1].data, close: vi.fn() }, waitUntil: (p: Promise<unknown>) => { task = p; } });
+    await task;
+    expect(JSON.parse(w.fetch.mock.calls[0][1].body).answer).toBe(1);
+    expect(w.entries.size).toBe(0);
+    expect(w.showNotification.mock.calls[2][1]).toMatchObject({ body: "Katze — 猫", data: { stage: "done" }, renotify: true });
+    expect(w.openWindow).not.toHaveBeenCalled();
+  });
+  it("handles self-check notifications incorrectly marked prompt by an older worker", async () => {
+    const w = worker();
+    const { quiz_options, ...data } = w.data;
+    let task: Promise<unknown> = Promise.resolve();
+    w.click({ action: "answer_0", notification: { data: { ...data, stage: "prompt" }, close: vi.fn() }, waitUntil: (p: Promise<unknown>) => { task = p; } });
+    await task;
+    expect(JSON.parse(w.fetch.mock.calls[0][1].body).answer).toBe(0);
+    expect(w.showNotification.mock.calls[1][1]).toMatchObject({ body: "Katze — 猫", data: { stage: "done" } });
+    expect(w.openWindow).not.toHaveBeenCalled();
+  });
+  it("submits the selected answer without a self-reported grade and alerts with the translation", async () => {
     const w = worker();
     await w.background({ data: w.data });
     let task: Promise<unknown> = Promise.resolve();
@@ -46,6 +69,7 @@ describe("notification quiz actions", () => {
     expect(JSON.parse(w.fetch.mock.calls[0][1].body)).toEqual({ action: "quiz_answer", delivery_id: "delivery", token: "secret", answer: 1 });
     expect(w.showNotification.mock.calls[0][1].tag).toBe("delivery");
     expect(w.showNotification.mock.calls[1][1]).toMatchObject({ tag: "delivery", renotify: false, body: "わからない" });
+    expect(w.showNotification.mock.calls[2]).toEqual(["不正解", expect.objectContaining({ tag: "delivery", renotify: true, requireInteraction: true, body: "Katze — 猫", data: expect.objectContaining({ stage: "done" }) })]);
     expect(w.openWindow).not.toHaveBeenCalled();
   });
   it("keeps the legacy meaning quiz with an extra \"I don't know\" for older deliveries", async () => {
@@ -62,12 +86,16 @@ describe("notification quiz actions", () => {
   });
   it("acknowledges \"I know\" with its own label and answer 0", async () => {
     const w = worker();
+    w.fetch.mockResolvedValue({ ok: true, json: async () => ({ correct: true, meaning: "to eat" }) });
+    w.data.word = "食べる";
+    const data = { ...w.data, reading: "たべる" };
     await w.background({ data: w.data });
     let task: Promise<unknown> = Promise.resolve();
-    w.click({ action: "answer_0", notification: { data: { ...w.data, stage: "quiz" }, close: vi.fn() }, waitUntil: (p: Promise<unknown>) => { task = p; } });
+    w.click({ action: "answer_0", notification: { data: { ...data, stage: "quiz" }, close: vi.fn() }, waitUntil: (p: Promise<unknown>) => { task = p; } });
     await task;
     expect(JSON.parse(w.fetch.mock.calls[0][1].body)).toEqual({ action: "quiz_answer", delivery_id: "delivery", token: "secret", answer: 0 });
     expect(w.showNotification.mock.calls[1][1].body).toBe("知ってる");
+    expect(w.showNotification.mock.calls[2]).toEqual(["正解", expect.objectContaining({ renotify: true, requireInteraction: true, body: "食べる (たべる) — to eat" })]);
     expect(w.openWindow).not.toHaveBeenCalled();
   });
   it("retains the selected answer offline instead of opening the website", async () => {
@@ -106,6 +134,7 @@ describe("notification quiz actions", () => {
     await task;
     expect(JSON.parse(w.fetch.mock.calls[1][1].body).answer).toBe(1);
     expect(w.entries.size).toBe(0);
+    expect(w.showNotification.mock.calls[1][1]).toMatchObject({ renotify: true, body: "Katze — 猫", data: { stage: "done" } });
   });
   it("never overwrites the first saved choice with a repeated click", async () => {
     const w = worker(false);

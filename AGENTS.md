@@ -4,6 +4,8 @@
 - Notification subscriptions and deliveries are managed by authenticated edge functions; device tokens stay server-side.
 - Flashcard pushes are data-only self-checks: the card shows the word with "I know" (answer 0, graded correct) and "I don't know" (answer 1, graded incorrect) buttons; server-side answer keys grade via per-delivery tokens and atomically update recall and existing Leitner intervals, with the same quiz page as fallback. Legacy meaning-quiz (answer -1) and Reveal/grade handling remain only for older deliveries.
 - Notification quiz answers are first persisted in a dedicated IndexedDB outbox, then synchronized by the messaging worker with bounded requests and Background Sync/push/app-visit retries; grading remains server-side and idempotent so offline saving never claims a grade or advances SRS early.
+- Graded notification feedback re-alerts on the delivery tag and remains visible with the reading and translation, so Android does not silently hide it behind the local acknowledgement.
+- Self-check notification stages are recognized by the self-check label, not legacy quiz options; older prompt-stage self-checks must still submit quiz answers.
 - Notification selection honors srs_due_at even for known words, so automatic grading spaces future reviews rather than permanently excluding correct answers.
 - Minute-based notification callbacks use single-use database job IDs with five-minute expiry; local hourly frequency slots prevent catch-up bursts.
 - A database insert trigger serializes deliveries per user and blocks unreviewed cards; the sender first expires cards older than two hours, and test sends expire all open cards, because dismissed notifications are undetectable.
