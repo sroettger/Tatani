@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Tatani</string>
+    <string name="title_activity_main">Tatani</string>
+    <string name="package_name">app.tatani.android</string>
+    <string name="custom_url_scheme">app.tatani.android</string>
+</resources>

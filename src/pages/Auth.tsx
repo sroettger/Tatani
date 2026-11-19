@@ -11,6 +11,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Sparkles, Eye, EyeOff, Mail } from "lucide-react";
 import { useI18n } from "@/i18n";
+import { isNativePlatform } from "@/lib/capacitor";
 
 export default function Auth() {
   const { user, loading } = useAuth();
@@ -32,6 +33,12 @@ export default function Auth() {
   }, [user, loading, navigate]);
 
   const signInGoogle = async () => {
+    if (isNativePlatform()) {
+      toast.info("Use email & password in the Android app preview", {
+        description: "Google Sign-In requires deep-link OAuth setup on the server.",
+      });
+      return;
+    }
     setBusy(true);
     try {
       const result = await lovable.auth.signInWithOAuth("google", {

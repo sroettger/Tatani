@@ -3,14 +3,16 @@ import App from "./App.tsx";
 import "./index.css";
 import { resumePushAnswers } from "./lib/resume-push-answers";
 import { resumeForegroundPush } from "./lib/flashcard-push";
+import { initNativeAndroid, isNativePlatform } from "./lib/capacitor";
 
 const root = document.getElementById("root");
 if (root) createRoot(root).render(<App />);
+void initNativeAndroid();
 resumePushAnswers();
 void resumeForegroundPush().catch(() => {});
 
-// PWA service worker — only in production, never inside the editor iframe / preview hosts
-if ("serviceWorker" in navigator) {
+// PWA service worker — only in production web, never inside Capacitor or editor iframe / preview hosts
+if ("serviceWorker" in navigator && !isNativePlatform()) {
   const inIframe = (() => { try { return window.self !== window.top; } catch { return true; } })();
   const host = window.location.hostname;
   const isPreview = host.includes("lovableproject.com") || host.includes("id-preview--");
