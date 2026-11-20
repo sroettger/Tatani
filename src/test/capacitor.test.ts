@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const isNativeMock = vi.fn(() => false);
-const setOverlaysMock = vi.fn().mockResolvedValue(undefined);
+const systemBarsSetStyleMock = vi.fn().mockResolvedValue(undefined);
 const setStyleMock = vi.fn().mockResolvedValue(undefined);
 const setBgMock = vi.fn().mockResolvedValue(undefined);
 const exitAppMock = vi.fn().mockResolvedValue(undefined);
@@ -11,11 +11,14 @@ vi.mock("@capacitor/core", () => ({
   Capacitor: {
     isNativePlatform: () => isNativeMock(),
   },
+  SystemBars: {
+    setStyle: (...args: unknown[]) => systemBarsSetStyleMock(...args),
+  },
+  SystemBarsStyle: { Dark: "DARK" },
 }));
 
 vi.mock("@capacitor/status-bar", () => ({
   StatusBar: {
-    setOverlaysWebView: (...args: unknown[]) => setOverlaysMock(...args),
     setStyle: (...args: unknown[]) => setStyleMock(...args),
     setBackgroundColor: (...args: unknown[]) => setBgMock(...args),
   },
@@ -45,17 +48,18 @@ describe("capacitor native android helpers", () => {
   it("does nothing on web platforms", async () => {
     expect(isNativePlatform()).toBe(false);
     await initNativeAndroid();
+    expect(systemBarsSetStyleMock).not.toHaveBeenCalled();
     expect(setStyleMock).not.toHaveBeenCalled();
     expect(backHandler).toBeUndefined();
   });
 
-  it("configures dark status bar and handles hardware back button on native Android", async () => {
+  it("configures dark system bars and handles hardware back button on native Android", async () => {
     isNativeMock.mockReturnValue(true);
     const historyBack = vi.spyOn(window.history, "back").mockImplementation(() => {});
 
     await initNativeAndroid();
 
-    expect(setOverlaysMock).toHaveBeenCalledWith({ overlay: false });
+    expect(systemBarsSetStyleMock).toHaveBeenCalledWith({ style: "DARK" });
     expect(setStyleMock).toHaveBeenCalledWith({ style: "DARK" });
     expect(setBgMock).toHaveBeenCalledWith({ color: "#1a1424" });
     expect(backHandler).toBeDefined();

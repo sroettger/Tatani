@@ -18,7 +18,10 @@ export function AppShell() {
       <main className="flex-1 pb-24 min-w-0 w-full">
         <Outlet />
       </main>
-      <nav className="fixed bottom-0 inset-x-0 z-40 border-t border-border bg-card/80 backdrop-blur-xl pb-[env(safe-area-inset-bottom)]">
+      <nav
+        className="fixed bottom-0 inset-x-0 z-40 border-t border-border bg-card/80 backdrop-blur-xl"
+        style={{ paddingBottom: "var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))" }}
+      >
         <div className="max-w-2xl mx-auto grid grid-cols-4">
           {tabs.map(({ to, labelKey, Icon }) => (
             <NavLink

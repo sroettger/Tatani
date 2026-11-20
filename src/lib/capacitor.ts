@@ -1,4 +1,4 @@
-import { Capacitor } from "@capacitor/core";
+import { Capacitor, SystemBars, SystemBarsStyle } from "@capacitor/core";
 import { App } from "@capacitor/app";
 import { StatusBar, Style } from "@capacitor/status-bar";
 
@@ -12,11 +12,16 @@ export async function initNativeAndroid(): Promise<void> {
   if (!Capacitor.isNativePlatform()) return;
 
   try {
-    await StatusBar.setOverlaysWebView({ overlay: false });
+    await SystemBars.setStyle({ style: SystemBarsStyle.Dark });
+  } catch {
+    // Ignore on platforms where SystemBars APIs are unavailable.
+  }
+
+  try {
     await StatusBar.setStyle({ style: Style.Dark });
     await StatusBar.setBackgroundColor({ color: "#1a1424" });
   } catch {
-    // Ignore on platforms where StatusBar APIs are unavailable.
+    // Ignore on Android 15+/16 where edge-to-edge handles system bar styling.
   }
 
   try {

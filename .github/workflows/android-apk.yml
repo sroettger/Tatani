@@ -1,7 +1,12 @@
-name: Build Android APK
+name: Build & Publish Android (Google Play + Preview)
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_play_internal:
+        description: "Upload signed release AAB to Google Play Internal Testing (requires secrets)"
+        type: boolean
+        default: true
   push:
     branches: [android-capacitor-app]
     tags: ["v*-android.*"]
@@ -10,7 +15,7 @@ permissions:
   contents: write
 
 jobs:
-  build-apk:
+  build-android:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,7 +25,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -28,18 +33,66 @@ jobs:
       - name: Build web bundle & sync Android
         run: bun run android:sync
 
-      - name: Build debug APK
+      - name: Build debug APK & debug AAB (ready for sideloading or Play Internal App Sharing)
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon
+        env:
+          ANDROID_VERSION_CODE: ${{ github.run_number }}
+          ANDROID_VERSION_NAME: 1.0.${{ github.run_number }}
+        run: ./gradlew assembleDebug bundleDebug --no-daemon
 
-      - name: Stage APK
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk tatani-android-debug.apk
+      - name: Stage debug artifacts
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk tatani-android-debug.apk
+          cp android/app/build/outputs/bundle/debug/app-debug.aab tatani-android-debug.aab
 
-      - name: Upload APK artifact
+      - name: Check Play signing secrets
+        id: signing
+        env:
+          HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+          HAS_PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+        run: |
+          echo "has_keystore=${HAS_KEYSTORE}" >> "$GITHUB_OUTPUT"
+          echo "has_play_json=${HAS_PLAY_JSON}" >> "$GITHUB_OUTPUT"
+
+      - name: Build signed Google Play release AAB
+        if: steps.signing.outputs.has_keystore == 'true'
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_VERSION_CODE: ${{ github.run_number }}
+          ANDROID_VERSION_NAME: 1.0.${{ github.run_number }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | tr -d '\n\r ' | base64 --decode > /tmp/tatani-upload.keystore
+          export ANDROID_KEYSTORE_PATH=/tmp/tatani-upload.keystore
+          ./gradlew bundleRelease --no-daemon
+          cp app/build/outputs/bundle/release/app-release.aab ../tatani-android-release.aab
+          rm -f /tmp/tatani-upload.keystore
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: tatani-android-debug
-          path: tatani-android-debug.apk
+          name: tatani-android-build-${{ github.run_number }}
+          path: |
+            tatani-android-debug.apk
+            tatani-android-debug.aab
+            tatani-android-release.aab
+          if-no-files-found: ignore
+
+      - name: Upload signed AAB to Google Play Internal Testing
+        if: >-
+          steps.signing.outputs.has_keystore == 'true' &&
+          steps.signing.outputs.has_play_json == 'true' &&
+          (github.event_name != 'workflow_dispatch' || inputs.publish_play_internal == true)
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: app.tatani.android
+          releaseFiles: tatani-android-release.aab
+          track: internal
+          status: completed
 
       - name: Publish GitHub Pre-release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -47,11 +100,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF_NAME}"
+          ASSETS=(tatani-android-debug.apk tatani-android-debug.aab)
+          if [ -f tatani-android-release.aab ]; then
+            ASSETS+=(tatani-android-release.aab)
+          fi
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" tatani-android-debug.apk --clobber
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
           else
-            gh release create "$TAG" tatani-android-debug.apk \
+            gh release create "$TAG" "${ASSETS[@]}" \
               --prerelease \
               --title "Tatani Android Preview ($TAG)" \
-              --notes $'Installable Android debug APK for Tatani (`app.tatani.android`, minSdk 22 / targetSdk 34).\n\n### How to install on Android\n1. Download **`tatani-android-debug.apk`** below on your Android device.\n2. Tap the downloaded APK and allow **Install unknown apps** for your browser / Files app when prompted.\n3. Open **Tatani** and sign in with your **email & password**.\n\n### Notes for this preview\n- **Email & password sign-in** and all anime library, flashcard study, SRS, subtitles, and AI tutor features work directly against Supabase.\n- **Google Sign-In** requires deep-link OAuth setup on the server (currently shows a friendly reminder to use email & password).\n- **Push notifications**: Web Push (`firebase-messaging-sw.js`) does not run inside Android WebView; native Android FCM push can be wired up next once `google-services.json` from the `tatani-3ed3c` Firebase console is added to `android/app/`.'
+              --notes $'Android 16 (API 36) build of Tatani (`app.tatani.android`, minSdk 24 / targetSdk 36).\n\n### Install from your phone via Google Play (private, no laptop needed)\n- **Fastest (Google Play Internal App Sharing — zero keystore needed)**: Download **`tatani-android-debug.aab`** (or `.apk`) on your phone, upload it on `play.google.com/console/internal-app-sharing`, and tap the private Play Store link to install through Google Play.\n- **Auto-updating Play Internal Testing track**: Run the **Generate Upload Keystore** workflow once from GitHub on your phone, save the 4 secrets in Repo Settings → Secrets → Actions, then re-run this workflow to produce **`tatani-android-release.aab`** (and auto-upload to Google Play Internal Testing once `PLAY_SERVICE_ACCOUNT_JSON` is added).\n- **Direct sideload**: Download and tap **`tatani-android-debug.apk`** on your Android phone.'
           fi
