@@ -8,7 +8,7 @@
         android:shortcutLongLabel="@string/shortcut_sprint_long">
         <intent
             android:action="android.intent.action.VIEW"
-            android:targetPackage="app.tatani.android"
+            android:targetPackage="com.tsuro.tatani"
             android:targetClass="app.tatani.android.MainActivity"
             android:data="tatani://sprint" />
     </shortcut>
@@ -20,7 +20,7 @@
         android:shortcutLongLabel="@string/shortcut_learn_long">
         <intent
             android:action="android.intent.action.VIEW"
-            android:targetPackage="app.tatani.android"
+            android:targetPackage="com.tsuro.tatani"
             android:targetClass="app.tatani.android.MainActivity"
             android:data="tatani://learn" />
     </shortcut>
@@ -32,7 +32,7 @@
         android:shortcutLongLabel="@string/shortcut_library_long">
         <intent
             android:action="android.intent.action.VIEW"
-            android:targetPackage="app.tatani.android"
+            android:targetPackage="com.tsuro.tatani"
             android:targetClass="app.tatani.android.MainActivity"
             android:data="tatani://library" />
     </shortcut>

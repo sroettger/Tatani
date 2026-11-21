@@ -28,7 +28,7 @@ android {
     buildToolsVersion = "35.0.0"
 
     defaultConfig {
-        applicationId = "app.tatani.android"
+        applicationId = "com.tsuro.tatani"
         minSdk = 24
         targetSdk = 36
         versionCode = envVersionCode

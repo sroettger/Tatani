@@ -9,7 +9,7 @@ export default function Privacy() {
             ← Tatani
           </Link>
           <h1 className="text-3xl font-bold tracking-tight">Privacy Policy & Data Deletion</h1>
-          <p className="text-xs text-muted-foreground">Effective date: November 2026 · App ID: app.tatani.android</p>
+          <p className="text-xs text-muted-foreground">Effective date: November 2026 · App ID: com.tsuro.tatani</p>
         </div>
 
         <section className="space-y-2">

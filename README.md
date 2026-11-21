@@ -4,7 +4,7 @@ Tatani is a standalone Japanese vocabulary & comprehension trainer built around 
 
 - **Web App (GitHub Pages):** https://sroettger.github.io/Tatani/
 - **Privacy Policy & Data Deletion:** https://sroettger.github.io/Tatani/privacy
-- **Google Play Package ID:** `app.tatani.android` (`minSdk = 24`, `targetSdk = 36`)
+- **Google Play Package ID:** `com.tsuro.tatani` (`minSdk = 24`, `targetSdk = 36`)
 
 ---
 

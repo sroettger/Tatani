@@ -1,8 +1,8 @@
-# Google Play Store Setup & Publishing Guide (`app.tatani.android`)
+# Google Play Store Setup & Publishing Guide (`com.tsuro.tatani`)
 
 Everything in the repository and GitHub Actions is standalone and configured for Google Play Store delivery:
 
-- **Package Name:** `app.tatani.android`
+- **Package Name:** `com.tsuro.tatani`
 - **SDK Targets:** `minSdk = 24`, `targetSdk = 36` (Android 16), `compileSdk = 36`
 - **Release Optimization:** R8 shrinking + embedded deobfuscation `mapping.txt` + native symbol tables (`SYMBOL_TABLE`)
 - **Upload Keystore Secrets:** `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` *(already configured in GitHub Secrets on `sroettger/Tatani`!)*
