@@ -43,7 +43,7 @@ jobs:
           if [ -n "$FIREBASE_SERVICE_ACCOUNT_JSON" ]; then
             ARGS+=("FIREBASE_SERVICE_ACCOUNT_JSON=$FIREBASE_SERVICE_ACCOUNT_JSON")
           fi
-          supabase secrets set --project-ref "$PROJECT_ID" "${ARGS[@]}"
+          supabase secrets set --yes --project-ref "$PROJECT_ID" "${ARGS[@]}"
 
       - name: Deploy all Supabase Edge Functions
         if: steps.sb.outputs.configured == 'true'
@@ -51,4 +51,4 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           PROJECT_ID: ${{ steps.sb.outputs.project_id }}
         run: |
-          supabase functions deploy --project-ref "$PROJECT_ID"
+          supabase functions deploy --yes --project-ref "$PROJECT_ID"
