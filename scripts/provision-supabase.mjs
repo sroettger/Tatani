@@ -5,7 +5,7 @@
 // SUPABASE_ACCESS_TOKEN secret.
 
 import { appendFileSync, readdirSync, readFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import path from "node:path";
 
 const API_BASE = process.env.SUPABASE_API_BASE || "https://api.supabase.com/v1";
@@ -174,6 +174,7 @@ export async function applyMigrationsViaApi({
 export async function repairCatalogEpisodesAndReport({
   token,
   projectId,
+  supabaseAnonKey = "",
   fetchImpl = fetch,
 }) {
   const runSql = async (query) =>
@@ -346,6 +347,63 @@ export async function repairCatalogEpisodesAndReport({
   } catch (err) {
     console.warn("Authenticated RLS check failed:", err instanceof Error ? err.message : err);
   }
+
+  // Verify live PostgREST HTTPS responses using the exact Android query parameters (zero PII logged)
+  if (supabaseAnonKey) {
+    try {
+      const pgCfg = await apiRequest(`/projects/${projectId}/postgrest`, token, {}, fetchImpl);
+      const uidRows = await runSql(`SELECT user_id, anime_id FROM public.user_anime LIMIT 1;`);
+      const firstRow = Array.isArray(uidRows) ? uidRows[0] : null;
+      if (pgCfg?.jwt_secret && firstRow?.user_id && firstRow?.anime_id) {
+        const b64u = (s) => Buffer.from(s).toString("base64url");
+        const now = Math.floor(Date.now() / 1000);
+        const header = b64u(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+        const payload = b64u(
+          JSON.stringify({
+            aud: "authenticated",
+            role: "authenticated",
+            sub: String(firstRow.user_id),
+            iat: now,
+            exp: now + 60,
+          }),
+        );
+        const sig = createHmac("sha256", String(pgCfg.jwt_secret)).update(`${header}.${payload}`).digest("base64url");
+        const testJwt = `${header}.${payload}.${sig}`;
+        const base = `https://${projectId}.supabase.co/rest/v1`;
+        const headers = { apikey: supabaseAnonKey, Authorization: `Bearer ${testJwt}` };
+
+        const uaUrl = new URL(`${base}/user_anime`);
+        uaUrl.searchParams.set("user_id", `eq.${firstRow.user_id}`);
+        uaUrl.searchParams.set("learning_language", "eq.ja");
+        uaUrl.searchParams.set("select", "position,anime:anime_id(id,title_romaji,title_en,title_jp,cover_url)");
+        uaUrl.searchParams.set("order", "position.asc");
+
+        const epUrl = new URL(`${base}/episodes`);
+        epUrl.searchParams.set("seasons.anime_id", `in.(${firstRow.anime_id})`);
+        epUrl.searchParams.set("select", "id,episode_number,processing_status,seasons!inner(anime_id,season_number)");
+
+        const uaResp = await fetchImpl(uaUrl.toString(), { headers });
+        const uaText = await uaResp.text();
+        const epResp = await fetchImpl(epUrl.toString(), { headers });
+        const epText = await epResp.text();
+
+        const uaParsed = uaResp.ok ? JSON.parse(uaText) : null;
+        const epParsed = epResp.ok ? JSON.parse(epText) : null;
+        console.log(
+          "PostgREST HTTP check:",
+          JSON.stringify({
+            ua_status: uaResp.status,
+            ua_len: Array.isArray(uaParsed) ? uaParsed.length : uaText.slice(0, 160),
+            ua_has_anime: Array.isArray(uaParsed) ? Boolean(uaParsed[0]?.anime?.id) : false,
+            ep_status: epResp.status,
+            ep_len: Array.isArray(epParsed) ? epParsed.length : epText.slice(0, 160),
+          }),
+        );
+      }
+    } catch (err) {
+      console.warn("PostgREST HTTP check skipped:", err instanceof Error ? err.message : err);
+    }
+  }
 }
 
 async function main() {
@@ -392,6 +450,7 @@ async function main() {
     await repairCatalogEpisodesAndReport({
       token,
       projectId: resolved.projectId,
+      supabaseAnonKey: resolved.supabaseAnonKey,
     });
   }
 
