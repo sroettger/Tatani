@@ -35,6 +35,11 @@ jobs:
           PROJECT_ID: ${{ steps.sb.outputs.project_id }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          JIMAKU_API_KEY: ${{ secrets.JIMAKU_API_KEY }}
+          SUBDL_API_KEY: ${{ secrets.SUBDL_API_KEY }}
+          OPENSUBTITLES_API_KEY: ${{ secrets.OPENSUBTITLES_API_KEY }}
+          OPENSUBTITLES_USERNAME: ${{ secrets.OPENSUBTITLES_USERNAME }}
+          OPENSUBTITLES_PASSWORD: ${{ secrets.OPENSUBTITLES_PASSWORD }}
         run: |
           ARGS=("WEB_BASE_PATH=/Tatani")
           if [ -n "$GEMINI_API_KEY" ]; then
@@ -42,6 +47,21 @@ jobs:
           fi
           if [ -n "$FIREBASE_SERVICE_ACCOUNT_JSON" ]; then
             ARGS+=("FIREBASE_SERVICE_ACCOUNT_JSON=$FIREBASE_SERVICE_ACCOUNT_JSON")
+          fi
+          if [ -n "$JIMAKU_API_KEY" ]; then
+            ARGS+=("JIMAKU_API_KEY=$JIMAKU_API_KEY")
+          fi
+          if [ -n "$SUBDL_API_KEY" ]; then
+            ARGS+=("SUBDL_API_KEY=$SUBDL_API_KEY")
+          fi
+          if [ -n "$OPENSUBTITLES_API_KEY" ]; then
+            ARGS+=("OPENSUBTITLES_API_KEY=$OPENSUBTITLES_API_KEY")
+          fi
+          if [ -n "$OPENSUBTITLES_USERNAME" ]; then
+            ARGS+=("OPENSUBTITLES_USERNAME=$OPENSUBTITLES_USERNAME")
+          fi
+          if [ -n "$OPENSUBTITLES_PASSWORD" ]; then
+            ARGS+=("OPENSUBTITLES_PASSWORD=$OPENSUBTITLES_PASSWORD")
           fi
           supabase secrets set --yes --project-ref "$PROJECT_ID" "${ARGS[@]}"
 

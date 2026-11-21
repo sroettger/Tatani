@@ -109,7 +109,12 @@ function stripSubtitleFormatting(raw: string): string {
       const parts = line.split(",");
       if (parts.length > 9) line = parts.slice(9).join(",");
     }
-    line = line.replace(/\{[^}]*\}/g, "").replace(/<[^>]+>/g, "").trim();
+    line = line
+      .replace(/\{[^}]*\}/g, "")
+      .replace(/\\[Nn]/g, " ")
+      .replace(/<[^>]+>/g, "")
+      .replace(/^（[^）]{1,15}）\s*/g, "")
+      .trim();
     if (line) out.push(line);
   }
   return out.filter((l, i) => l !== out[i - 1]).join("\n");
@@ -217,12 +222,16 @@ Deno.serve(async (req) => {
 
     const aiApiKey = getAiApiKey();
 
-    const { episode_id, subtitle_text } = await req.json();
+    const { episode_id, subtitle_text, wait } = await req.json();
     if (!episode_id || !subtitle_text) {
       return new Response(JSON.stringify({ error: "episode_id and subtitle_text required" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    const clientInfo = req.headers.get("x-client-info") ?? "";
+    const isWebPollingClient = clientInfo.includes("supabase-js") && !wait;
+    const waitForCompletion = !isWebPollingClient;
 
     const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
@@ -254,8 +263,8 @@ Deno.serve(async (req) => {
     const MAX_CONCURRENCY = 4;
     const TRANSLATE_TOOL = buildTranslateTool(learning.levels);
 
-    // Run extraction in the background; client polls episodes.processing_status.
-    const work = (async () => {
+    // Run extraction (in background for web polling clients; awaited for synchronous mobile clients).
+    const work = (async (): Promise<{ ok: true; count: number } | { ok: false; error: string }> => {
       try {
         // 1. Tokenize + frequency rank (deterministic, no AI). Kuromoji for Japanese,
         // word-boundary tokenizer for latin-script target languages.
@@ -265,8 +274,8 @@ Deno.serve(async (req) => {
         console.log(`Episode ${episode_id} [${learning.code}]: tokenized → ${allVocab.length} unique words`);
 
         // 1b. AI pass: detect common Japanese words written in unusual kana-only form
-        // (childish speech, stylization) that kuromoji splits into fragments. JP-only.
-        if (isJapanese) {
+        // (skip extra sequential pass on synchronous mobile requests so completion stays fast).
+        if (isJapanese && !waitForCompletion) {
           const knownSurfaces = new Set(allVocab.map((v) => v.word));
           const subtitleLines = cleaned.split("\n").filter((l) => l.trim().length > 0);
           const extraKanaVocab = await detectUnusualKanaSpellings(cleaned, subtitleLines, knownSurfaces, aiApiKey);
@@ -283,8 +292,8 @@ Deno.serve(async (req) => {
           level: isJapanese ? (getOfficialJlptLevel(v.word, v.reading) ?? "none") : "none",
         }));
 
-        // 3. Translate everything (no cap).
-        const top = tagged;
+        // 3. Cap synchronous mobile calls to top 160 words (4 parallel batches = single AI round-trip).
+        const top = waitForCompletion ? tagged.slice(0, 160) : tagged;
 
         // 4. Batch words to AI for meanings (in the learner's UI language) + grammar extraction
         // (+ difficulty level for non-Japanese languages, since there's no static lookup list).
@@ -414,15 +423,32 @@ Deno.serve(async (req) => {
         }, { onConflict: "episode_id,language" });
         await supabase.from("episodes").update({ processing_status: "ready" }).eq("id", episode_id);
         console.log(`Episode ${episode_id} [${learning.code}] done: ${finalVocab.length} vocab (${okBatches}/${batches.length} batches ok), ${grammarMap.size} grammar, ${sentences.length} sentences`);
+        return { ok: true, count: finalVocab.length };
       } catch (e) {
-        console.error(`Episode ${episode_id} failed:`, e instanceof Error ? e.message : e);
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`Episode ${episode_id} failed:`, msg);
         await supabase.from("episodes").update({ processing_status: "failed" }).eq("id", episode_id);
+        return { ok: false, error: msg };
       }
     })();
 
-    // @ts-ignore - EdgeRuntime is available in Supabase edge functions
+    if (waitForCompletion) {
+      const outcome = await work;
+      if (!outcome.ok) {
+        return new Response(JSON.stringify({ error: outcome.error }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ status: "ready", count: outcome.count }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // @ts-expect-error - EdgeRuntime is available in Supabase edge functions
     if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
-      // @ts-ignore
+      // @ts-expect-error - EdgeRuntime is available in Supabase edge functions
       EdgeRuntime.waitUntil(work);
     }
 

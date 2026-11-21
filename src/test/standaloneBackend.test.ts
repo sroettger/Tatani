@@ -4,6 +4,8 @@ import path from "node:path";
 import { webcrypto } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { createServiceAccountJwt, parseFirebaseServiceAccount, sendFcmWebPush } from "../../supabase/functions/_shared/fcm";
+import { sanitizeToolsForGemini } from "../../supabase/functions/_shared/ai";
+import { kitsuSanitizeDirName, scoreEpisodeFilename } from "../../supabase/functions/fetch-subtitles/kitsuMatch";
 import {
   applyMigrationsViaApi,
   repairCatalogEpisodesAndReport,
@@ -208,5 +210,37 @@ describe("standalone FCM HTTP v1 sender", () => {
     expect(insertEpisodesSql).toContain("INSERT INTO public.episodes");
     expect(insertEpisodesSql).toContain("I''m Luffy!");
     expect(insertEpisodesSql).toContain("GREATEST(episode_count, 3)");
+  });
+
+  it("matches Kitsunekko directory names, scores episode filenames without false positives, and strips additionalProperties for Gemini", () => {
+    expect(kitsuSanitizeDirName("Cyberpunk: Edgerunners 2")).toBe("Cyberpunk. Edgerunners 2");
+    expect(kitsuSanitizeDirName("Ranma 1/2 (2024)")).toBe("Ranma 1∕2 (2024)");
+    expect(kitsuSanitizeDirName("Zutto Dokushin de Iru Tsumori?")).toBe("Zutto Dokushin de Iru Tsumori？");
+
+    const ep2File = "Cyberpunk .Edgerunners.S02E02.Give.Me.Another.Day.WEBRip.Netflix.ja[cc].srt";
+    const ep3TrickyTitle = "Cyberpunk .Edgerunners.S02E03.0+2=1.WEBRip.Netflix.ja[cc].srt";
+    expect(scoreEpisodeFilename(ep2File, 1, 2)).toBeGreaterThan(scoreEpisodeFilename(ep3TrickyTitle, 1, 2));
+    expect(scoreEpisodeFilename(ep2File, 1, 99)).toBe(-1);
+    expect(scoreEpisodeFilename("Movie.2024.WEBRip.ja.srt", 1, 1, true)).toBeGreaterThan(0);
+
+    const sanitized = sanitizeToolsForGemini([
+      {
+        type: "function",
+        function: {
+          name: "translate",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              item: { type: "object", additionalProperties: false, properties: { word: { type: "string" } } },
+            },
+          },
+        },
+      },
+    ]) as Array<{ function: { parameters: Record<string, unknown> } }>;
+
+    expect("additionalProperties" in sanitized[0].function.parameters).toBe(false);
+    const itemProp = (sanitized[0].function.parameters.properties as Record<string, Record<string, unknown>>).item;
+    expect("additionalProperties" in itemProp).toBe(false);
   });
 });

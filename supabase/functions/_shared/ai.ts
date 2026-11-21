@@ -22,6 +22,23 @@ export function resolveAiModel(requested?: string): string {
   return stripped || DEFAULT_AI_MODEL;
 }
 
+/**
+ * Strip `additionalProperties` recursively from tool parameter schemas so Google's
+ * Gemini FunctionDeclaration validator never rejects strict OpenAI JSON schemas.
+ */
+export function sanitizeToolsForGemini(val: unknown): unknown {
+  if (Array.isArray(val)) return val.map(sanitizeToolsForGemini);
+  if (val && typeof val === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+      if (k === "additionalProperties") continue;
+      out[k] = sanitizeToolsForGemini(v);
+    }
+    return out;
+  }
+  return val;
+}
+
 export async function callAiChatCompletions(
   payload: Record<string, unknown>,
   explicitApiKey?: string,
@@ -34,6 +51,10 @@ export async function callAiChatCompletions(
     ...payload,
     model,
   };
+
+  if (endpoint.includes("generativelanguage.googleapis.com") && body.tools) {
+    body.tools = sanitizeToolsForGemini(body.tools);
+  }
 
   return await fetch(endpoint, {
     method: "POST",

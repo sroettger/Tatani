@@ -42,20 +42,30 @@ Deno.serve(async (req) => {
 
     const { data: ep, error } = await supabase
       .from("episodes")
-      .select("id, episode_number, season_id, seasons(season_number, anime(title_romaji, title_en, anilist_id, mal_id))")
+      .select("id, episode_number, season_id, seasons(season_number, anime(title_romaji, title_en, title_jp, anilist_id, mal_id))")
       .eq("id", episode_id)
       .maybeSingle();
     if (error || !ep) return json({ error: "episode not found" }, 404);
 
-    const animeRow: any = (ep as any).seasons?.anime;
+    type NestedAnime = {
+      title_romaji?: string | null;
+      title_en?: string | null;
+      title_jp?: string | null;
+      anilist_id?: number | null;
+      mal_id?: number | null;
+    };
+    type NestedSeason = { season_number?: number | null; anime?: NestedAnime | null };
+    const seasonObj = (ep as { seasons?: NestedSeason | null }).seasons;
+    const animeRow = seasonObj?.anime;
     const ctx = {
       lang: learning.subtitleLang,
       titleRomaji: animeRow?.title_romaji ?? "",
       titleEn: animeRow?.title_en ?? "",
+      titleJp: animeRow?.title_jp ?? "",
       anilistId: animeRow?.anilist_id ?? null,
       malId: animeRow?.mal_id ?? null,
-      season: (ep as any).seasons?.season_number ?? 1,
-      episode: (ep as any).episode_number ?? 1,
+      season: seasonObj?.season_number ?? 1,
+      episode: (ep as { episode_number?: number | null }).episode_number ?? 1,
     };
 
     const attempts: { provider: string; result: string }[] = [];

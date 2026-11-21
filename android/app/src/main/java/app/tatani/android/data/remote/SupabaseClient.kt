@@ -9,13 +9,21 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import okhttp3.Dns
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.net.InetAddress
+import java.net.URL
+import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.HttpsURLConnection
 
 class SupabaseClient(
     private val sessionStore: SessionStore,
@@ -32,7 +40,43 @@ class SupabaseClient(
         explicitNulls = false
     }
 
+    private val fallbackDns = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            try {
+                return Dns.SYSTEM.lookup(hostname)
+            } catch (sysErr: UnknownHostException) {
+                val resolved = runCatching { resolveViaCloudflareDoh(hostname) }.getOrNull().orEmpty()
+                if (resolved.isNotEmpty()) return resolved
+                throw sysErr
+            }
+        }
+
+        private fun resolveViaCloudflareDoh(hostname: String): List<InetAddress> {
+            val conn = (URL("https://1.1.1.1/dns-query?name=${Uri.encode(hostname)}&type=A")
+                .openConnection() as HttpsURLConnection).apply {
+                connectTimeout = 5000
+                readTimeout = 5000
+                setRequestProperty("Accept", "application/dns-json")
+            }
+            return try {
+                if (conn.responseCode !in 200..299) return emptyList()
+                val raw = conn.inputStream.bufferedReader().use { it.readText() }
+                val root = json.parseToJsonElement(raw).jsonObject
+                val answers = root["Answer"]?.jsonArray ?: return emptyList()
+                answers.mapNotNull { item ->
+                    val obj = item.jsonObject
+                    val type = obj["type"]?.jsonPrimitive?.content?.toIntOrNull()
+                    val ip = obj["data"]?.jsonPrimitive?.content
+                    if (type == 1 && !ip.isNullOrBlank()) InetAddress.getByName(ip) else null
+                }
+            } finally {
+                conn.disconnect()
+            }
+        }
+    }
+
     private val http = OkHttpClient.Builder()
+        .dns(fallbackDns)
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(90, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
