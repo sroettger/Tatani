@@ -14,10 +14,13 @@ query ($search: String) {
     media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
       id
       idMal
+      format
+      status
       title { romaji english native }
       coverImage { large }
       seasonYear
       episodes
+      nextAiringEpisode { episode }
       description(asHtml: false)
     }
   }
@@ -44,7 +47,7 @@ Deno.serve(async (req) => {
     }
     const r = await fetch(ANILIST_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: { "Content-Type": "application/json", Accept: "application/json", "User-Agent": "Tatani/2.0" },
       body: JSON.stringify({ query: SEARCH_QUERY, variables: { search: query } }),
     });
     if (!r.ok) {
@@ -55,17 +58,36 @@ Deno.serve(async (req) => {
       });
     }
     const data = await r.json();
-    const results = (data?.data?.Page?.media ?? []).map((m: any) => ({
-      anilist_id: m.id,
-      mal_id: m.idMal,
-      title_romaji: m.title?.romaji ?? m.title?.english ?? "Unknown",
-      title_en: m.title?.english ?? null,
-      title_jp: m.title?.native ?? null,
-      cover_url: m.coverImage?.large ?? null,
-      year: m.seasonYear ?? null,
-      episode_count: m.episodes ?? 0,
-      synopsis: m.description?.replace(/<[^>]+>/g, "") ?? null,
-    }));
+    type AniListMediaItem = {
+      id?: number;
+      idMal?: number | null;
+      format?: string | null;
+      status?: string | null;
+      title?: { romaji?: string | null; english?: string | null; native?: string | null };
+      coverImage?: { large?: string | null };
+      seasonYear?: number | null;
+      episodes?: number | null;
+      nextAiringEpisode?: { episode?: number | null } | null;
+      description?: string | null;
+    };
+    const results = ((data?.data?.Page?.media ?? []) as AniListMediaItem[]).map((m) => {
+      const airedCount =
+        typeof m.nextAiringEpisode?.episode === "number" && m.nextAiringEpisode.episode > 1
+          ? m.nextAiringEpisode.episode - 1
+          : 0;
+      const movieFallback = m.format === "MOVIE" && m.status === "FINISHED" ? 1 : 0;
+      return {
+        anilist_id: m.id,
+        mal_id: m.idMal ?? null,
+        title_romaji: m.title?.romaji ?? m.title?.english ?? "Unknown",
+        title_en: m.title?.english ?? null,
+        title_jp: m.title?.native ?? null,
+        cover_url: m.coverImage?.large ?? null,
+        year: m.seasonYear ?? null,
+        episode_count: m.episodes ?? (airedCount > 0 ? airedCount : movieFallback),
+        synopsis: m.description?.replace(/<[^>]+>/g, "") ?? null,
+      };
+    });
     return new Response(JSON.stringify({ results }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

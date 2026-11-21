@@ -36,6 +36,7 @@ class TataniViewModel(application: Application) : AndroidViewModel(application) 
 
     val session: StateFlow<AuthSession?> = app.sessionStore.session
     val syncing: StateFlow<Boolean> = repository.syncing
+    val syncError: StateFlow<String?> = repository.syncError
     val outboxCount: StateFlow<Int> = repository.outboxCount
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 

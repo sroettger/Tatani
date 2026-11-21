@@ -69,6 +69,7 @@ fun LibraryScreen(
 ) {
     val episodes by viewModel.libraryEpisodes.collectAsState()
     val syncing by viewModel.syncing.collectAsState()
+    val syncError by viewModel.syncError.collectAsState()
     val dueCards by viewModel.dueCards.collectAsState()
 
     val groupedByAnime = remember(episodes) {
@@ -129,6 +130,15 @@ fun LibraryScreen(
             color = WashiMuted,
         )
         Spacer(Modifier.height(14.dp))
+
+        if (!syncError.isNullOrBlank()) {
+            Text(
+                text = syncError!!,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(bottom = 10.dp),
+            )
+        }
 
         if (groupedByAnime.isEmpty()) {
             Card(
@@ -224,7 +234,13 @@ fun LibraryScreen(
                                     for (ep in animeEps) {
                                         EpisodeRowItem(
                                             ep = ep,
-                                            onClick = { onOpenEpisode(ep.episodeId) },
+                                            onClick = {
+                                                if (ep.episodeId.startsWith("placeholder:")) {
+                                                    viewModel.refreshSync()
+                                                } else {
+                                                    onOpenEpisode(ep.episodeId)
+                                                }
+                                            },
                                         )
                                     }
                                 }

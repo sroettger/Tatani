@@ -34,6 +34,9 @@ class TataniRepository(
     private val _syncing = MutableStateFlow(false)
     val syncing: StateFlow<Boolean> = _syncing.asStateFlow()
 
+    private val _syncError = MutableStateFlow<String?>(null)
+    val syncError: StateFlow<String?> = _syncError.asStateFlow()
+
     val outboxCount: Flow<Int> = dao.observeOutboxCount()
 
     fun observeDeckCards(lang: String): Flow<List<WordCardEntity>> =
@@ -173,6 +176,7 @@ class TataniRepository(
             val currentSession = sessionStore.session.value ?: return@withLock
             _syncing.value = true
             try {
+                _syncError.value = null
                 flushOutbox()
                 val (lang, userLevel) = supabase.fetchProfileAndProgress(currentSession.userId)
                 val userRank = SrsEngine.jlptRank(userLevel)
@@ -255,9 +259,11 @@ class TataniRepository(
                 )
 
                 val libraryEntities = mutableListOf<LibraryEpisodeEntity>()
+                val coveredAnimeIds = HashSet<String>()
 
                 for (ep in sortedEpisodes) {
                     val meta = animeMetaById[ep.seasons.animeId] ?: continue
+                    coveredAnimeIds += ep.seasons.animeId
                     val animePos = meta.first
                     val animeTitle = meta.second
                     val catalog = meta.third
@@ -332,6 +338,27 @@ class TataniRepository(
                     )
                 }
 
+                // Keep anime visible in Library even if server-side episodes have not populated yet
+                for ((animeId, meta) in animeMetaById) {
+                    if (animeId in coveredAnimeIds) continue
+                    val catalog = meta.third
+                    libraryEntities += LibraryEpisodeEntity(
+                        episodeId = "placeholder:$animeId",
+                        learningLanguage = lang,
+                        animeId = catalog.id,
+                        animeTitle = meta.second,
+                        animeTitleJp = catalog.titleJp,
+                        coverUrl = catalog.coverUrl,
+                        animePosition = meta.first,
+                        seasonNumber = 1,
+                        episodeNumber = 1,
+                        processingStatus = "not_processed",
+                        totalWords = 0,
+                        knownWords = 0,
+                        unlearnedWords = 0,
+                    )
+                }
+
                 val entities = cardBuilder.values.map { item ->
                     val st = stateMap[item.word]
                     val dueMs = st?.srsDueAt?.let { parseIsoMillis(it) }
@@ -369,8 +396,10 @@ class TataniRepository(
                 if (libraryEntities.isNotEmpty()) {
                     dao.upsertLibraryEpisodes(libraryEntities)
                 }
-            } catch (_: Throwable) {
-                // Offline-safe: retain cached Room entities
+            } catch (e: Throwable) {
+                // Offline-safe: retain cached Room entities and expose diagnostic error
+                runCatching { android.util.Log.w("TataniSync", "syncAllFromServer failed", e) }
+                _syncError.value = e.message ?: e::class.simpleName
             } finally {
                 _syncing.value = false
             }

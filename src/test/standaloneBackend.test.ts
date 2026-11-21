@@ -4,7 +4,11 @@ import path from "node:path";
 import { webcrypto } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { createServiceAccountJwt, parseFirebaseServiceAccount, sendFcmWebPush } from "../../supabase/functions/_shared/fcm";
-import { applyMigrationsViaApi, resolveOrCreateProject } from "../../scripts/provision-supabase.mjs";
+import {
+  applyMigrationsViaApi,
+  repairCatalogEpisodesAndReport,
+  resolveOrCreateProject,
+} from "../../scripts/provision-supabase.mjs";
 
 function arrayBufferToPem(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
@@ -129,5 +133,73 @@ describe("standalone FCM HTTP v1 sender", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("repairs 0-episode airing anime catalog entries using AniList nextAiringEpisode and Jikan", async () => {
+    const mockFetch = vi.fn()
+      // 1. SELECT anime rows -> 1 ongoing anime with 0 episodes
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([
+            {
+              id: "anime-uuid-1",
+              anilist_id: 21,
+              mal_id: 21,
+              title_romaji: "ONE PIECE",
+              episode_count: 0,
+              seasons_count: 1,
+              episodes_count: 0,
+              linked_count: 1,
+            },
+          ]),
+          { status: 201 },
+        ),
+      )
+      // 2. AniList GraphQL Media lookup -> episodes: null, nextAiringEpisode: { episode: 4 }
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: { Media: { episodes: null, format: "TV", status: "RELEASING", nextAiringEpisode: { episode: 4 } } },
+          }),
+          { status: 200 },
+        ),
+      )
+      // 3. Jikan episodes page 1
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            pagination: { has_next_page: false, items: { total: 3 } },
+            data: [
+              { mal_id: 1, title: "I'm Luffy!", title_japanese: "俺はルフィ！" },
+              { mal_id: 2, title: "Enter the Great Swordsman!", title_japanese: "大剣豪現る！" },
+              { mal_id: 3, title: "Morgan versus Luffy!", title_japanese: "モーガンVSルフィ！" },
+            ],
+          }),
+          { status: 200 },
+        ),
+      )
+      // 4. INSERT/UPSERT season 1
+      .mockResolvedValueOnce(new Response(JSON.stringify([{ id: "season-uuid-1" }]), { status: 201 }))
+      // 5. INSERT episodes + UPDATE anime.episode_count
+      .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 201 }))
+      // 6. Health report query
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([{ anime_count: 1, episodes_count: 3, user_anime_count: 1 }]),
+          { status: 201 },
+        ),
+      );
+
+    await repairCatalogEpisodesAndReport({
+      token: "sbp_test_token",
+      projectId: "refabcdefghijklmno",
+      fetchImpl: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(6);
+    const insertEpisodesSql = JSON.parse(String(mockFetch.mock.calls[4][1]?.body)).query as string;
+    expect(insertEpisodesSql).toContain("INSERT INTO public.episodes");
+    expect(insertEpisodesSql).toContain("I''m Luffy!");
+    expect(insertEpisodesSql).toContain("GREATEST(episode_count, 3)");
   });
 });

@@ -282,8 +282,11 @@ class SupabaseClient(
                 .get()
                 .build()
             http.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) emptyList()
-                else json.decodeFromString(resp.body?.string().orEmpty())
+                val raw = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    error("Library fetch failed (${resp.code}): ${raw.take(180)}")
+                }
+                json.decodeFromString(raw)
             }
         }
 
@@ -295,6 +298,8 @@ class SupabaseClient(
             val url = "$baseUrl/rest/v1/episodes".toHttpUrl().newBuilder()
                 .addQueryParameter("seasons.anime_id", "in.($inList)")
                 .addQueryParameter("select", "id,episode_number,processing_status,seasons!inner(anime_id,season_number)")
+                .addQueryParameter("order", "episode_number.asc")
+                .addQueryParameter("limit", "1000")
                 .build()
             val req = Request.Builder()
                 .url(url)
@@ -303,8 +308,11 @@ class SupabaseClient(
                 .get()
                 .build()
             http.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) emptyList()
-                else json.decodeFromString(resp.body?.string().orEmpty())
+                val raw = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    error("Episodes fetch failed (${resp.code}): ${raw.take(180)}")
+                }
+                json.decodeFromString(raw)
             }
         }
 

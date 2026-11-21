@@ -171,6 +171,145 @@ export async function applyMigrationsViaApi({
   }
 }
 
+export async function repairCatalogEpisodesAndReport({
+  token,
+  projectId,
+  fetchImpl = fetch,
+}) {
+  const runSql = async (query) =>
+    await apiRequest(
+      `/projects/${projectId}/database/query`,
+      token,
+      { method: "POST", body: JSON.stringify({ query }) },
+      fetchImpl,
+    );
+
+  const sqlStr = (val) => (val == null ? "NULL" : `'${String(val).replace(/'/g, "''")}'`);
+
+  const animeRows = await runSql(`
+    SELECT
+      a.id,
+      a.anilist_id,
+      a.mal_id,
+      a.title_romaji,
+      a.episode_count,
+      (SELECT count(*)::int FROM public.seasons s WHERE s.anime_id = a.id) AS seasons_count,
+      (SELECT count(*)::int FROM public.episodes e JOIN public.seasons s ON s.id = e.season_id WHERE s.anime_id = a.id) AS episodes_count,
+      (SELECT count(*)::int FROM public.user_anime ua WHERE ua.anime_id = a.id) AS linked_count
+    FROM public.anime a
+    ORDER BY a.created_at ASC;
+  `);
+
+  for (const a of Array.isArray(animeRows) ? animeRows : []) {
+    if (Number(a.episodes_count) > 0) continue;
+
+    let resolvedCount = Number(a.episode_count) || 0;
+    if (resolvedCount <= 0 && a.anilist_id) {
+      try {
+        const ar = await fetchImpl("https://graphql.anilist.co", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json", "User-Agent": "Tatani/2.0" },
+          body: JSON.stringify({
+            query: `query ($id: Int) { Media(id: $id, type: ANIME) { episodes format status nextAiringEpisode { episode } } }`,
+            variables: { id: Number(a.anilist_id) },
+          }),
+        });
+        if (ar.ok) {
+          const ad = await ar.json();
+          const m = ad?.data?.Media;
+          const aired =
+            typeof m?.nextAiringEpisode?.episode === "number" && m.nextAiringEpisode.episode > 1
+              ? m.nextAiringEpisode.episode - 1
+              : 0;
+          resolvedCount = m?.episodes ?? (aired > 0 ? aired : m?.format === "MOVIE" ? 1 : 0);
+        }
+      } catch (err) {
+        console.warn(`AniList lookup skipped for ${a.title_romaji}:`, err instanceof Error ? err.message : err);
+      }
+    }
+
+    const titles = {};
+    let maxJikanEp = 0;
+    if (a.mal_id) {
+      try {
+        const pages = Math.max(1, Math.min(2, Math.ceil((resolvedCount || 100) / 100)));
+        for (let p = 1; p <= pages; p++) {
+          const jr = await fetchImpl(`https://api.jikan.moe/v4/anime/${Number(a.mal_id)}/episodes?page=${p}`);
+          if (!jr.ok) break;
+          const jd = await jr.json();
+          const totalItems = Number(jd?.pagination?.items?.total) || 0;
+          if (totalItems > maxJikanEp) maxJikanEp = totalItems;
+          for (const e of jd?.data ?? []) {
+            if (typeof e?.mal_id === "number") {
+              if (e.mal_id > maxJikanEp) maxJikanEp = e.mal_id;
+              titles[e.mal_id] = { en: e.title ?? null, jp: e.title_japanese ?? null };
+            }
+          }
+          if (!jd?.pagination?.has_next_page) break;
+        }
+      } catch (err) {
+        console.warn(`Jikan lookup skipped for ${a.title_romaji}:`, err instanceof Error ? err.message : err);
+      }
+    }
+
+    const finalCatalogTotal = Math.max(resolvedCount, maxJikanEp, 1);
+    const epCount = Math.min(finalCatalogTotal, 200);
+
+    const seasonRes = await runSql(`
+      INSERT INTO public.seasons (anime_id, season_number, episode_count)
+      VALUES (${sqlStr(a.id)}, 1, ${finalCatalogTotal})
+      ON CONFLICT (anime_id, season_number) DO UPDATE SET episode_count = GREATEST(public.seasons.episode_count, EXCLUDED.episode_count)
+      RETURNING id;
+    `);
+    const seasonId = Array.isArray(seasonRes) && seasonRes[0]?.id;
+    if (!seasonId) continue;
+
+    const valuesSql = Array.from({ length: epCount }, (_, i) => {
+      const epNum = i + 1;
+      const t = titles[epNum] || {};
+      return `(${sqlStr(seasonId)}, ${epNum}, ${sqlStr(t.en ?? null)}, ${sqlStr(t.jp ?? null)})`;
+    }).join(",\n      ");
+
+    await runSql(`
+      INSERT INTO public.episodes (season_id, episode_number, title_en, title_jp)
+      VALUES
+      ${valuesSql}
+      ON CONFLICT (season_id, episode_number) DO NOTHING;
+
+      UPDATE public.anime
+      SET episode_count = GREATEST(episode_count, ${finalCatalogTotal})
+      WHERE id = ${sqlStr(a.id)};
+    `);
+
+    console.log(`Backfilled ${epCount} episodes for catalog anime '${a.title_romaji}' (anilist_id=${a.anilist_id}).`);
+  }
+
+  // Non-sensitive aggregate health report (no user emails, IDs, or personal fields)
+  const summaryRows = await runSql(`
+    SELECT
+      (SELECT count(*)::int FROM public.profiles) AS profiles_count,
+      (SELECT count(*)::int FROM public.user_language_progress) AS progress_count,
+      (SELECT count(*)::int FROM public.anime) AS anime_count,
+      (SELECT count(*)::int FROM public.seasons) AS seasons_count,
+      (SELECT count(*)::int FROM public.episodes) AS episodes_count,
+      (SELECT count(*)::int FROM public.user_anime) AS user_anime_count,
+      (SELECT coalesce(jsonb_agg(DISTINCT jsonb_build_object('profile_lang', p.learning_language, 'library_lang', ua.learning_language)), '[]'::jsonb)
+       FROM public.user_anime ua LEFT JOIN public.profiles p ON p.user_id = ua.user_id) AS lang_pairs,
+      (SELECT coalesce(jsonb_agg(jsonb_build_object(
+         'anilist_id', a.anilist_id,
+         'title', a.title_romaji,
+         'catalog_eps', a.episode_count,
+         'db_seasons', (SELECT count(*)::int FROM public.seasons s WHERE s.anime_id = a.id),
+         'db_episodes', (SELECT count(*)::int FROM public.episodes e JOIN public.seasons s ON s.id = e.season_id WHERE s.anime_id = a.id),
+         'links', (SELECT count(*)::int FROM public.user_anime ua WHERE ua.anime_id = a.id)
+       )), '[]'::jsonb)
+       FROM public.anime a) AS catalog;
+  `);
+  if (Array.isArray(summaryRows) && summaryRows[0]) {
+    console.log("Catalog health summary:", JSON.stringify(summaryRows[0]));
+  }
+}
+
 async function main() {
   const mode = process.argv[2] || "--resolve";
   const token = process.env.SUPABASE_ACCESS_TOKEN?.trim();
@@ -211,6 +350,10 @@ async function main() {
       token,
       projectId: resolved.projectId,
       migrationsDir,
+    });
+    await repairCatalogEpisodesAndReport({
+      token,
+      projectId: resolved.projectId,
     });
   }
 
