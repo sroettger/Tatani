@@ -7,6 +7,10 @@ on:
         description: "Upload signed release AAB to Google Play Internal Testing (requires PLAY_SERVICE_ACCOUNT_JSON)"
         type: boolean
         default: true
+      version_code_override:
+        description: "Optional explicit integer versionCode override"
+        type: string
+        default: ""
   push:
     branches: [main, native-android-play-store]
     tags: ["v*-android.*"]
@@ -32,6 +36,22 @@ jobs:
           java-version: 21
           cache: gradle
 
+      - name: Compute monotonic Android versionCode
+        id: ver
+        env:
+          OVERRIDE: ${{ inputs.version_code_override }}
+          RUN_NUM: ${{ github.run_number }}
+        run: |
+          if [ -n "$OVERRIDE" ]; then
+            VC="$OVERRIDE"
+          else
+            VC=$(( $(date +%s) / 10 ))
+          fi
+          VN="2.0.${RUN_NUM}"
+          echo "version_code=${VC}" >> "$GITHUB_OUTPUT"
+          echo "version_name=${VN}" >> "$GITHUB_OUTPUT"
+          echo "Using versionCode=${VC}, versionName=${VN}"
+
       - name: Resolve Supabase URL & public key automatically
         id: sb
         env:
@@ -54,13 +74,12 @@ jobs:
       - name: Run native Kotlin unit tests & build debug APK/AAB
         working-directory: android
         env:
-          RUN_NUM: ${{ github.run_number }}
+          ANDROID_VERSION_CODE: ${{ steps.ver.outputs.version_code }}
+          ANDROID_VERSION_NAME: ${{ steps.ver.outputs.version_name }}
           SUPABASE_URL: ${{ steps.sb.outputs.supabase_url }}
           SUPABASE_ANON_KEY: ${{ steps.sb.outputs.supabase_anon_key }}
         run: |
           chmod +x ./gradlew
-          export ANDROID_VERSION_CODE=$((100 + RUN_NUM))
-          export ANDROID_VERSION_NAME="2.0.${RUN_NUM}"
           ./gradlew testDebugUnitTest assembleDebug bundleDebug --no-daemon
 
       - name: Stage debug artifacts
@@ -87,13 +106,13 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           SUPABASE_URL: ${{ steps.sb.outputs.supabase_url }}
           SUPABASE_ANON_KEY: ${{ steps.sb.outputs.supabase_anon_key }}
-          RUN_NUM: ${{ github.run_number }}
+          ANDROID_VERSION_CODE: ${{ steps.ver.outputs.version_code }}
+          ANDROID_VERSION_NAME: ${{ steps.ver.outputs.version_name }}
         run: |
           echo "$ANDROID_KEYSTORE_BASE64" | tr -d '\n\r ' | base64 --decode > /tmp/tatani-upload.keystore
           export ANDROID_KEYSTORE_PATH=/tmp/tatani-upload.keystore
-          export ANDROID_VERSION_CODE=$((100 + RUN_NUM))
-          export ANDROID_VERSION_NAME="2.0.${RUN_NUM}"
           ./gradlew bundleRelease --no-daemon
+          cp app/build/outputs/bundle/release/app-release.aab "../tatani-release-${ANDROID_VERSION_CODE}.aab"
           cp app/build/outputs/bundle/release/app-release.aab ../tatani-android-release.aab
           cp app/build/outputs/mapping/release/mapping.txt ../tatani-r8-mapping.txt
           rm -f /tmp/tatani-upload.keystore
@@ -101,12 +120,10 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: tatani-android-build-${{ github.run_number }}
+          name: tatani-android-v${{ steps.ver.outputs.version_code }}
           path: |
-            tatani-android-release.aab
+            tatani-release-${{ steps.ver.outputs.version_code }}.aab
             tatani-r8-mapping.txt
-            tatani-android-debug.aab
-            tatani-android-debug.apk
           if-no-files-found: ignore
 
       - name: Upload signed AAB to Google Play Internal Testing
