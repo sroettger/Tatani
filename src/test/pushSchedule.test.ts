@@ -25,13 +25,18 @@ describe("flashcards spaced throughout the day", () => {
   it("does not send outside the chosen hours", () => {
     expect(currentSlot(schedule, new Date("2026-10-27T13:00:00Z"))).toBeNull();
   });
-  it("uses studied words rather than unstudied chunk words", () => {
-    expect(eligibleWord(undefined, false)).toBe(false);
-    expect(eligibleWord(undefined, true)).toBe(true);
-    expect(eligibleWord({ state: "unknown", preference: "study", last_reviewed_at: "2026-10-27" }, false)).toBe(true);
+  it("only pushes words that have graduated from initial learning and are due", () => {
+    const now = Date.parse("2026-10-28T00:00:00Z");
+    expect(eligibleWord(undefined, false, now)).toBe(false);
+    expect(eligibleWord(undefined, true, now)).toBe(false);
+    expect(eligibleWord({ state: "unknown", preference: "study", last_reviewed_at: "2026-10-27", srs_due_at: null }, true, now)).toBe(false);
+    expect(eligibleWord({ state: "learning", preference: "study", last_reviewed_at: "2026-10-27", srs_due_at: "2026-10-27T23:00:00Z" }, false, now)).toBe(true);
+    expect(eligibleWord({ state: "known", preference: "study", last_reviewed_at: "2026-10-27", srs_due_at: "2026-10-27T12:00:00Z", known_source: "learned" }, true, now)).toBe(true);
   });
-  it("excludes known and skipped words", () => {
-    expect(eligibleWord({ state: "known", preference: "study", last_reviewed_at: null }, true)).toBe(false);
-    expect(eligibleWord({ state: "unknown", preference: "skip", last_reviewed_at: null }, true)).toBe(false);
+  it("excludes prior-known, not-yet-due, and skipped words", () => {
+    const now = Date.parse("2026-10-28T00:00:00Z");
+    expect(eligibleWord({ state: "known", preference: "study", last_reviewed_at: null, srs_due_at: null, known_source: "prior" }, true, now)).toBe(false);
+    expect(eligibleWord({ state: "known", preference: "study", last_reviewed_at: "2026-10-27", srs_due_at: "2026-10-29T00:00:00Z" }, true, now)).toBe(false);
+    expect(eligibleWord({ state: "learning", preference: "skip", last_reviewed_at: "2026-10-27", srs_due_at: "2026-10-27T00:00:00Z" }, true, now)).toBe(false);
   });
 });

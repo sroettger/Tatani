@@ -33,14 +33,16 @@ self.addEventListener('message', event => {
 function showPushQuiz(payload) {
   const d = payload.data || {};
   if (!d.delivery_id) return;
-  const shown = self.registration.showNotification(`${wordLabel(d)}`, {
+  const options = {
     tag: d.delivery_id, icon: '/icon-192.png', renotify: true, requireInteraction: true,
     data: { ...d, stage: d.l_know || d.quiz_options ? 'quiz' : 'prompt' },
     // New cards are self-reported ("I know" / "I don't know"); older deliveries keep the meaning quiz.
     actions: d.l_know ? [{ action: 'answer_0', title: d.l_know }, { action: 'answer_1', title: d.l_dont_know }]
       : d.quiz_options ? [{ action: 'answer_0', title: `A. ${JSON.parse(d.quiz_options)[0]}` }, { action: 'answer_1', title: `B. ${JSON.parse(d.quiz_options)[1]}` }, { action: 'answer_dk', title: d.l_dont_know }]
       : [{ action: 'reveal', title: d.l_reveal }],
-  });
+  };
+  if (d.example) options.body = d.example;
+  const shown = self.registration.showNotification(`${wordLabel(d)}`, options);
   return Promise.all([shown, flushAnswers().catch(requestRetry)]);
 }
 messaging.onBackgroundMessage(showPushQuiz);

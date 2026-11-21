@@ -2,87 +2,86 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Anime Japanese Trainer — design system. All colors HSL. Mobile-first dark anime/sakura theme. */
+/* Tatani — Japanese Sumi-Ink & Washi Design System. All colors HSL. */
 
 @layer base {
   :root {
-    --background: 240 18% 8%;
-    --foreground: 30 30% 96%;
+    --background: 220 16% 7%;
+    --foreground: 36 28% 95%;
 
-    --card: 240 16% 12%;
-    --card-foreground: 30 30% 96%;
+    --card: 220 14% 11%;
+    --card-foreground: 36 28% 95%;
 
-    --popover: 240 18% 10%;
-    --popover-foreground: 30 30% 96%;
+    --popover: 220 16% 9%;
+    --popover-foreground: 36 28% 95%;
 
-    --primary: 340 82% 62%;            /* sakura pink */
-    --primary-foreground: 0 0% 100%;
-    --primary-glow: 340 90% 72%;
+    --primary: 8 78% 60%;              /* vermilion / akane */
+    --primary-foreground: 36 30% 98%;
+    --primary-glow: 12 86% 68%;
 
-    --secondary: 250 60% 60%;          /* indigo */
-    --secondary-foreground: 0 0% 100%;
+    --secondary: 215 18% 18%;          /* warm slate ink */
+    --secondary-foreground: 36 24% 92%;
 
-    --muted: 240 12% 18%;
-    --muted-foreground: 240 8% 65%;
+    --muted: 220 13% 15%;
+    --muted-foreground: 220 9% 64%;
 
-    --accent: 200 80% 60%;             /* aqua */
-    --accent-foreground: 240 18% 8%;
+    --accent: 36 88% 58%;              /* warm amber */
+    --accent-foreground: 220 18% 8%;
 
-    --destructive: 0 75% 58%;
+    --destructive: 0 72% 56%;
     --destructive-foreground: 0 0% 100%;
 
-    --success: 145 65% 50%;
+    --success: 156 58% 45%;            /* jade */
     --success-foreground: 0 0% 100%;
 
     --warning: 38 92% 60%;
-    --warning-foreground: 240 18% 8%;
+    --warning-foreground: 220 18% 8%;
 
-    --border: 240 12% 20%;
-    --input: 240 12% 18%;
-    --ring: 340 82% 62%;
+    --border: 220 12% 18%;
+    --input: 220 13% 15%;
+    --ring: 8 78% 60%;
 
-    --radius: 1rem;
+    --radius: 0.875rem;
 
-    --gradient-primary: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--secondary)));
-    --gradient-card: linear-gradient(160deg, hsl(240 16% 14%), hsl(240 18% 10%));
-    --gradient-hero: radial-gradient(circle at 20% 0%, hsl(340 82% 62% / 0.25), transparent 60%),
-                     radial-gradient(circle at 90% 30%, hsl(200 80% 60% / 0.2), transparent 55%),
+    --gradient-primary: linear-gradient(135deg, hsl(8 78% 58%), hsl(18 82% 54%));
+    --gradient-card: linear-gradient(165deg, hsl(220 14% 12.5%), hsl(220 16% 9.5%));
+    --gradient-hero: radial-gradient(circle at 18% 0%, hsl(8 78% 58% / 0.14), transparent 55%),
+                     radial-gradient(circle at 88% 20%, hsl(36 88% 58% / 0.08), transparent 50%),
                      hsl(var(--background));
 
-    --shadow-elegant: 0 10px 40px -12px hsl(340 82% 50% / 0.4);
-    --shadow-card: 0 8px 30px -10px hsl(240 50% 4% / 0.6);
+    --shadow-elegant: 0 12px 36px -14px hsl(8 78% 46% / 0.35);
+    --shadow-card: 0 10px 30px -12px hsl(220 45% 3% / 0.72), inset 0 1px 0 0 hsl(36 28% 95% / 0.04);
 
-    --sidebar-background: 240 18% 8%;
-    --sidebar-foreground: 30 30% 96%;
-    --sidebar-primary: 340 82% 62%;
+    --sidebar-background: 220 16% 7%;
+    --sidebar-foreground: 36 28% 95%;
+    --sidebar-primary: 8 78% 60%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 12% 18%;
-    --sidebar-accent-foreground: 30 30% 96%;
-    --sidebar-border: 240 12% 20%;
-    --sidebar-ring: 340 82% 62%;
+    --sidebar-accent: 220 13% 15%;
+    --sidebar-accent-foreground: 36 28% 95%;
+    --sidebar-border: 220 12% 18%;
+    --sidebar-ring: 8 78% 60%;
   }
 
-  /* Light mode — present but app defaults to dark feel */
   .light {
-    --background: 30 25% 97%;
-    --foreground: 240 18% 12%;
+    --background: 36 33% 97%;
+    --foreground: 220 18% 11%;
     --card: 0 0% 100%;
-    --card-foreground: 240 18% 12%;
+    --card-foreground: 220 18% 11%;
     --popover: 0 0% 100%;
-    --popover-foreground: 240 18% 12%;
-    --primary: 340 82% 55%;
+    --popover-foreground: 220 18% 11%;
+    --primary: 8 76% 52%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 250 50% 55%;
-    --secondary-foreground: 0 0% 100%;
-    --muted: 30 15% 92%;
-    --muted-foreground: 240 8% 40%;
-    --accent: 200 80% 50%;
+    --secondary: 36 18% 91%;
+    --secondary-foreground: 220 18% 14%;
+    --muted: 36 18% 92%;
+    --muted-foreground: 220 10% 42%;
+    --accent: 36 84% 48%;
     --accent-foreground: 0 0% 100%;
-    --destructive: 0 75% 50%;
+    --destructive: 0 72% 50%;
     --destructive-foreground: 0 0% 100%;
-    --border: 30 15% 88%;
-    --input: 30 15% 88%;
-    --ring: 340 82% 55%;
+    --border: 36 16% 87%;
+    --input: 36 16% 87%;
+    --ring: 8 76% 52%;
   }
 }
 
@@ -91,9 +90,9 @@
   html, body, #root { height: 100%; }
   body {
     @apply bg-background text-foreground;
-    padding-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
     font-feature-settings: "ss01", "cv11";
     -webkit-font-smoothing: antialiased;
+    overscroll-behavior-y: none;
   }
 }
 
@@ -106,7 +105,7 @@
   .text-balance { text-wrap: balance; }
 
   .flip-card { perspective: 1200px; }
-  .flip-inner { transition: transform 0.6s; transform-style: preserve-3d; position: relative; }
+  .flip-inner { transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1); transform-style: preserve-3d; position: relative; }
   .flip-inner.flipped { transform: rotateY(180deg); }
   .flip-face { backface-visibility: hidden; -webkit-backface-visibility: hidden; }
   .flip-back { transform: rotateY(180deg); position: absolute; inset: 0; }

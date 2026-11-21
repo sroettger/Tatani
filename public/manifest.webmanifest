@@ -1,17 +1,40 @@
 {
   "name": "Tatani",
   "short_name": "Tatani",
-  "description": "Learn Japanese lazily from anime.",
+  "description": "High-speed Japanese SRS & contextual anime vocabulary trainer.",
   "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
-  "background_color": "#1a1424",
-  "theme_color": "#1a1424",
+  "background_color": "#0f1116",
+  "theme_color": "#0f1116",
   "orientation": "portrait",
   "icons": [
     { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
     { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Start Sprint",
+      "short_name": "Sprint",
+      "description": "Jump straight into due SRS reviews",
+      "url": "/",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Learn in Context",
+      "short_name": "Learn",
+      "description": "Encode 6 new anime words in context",
+      "url": "/learn",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Anime Library",
+      "short_name": "Library",
+      "description": "Manage episodes and subtitles",
+      "url": "/library",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    }
   ]
 }

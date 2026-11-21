@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="sprint"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_sprint_short"
+        android:shortcutLongLabel="@string/shortcut_sprint_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="app.tatani.android"
+            android:targetClass="app.tatani.android.MainActivity"
+            android:data="tatani://sprint" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="learn"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_learn_short"
+        android:shortcutLongLabel="@string/shortcut_learn_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="app.tatani.android"
+            android:targetClass="app.tatani.android.MainActivity"
+            android:data="tatani://learn" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="library"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_library_short"
+        android:shortcutLongLabel="@string/shortcut_library_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="app.tatani.android"
+            android:targetClass="app.tatani.android.MainActivity"
+            android:data="tatani://library" />
+    </shortcut>
+</shortcuts>

@@ -96,36 +96,34 @@ export default function StudySession() {
   const reviewCard = vocab[reviewIdx];
   const quizCard = quizVocab[quizIdx];
 
-  const recordWord = async (word: string, reading: string, level: string, gotItRight: boolean) => {
-    if (!user) return;
-    const { data: existing } = await supabase
-      .from("user_word_state").select("correct_streak").eq("user_id", user.id).eq("word", word).eq("learning_language", learningLanguage).maybeSingle();
-    const prevStreak = existing?.correct_streak ?? 0;
+  const recordWordOptimistic = (word: string, reading: string, level: string, gotItRight: boolean) => {
+    const prevStreak = streaks[word] ?? 0;
     const newStreak = gotItRight ? prevStreak + 1 : 0;
+    setStreaks(prev => ({ ...prev, [word]: newStreak }));
+    if (!user) return;
 
-    // Note: state is only changed via manual marking on the episode page.
-    await supabase.from("user_word_state").upsert({
+    void supabase.from("user_word_state").upsert({
       user_id: user.id, word, reading, level: level === "none" ? null : level, learning_language: learningLanguage,
       correct_streak: newStreak, last_reviewed_at: new Date().toISOString(),
     }, { onConflict: "user_id,word,learning_language" });
-    setStreaks(prev => ({ ...prev, [word]: newStreak }));
   };
 
-  const onReviewKnow = async () => {
+  const onReviewKnow = () => {
     if (!reviewCard) return;
-    await recordWord(reviewCard.word, reviewCard.reading, getLevel(reviewCard), true);
+    setReviewedKnown(c => c + 1);
+    recordWordOptimistic(reviewCard.word, reviewCard.reading, getLevel(reviewCard), true);
     nextReview();
   };
-  const onReviewLearning = async () => {
+  const onReviewLearning = () => {
     if (!reviewCard) return;
-    await recordWord(reviewCard.word, reviewCard.reading, getLevel(reviewCard), false);
+    recordWordOptimistic(reviewCard.word, reviewCard.reading, getLevel(reviewCard), false);
     nextReview();
   };
   const nextReview = () => {
     setFlipped(false);
     setShowFurigana(false);
     if (reviewIdx + 1 < vocab.length) setReviewIdx(reviewIdx + 1);
-    else finish("review");
+    else void finish("review");
   };
 
   const distractors = useMemo(() => {
@@ -138,23 +136,23 @@ export default function StudySession() {
 
   const correctIndex = useMemo(() => distractors.indexOf(quizCard?.meaning ?? ""), [distractors, quizCard]);
 
-  const onQuizAnswer = async (i: number) => {
+  const onQuizAnswer = (i: number) => {
     if (!quizCard || quizChoice !== null) return;
     setQuizChoice(i);
     const correct = i === correctIndex;
     if (correct) setQuizCorrect(c => c + 1);
     if (sessionId && user) {
-      await supabase.from("quiz_results").insert({
+      void supabase.from("quiz_results").insert({
         session_id: sessionId, user_id: user.id, word: quizCard.word,
         was_correct: correct, quiz_kind: "jp_to_meaning", learning_language: learningLanguage,
       });
     }
-    await recordWord(quizCard.word, quizCard.reading, getLevel(quizCard), correct);
+    recordWordOptimistic(quizCard.word, quizCard.reading, getLevel(quizCard), correct);
     setTimeout(() => {
       setQuizChoice(null);
       if (quizIdx + 1 < quizVocab.length) setQuizIdx(quizIdx + 1);
-      else finish("quiz");
-    }, 900);
+      else void finish("quiz");
+    }, 280);
   };
 
   const finish = async (mode: "review" | "quiz") => {

@@ -129,21 +129,28 @@ export default function StudyChunk() {
     return (persistStreak[current.word] ?? 0) >= KANJI_THRESHOLD;
   }, [current, persistStreak, learningLanguageInfo]);
 
-  const recordWord = async (word: string, reading: string | null, level: string | null, gotItRight: boolean) => {
-    if (!user) return;
-    const { data: existing } = await supabase
-      .from("user_word_state").select("correct_streak").eq("user_id", user.id).eq("word", word).eq("learning_language", learningLanguage).maybeSingle();
-    const prevStreak = existing?.correct_streak ?? 0;
+  const recordWordOptimistic = (word: string, reading: string | null, level: string | null, gotItRight: boolean, graduated: boolean) => {
+    const prevStreak = persistStreak[word] ?? 0;
     const newStreak = gotItRight ? prevStreak + 1 : 0;
-
-    // Note: we intentionally do NOT change `state` here. Words are only marked
-    // as known via manual action on the episode page. We still track
-    // `correct_streak` because it controls kanji vs. hiragana display.
-    await supabase.from("user_word_state").upsert({
-      user_id: user.id, word, reading: reading ?? null, level: level ?? null, learning_language: learningLanguage,
-      correct_streak: newStreak, last_reviewed_at: new Date().toISOString(),
-    }, { onConflict: "user_id,word,learning_language" });
     setPersistStreak(prev => ({ ...prev, [word]: newStreak }));
+    if (!user) return;
+
+    const payload: Record<string, unknown> = {
+      user_id: user.id,
+      word,
+      reading: reading ?? null,
+      level: level ?? null,
+      learning_language: learningLanguage,
+      correct_streak: newStreak,
+      last_reviewed_at: new Date().toISOString(),
+    };
+    if (graduated) {
+      payload.state = "known";
+      payload.known_source = "learned";
+      payload.srs_level = 0;
+      payload.srs_due_at = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    }
+    void supabase.from("user_word_state").upsert(payload as any, { onConflict: "user_id,word,learning_language" });
   };
 
   const advance = (afterRemove: boolean) => {
@@ -180,21 +187,22 @@ export default function StudyChunk() {
     });
   };
 
-  const onKnow = async () => {
+  const onKnow = () => {
     if (!current) return;
-    await recordWord(current.word, current.reading, current.level, true);
     const newStreak = (sessionStreak[current.word] ?? 0) + 1;
+    const graduated = newStreak >= REQUIRED_KNOWN;
+    recordWordOptimistic(current.word, current.reading, current.level, true, graduated);
     setSessionStreak(s => ({ ...s, [current.word]: newStreak }));
-    if (newStreak >= REQUIRED_KNOWN) {
+    if (graduated) {
       setDoneCount(d => d + 1);
       advance(true);
     } else {
       advance(false);
     }
   };
-  const onLearning = async () => {
+  const onLearning = () => {
     if (!current) return;
-    await recordWord(current.word, current.reading, current.level, false);
+    recordWordOptimistic(current.word, current.reading, current.level, false, false);
     setSessionStreak(s => ({ ...s, [current.word]: 0 }));
     advance(false);
   };

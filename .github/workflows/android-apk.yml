@@ -4,12 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       publish_play_internal:
-        description: "Upload signed release AAB to Google Play Internal Testing (requires secrets)"
+        description: "Upload signed release AAB to Google Play Internal Testing (requires PLAY_SERVICE_ACCOUNT_JSON)"
         type: boolean
         default: true
   push:
-    branches: [main, android-capacitor-app]
+    branches: [main, native-android-play-store]
     tags: ["v*-android.*"]
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/workflows/android-apk.yml"
 
 permissions:
   contents: write
@@ -26,19 +30,20 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+          cache: gradle
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+      - name: Verify web tests & production bundle
+        run: |
+          bun install --frozen-lockfile
+          bun run test
+          bun run build
 
-      - name: Build web bundle & sync Android
-        run: bun run android:sync
-
-      - name: Build debug APK & debug AAB (ready for sideloading or Play Internal App Sharing)
+      - name: Run native Kotlin unit tests & build debug APK/AAB
         working-directory: android
         env:
-          ANDROID_VERSION_CODE: ${{ github.run_number }}
-          ANDROID_VERSION_NAME: 1.0.${{ github.run_number }}
-        run: ./gradlew assembleDebug bundleDebug --no-daemon
+          ANDROID_VERSION_CODE: ${{ 100 + github.run_number }}
+          ANDROID_VERSION_NAME: 2.0.${{ github.run_number }}
+        run: ./gradlew testDebugUnitTest assembleDebug bundleDebug --no-daemon
 
       - name: Stage debug artifacts
         run: |
@@ -54,7 +59,7 @@ jobs:
           echo "has_keystore=${HAS_KEYSTORE}" >> "$GITHUB_OUTPUT"
           echo "has_play_json=${HAS_PLAY_JSON}" >> "$GITHUB_OUTPUT"
 
-      - name: Build signed Google Play release AAB
+      - name: Build signed Google Play release AAB (R8 + symbol tables)
         if: steps.signing.outputs.has_keystore == 'true'
         working-directory: android
         env:
@@ -62,13 +67,14 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          ANDROID_VERSION_CODE: ${{ github.run_number }}
-          ANDROID_VERSION_NAME: 1.0.${{ github.run_number }}
+          ANDROID_VERSION_CODE: ${{ 100 + github.run_number }}
+          ANDROID_VERSION_NAME: 2.0.${{ github.run_number }}
         run: |
           echo "$ANDROID_KEYSTORE_BASE64" | tr -d '\n\r ' | base64 --decode > /tmp/tatani-upload.keystore
           export ANDROID_KEYSTORE_PATH=/tmp/tatani-upload.keystore
           ./gradlew bundleRelease --no-daemon
           cp app/build/outputs/bundle/release/app-release.aab ../tatani-android-release.aab
+          cp app/build/outputs/mapping/release/mapping.txt ../tatani-r8-mapping.txt
           rm -f /tmp/tatani-upload.keystore
 
       - name: Upload build artifacts
@@ -76,9 +82,10 @@ jobs:
         with:
           name: tatani-android-build-${{ github.run_number }}
           path: |
-            tatani-android-debug.apk
-            tatani-android-debug.aab
             tatani-android-release.aab
+            tatani-r8-mapping.txt
+            tatani-android-debug.aab
+            tatani-android-debug.apk
           if-no-files-found: ignore
 
       - name: Upload signed AAB to Google Play Internal Testing
@@ -91,6 +98,7 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: app.tatani.android
           releaseFiles: tatani-android-release.aab
+          mappingFile: tatani-r8-mapping.txt
           track: internal
           status: completed
 
@@ -109,6 +117,6 @@ jobs:
           else
             gh release create "$TAG" "${ASSETS[@]}" \
               --prerelease \
-              --title "Tatani Android Preview ($TAG)" \
-              --notes $'Android 16 (API 36) build of Tatani (`app.tatani.android`, minSdk 24 / targetSdk 36).\n\n### Install from your phone via Google Play (private, no laptop needed)\n- **Fastest (Google Play Internal App Sharing — zero keystore needed)**: Download **`tatani-android-debug.aab`** (or `.apk`) on your phone, upload it on `play.google.com/console/internal-app-sharing`, and tap the private Play Store link to install through Google Play.\n- **Auto-updating Play Internal Testing track**: Run the **Generate Upload Keystore** workflow once from GitHub on your phone, save the 4 secrets in Repo Settings → Secrets → Actions, then re-run this workflow to produce **`tatani-android-release.aab`** (and auto-upload to Google Play Internal Testing once `PLAY_SERVICE_ACCOUNT_JSON` is added).\n- **Direct sideload**: Download and tap **`tatani-android-debug.apk`** on your Android phone.'
+              --title "Tatani Native Android ($TAG)" \
+              --notes $'Native Kotlin + Jetpack Compose Android 16 (API 36) build of Tatani (`app.tatani.android`, minSdk 24 / targetSdk 36).\n\n### Install via Google Play Store (no sideloading)\n- **Instant Play Store Install (Internal App Sharing)**: Upload **`tatani-android-release.aab`** at `https://play.google.com/console/internal-app-sharing` and open the generated `play.google.com/apps/test/...` link on your Android phone.\n- **Google Play Internal Testing Track**: Upload **`tatani-android-release.aab`** once to **Testing → Internal testing** in Play Console (and add `PLAY_SERVICE_ACCOUNT_JSON` to GitHub Secrets for automatic future uploads).'
           fi

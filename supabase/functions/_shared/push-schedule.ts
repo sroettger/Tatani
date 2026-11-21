@@ -21,8 +21,12 @@ export function hasUnhandledDelivery(deliveries: { status: string; reviewed_at: 
   return deliveries.some(d => d.reviewed_at === null && (d.status === "pending" || d.status === "sent"));
 }
 
-export function eligibleWord(state: { state: string; preference: string; last_reviewed_at: string | null; srs_due_at?: string | null } | undefined, chunkStudied: boolean, now = Date.now()): boolean {
-  if (state?.preference === "skip") return false;
-  if (state?.srs_due_at) return new Date(state.srs_due_at).getTime() <= now;
-  return state?.state !== "known" && (chunkStudied || Boolean(state?.last_reviewed_at));
+export function eligibleWord(
+  state: { state: string; preference: string; last_reviewed_at: string | null; srs_due_at?: string | null; known_source?: string | null } | undefined,
+  _chunkStudied: boolean,
+  now = Date.now(),
+): boolean {
+  if (!state || state.preference === "skip" || state.known_source === "prior") return false;
+  if (!state.srs_due_at) return false;
+  return new Date(state.srs_due_at).getTime() <= now;
 }

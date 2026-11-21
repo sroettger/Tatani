@@ -45,13 +45,16 @@ export default function NotificationReview() {
     {loading ? <p>{t("common.loading")}</p> : <>
       {error && <p role="alert" className="text-destructive mb-4">{t("push.failed")}</p>}
       {card && <>
-        <div lang={card.learning_language} className="min-h-40 grid place-content-center gap-3 break-words"><h2 className="text-4xl font-bold">{card.word}</h2>{card.reading && card.reading !== card.word && <p className="text-muted-foreground">{card.reading}</p>}</div>
+        <div lang={card.learning_language} className="min-h-40 grid place-content-center gap-3 break-words">
+          <h2 className="text-4xl font-bold">{card.word}</h2>
+          {card.reading && card.reading !== card.word && <p className="text-muted-foreground">{card.reading}</p>}
+          {card.example_sentence && <p className="mt-2 text-base text-muted-foreground break-words">「{card.example_sentence}」</p>}
+        </div>
         {done ? <div role="status" className="mt-6">{result && <><p className={result.correct ? "text-primary" : "text-destructive"}>{t(result.correct ? "push.correct" : "push.incorrect")}</p><p className="text-xl mt-4 break-words">{result.meaning}</p></>}<p className="text-primary mt-6">{t("push.reviewed")}</p></div> : card.quiz_options ? <>
           <p className="mt-6">{t("push.quiz")}</p>
           <div className="grid gap-3 mt-4">{card.quiz_options.map((option, i) => <Button key={i} variant={i === 0 ? "default" : "outline"} disabled={busy} onClick={() => answer(i)} className="h-auto min-h-12 whitespace-normal break-words py-3">{option}</Button>)}{!card.quiz_options.includes(t("push.dontKnow")) && <Button variant="ghost" disabled={busy} onClick={() => answer(-1)}>{t("push.dontKnow")}</Button>}</div>
         </> : !revealed ? <Button onClick={() => setRevealed(true)} className="mt-6">{t("push.reveal")}</Button> : <>
           <p className="text-xl mt-4 break-words">{card.meaning}</p>
-          {card.example_sentence && <p lang={card.learning_language} className="mt-4 text-muted-foreground break-words">{card.example_sentence}</p>}
           <div className="grid grid-cols-2 gap-3 mt-8"><Button variant="outline" disabled={busy} onClick={() => grade(false)}><X className="h-4 w-4" />{t("push.again")}</Button><Button disabled={busy} onClick={() => grade(true)}><Check className="h-4 w-4" />{t("push.remembered")}</Button></div>
         </>}
       </>}

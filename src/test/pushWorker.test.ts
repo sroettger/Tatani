@@ -171,4 +171,15 @@ describe("notification quiz actions", () => {
     expect(w.showNotification.mock.calls[1][1].data.stage).toBe("failed");
     expect(w.openWindow).not.toHaveBeenCalled();
   });
+  it("displays the episode example sentence in the notification prompt when provided", async () => {
+    const w = worker();
+    await w.background({ data: { ...w.data, word: "魔法", reading: "まほう", example: "そんな魔法は見たことがない。" } });
+    expect(w.showNotification).toHaveBeenCalledTimes(1);
+    expect(w.showNotification.mock.calls[0][0]).toBe("魔法 (まほう)");
+    expect(w.showNotification.mock.calls[0][1]).toMatchObject({
+      body: "そんな魔法は見たことがない。",
+      tag: "delivery",
+      actions: [{ action: "answer_0", title: "知ってる" }, { action: "answer_1", title: "わからない" }],
+    });
+  });
 });

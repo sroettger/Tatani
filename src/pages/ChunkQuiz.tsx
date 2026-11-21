@@ -120,37 +120,49 @@ export default function ChunkQuiz() {
     return (persistStreak[card.word] ?? 0) >= KANJI_THRESHOLD;
   }, [card, persistStreak, learningLanguageInfo]);
 
-  const onAnswer = async (i: number) => {
+  const onAnswer = (i: number) => {
     if (!card || choice !== null) return;
     setChoice(i);
     const isCorrect = i === correctIndex;
     if (isCorrect) setCorrect(c => c + 1);
 
     if (sessionId && user) {
-      await supabase.from("quiz_results").insert({
+      void supabase.from("quiz_results").insert({
         session_id: sessionId, user_id: user.id, word: card.word,
         was_correct: isCorrect, quiz_kind: "jp_to_meaning", learning_language: learningLanguage,
       });
     }
 
-    // persist streak
     if (user) {
       const prev = persistStreak[card.word] ?? 0;
       const newStreak = isCorrect ? prev + 1 : 0;
-      const newState = isCorrect && newStreak >= 3 ? "known" : (isCorrect ? "learning" : "learning");
-      await supabase.from("user_word_state").upsert({
-        user_id: user.id, word: card.word, reading: card.reading ?? null, level: card.level ?? null, learning_language: learningLanguage,
-        state: newState as any, correct_streak: newStreak, last_reviewed_at: new Date().toISOString(),
-      }, { onConflict: "user_id,word,learning_language" });
+      const graduated = isCorrect && newStreak >= 2;
+      const newState = graduated ? "known" : "learning";
       setPersistStreak(s => ({ ...s, [card.word]: newStreak }));
+      const payload: Record<string, unknown> = {
+        user_id: user.id,
+        word: card.word,
+        reading: card.reading ?? null,
+        level: card.level ?? null,
+        learning_language: learningLanguage,
+        state: newState,
+        correct_streak: newStreak,
+        last_reviewed_at: new Date().toISOString(),
+      };
+      if (graduated) {
+        payload.known_source = "learned";
+        payload.srs_level = 0;
+        payload.srs_due_at = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      }
+      void supabase.from("user_word_state").upsert(payload as any, { onConflict: "user_id,word,learning_language" });
     }
 
-    setTimeout(async () => {
+    setTimeout(() => {
       setChoice(null);
       if (idx + 1 < words.length) setIdx(idx + 1);
       else {
         if (sessionId) {
-          await supabase.from("study_sessions").update({
+          void supabase.from("study_sessions").update({
             finished_at: new Date().toISOString(),
             words_studied: words.length,
             words_mastered: correct + (isCorrect ? 1 : 0),
@@ -158,7 +170,7 @@ export default function ChunkQuiz() {
         }
         setPhase("done");
       }
-    }, 900);
+    }, 280);
   };
 
   if (loading) {

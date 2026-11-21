@@ -1,7 +1,9 @@
-<?xml version='1.0' encoding='utf-8'?>
 <resources>
     <string name="app_name">Tatani</string>
-    <string name="title_activity_main">Tatani</string>
-    <string name="package_name">app.tatani.android</string>
-    <string name="custom_url_scheme">app.tatani.android</string>
+    <string name="shortcut_sprint_short">Sprint</string>
+    <string name="shortcut_sprint_long">Start SRS Sprint</string>
+    <string name="shortcut_learn_short">Learn</string>
+    <string name="shortcut_learn_long">Learn in Context</string>
+    <string name="shortcut_library_short">Library</string>
+    <string name="shortcut_library_long">Anime Library</string>
 </resources>

@@ -607,11 +607,27 @@ export default function EpisodeDetail() {
             </Card>
           )}
 
-          {/* Chunkify CTA */}
+          {/* Contextual Learn Batch CTA + Chunkify CTA */}
           <div className="grid gap-2 mb-6">
+            {newVocab.length > 0 && (
+              <Button
+                id="episode-learn-context-cta"
+                onClick={() => navigate(`/learn/${episodeId}`)}
+                className="w-full h-14 py-3 gradient-primary text-primary-foreground shadow-elegant flex flex-col items-center justify-center gap-0.5 mb-1"
+              >
+                <span className="inline-flex items-center gap-1.5 font-semibold text-sm">
+                  <GraduationCap className="h-4 w-4" />
+                  {t("episode.learnBatch", { n: Math.min(6, newVocab.length) })}
+                </span>
+                <span className="text-[11px] text-primary-foreground/85 font-normal">
+                  {t("episode.learnBatchSub")}
+                </span>
+              </Button>
+            )}
             {chunks.length === 0 ? (
               <Button
-                className="w-full h-12 gradient-primary text-primary-foreground"
+                variant={newVocab.length > 0 ? "secondary" : "default"}
+                className={cn("w-full h-11", newVocab.length === 0 && "gradient-primary text-primary-foreground")}
                 onClick={chunkify}
                 disabled={chunkifying || studyableCount === 0}
               >

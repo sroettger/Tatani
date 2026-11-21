@@ -27,16 +27,54 @@ async function sendCard(device: any, slot: string): Promise<string> {
   const { data: profile, error: profileError } = await db.from("profiles").select("learning_language,ui_language").eq("user_id", device.user_id).single();
   if (profileError) throw profileError;
   const language = profile.learning_language;
-  const { data: chunks, error: chunkError } = await db.from("study_chunks").select("id,studied_at").eq("user_id", device.user_id).eq("learning_language", language).order("updated_at", { ascending: false }).limit(100);
-  if (chunkError) throw chunkError;
-  if (!chunks?.length) return "empty";
-  const { data: words, error: wordsError } = await db.from("study_chunk_words").select("word,reading,meaning,level,example_sentence_jp,chunk_id").in("chunk_id", chunks.map(c => c.id));
-  if (wordsError) throw wordsError;
-  const { data: states, error: stateError } = await db.from("user_word_state").select("word,state,preference,last_reviewed_at,srs_due_at").eq("user_id", device.user_id).eq("learning_language", language);
+  const { data: states, error: stateError } = await db.from("user_word_state").select("word,reading,level,state,preference,known_source,last_reviewed_at,srs_due_at").eq("user_id", device.user_id).eq("learning_language", language);
   if (stateError) throw stateError;
-  const stateMap = new Map((states ?? []).map(s => [s.word, s]));
-  const studied = new Set(chunks.filter(c => c.studied_at).map(c => c.id));
-  const candidates = [...new Map((words ?? []).filter(w => w.meaning && eligibleWord(stateMap.get(w.word), studied.has(w.chunk_id))).map(w => [w.word, w])).values()];
+  const dueStates = (states ?? []).filter(s => eligibleWord(s, true));
+  if (!dueStates.length) return "empty";
+  const dueWordSet = new Set(dueStates.map(s => s.word));
+  type CardMeta = { word: string; reading: string | null; meaning: string; level: string | null; example_sentence_jp: string | null };
+  const metaMap = new Map<string, CardMeta>();
+
+  const { data: chunks, error: chunkError } = await db.from("study_chunks").select("id").eq("user_id", device.user_id).eq("learning_language", language).order("updated_at", { ascending: false }).limit(100);
+  if (chunkError) throw chunkError;
+  if (chunks?.length) {
+    const { data: words, error: wordsError } = await db.from("study_chunk_words").select("word,reading,meaning,level,example_sentence_jp").in("chunk_id", chunks.map(c => c.id));
+    if (wordsError) throw wordsError;
+    for (const w of words ?? []) {
+      if (w.meaning && dueWordSet.has(w.word) && (!metaMap.has(w.word) || (!metaMap.get(w.word)?.example_sentence_jp && w.example_sentence_jp))) {
+        metaMap.set(w.word, { word: w.word, reading: w.reading, meaning: w.meaning, level: w.level, example_sentence_jp: w.example_sentence_jp });
+      }
+    }
+  }
+
+  // Also resolve graduated words learned directly from episodes without legacy chunks
+  if (metaMap.size < dueWordSet.size) {
+    const { data: lib } = await db.from("user_anime").select("anime_id").eq("user_id", device.user_id).eq("learning_language", language);
+    const animeIds = (lib ?? []).map((r: { anime_id: string }) => r.anime_id);
+    if (animeIds.length) {
+      const { data: eps } = await db.from("episodes").select("id, seasons!inner(anime_id)").in("seasons.anime_id", animeIds).eq("processing_status", "ready").limit(60);
+      const epIds = (eps ?? []).map((e: { id: string }) => e.id);
+      if (epIds.length) {
+        const { data: caches } = await db.from("episode_vocab_cache").select("vocab").in("episode_id", epIds).eq("language", language);
+        for (const row of caches ?? []) {
+          const vocab = Array.isArray(row.vocab) ? row.vocab : [];
+          for (const v of vocab as Array<{ word?: string; reading?: string; meaning?: string; level?: string; jlpt_level?: string; example_sentence_jp?: string }>) {
+            if (v.word && v.meaning && dueWordSet.has(v.word) && (!metaMap.has(v.word) || (!metaMap.get(v.word)?.example_sentence_jp && v.example_sentence_jp))) {
+              metaMap.set(v.word, {
+                word: v.word,
+                reading: v.reading ?? null,
+                meaning: v.meaning,
+                level: v.level ?? v.jlpt_level ?? null,
+                example_sentence_jp: v.example_sentence_jp ?? null,
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const candidates = [...metaMap.values()];
   if (!candidates.length) return "empty";
   const { data: recent } = await db.from("flashcard_push_deliveries").select("word").eq("user_id", device.user_id).eq("learning_language", language).order("created_at", { ascending: false }).limit(50);
   const recentWords = new Set((recent ?? []).map(d => d.word));
@@ -56,6 +94,7 @@ async function sendCard(device: any, slot: string): Promise<string> {
   const data: Record<string, string> = {
     path, delivery_id: delivery.id, token: delivery.review_token, api: `${Deno.env.get("SUPABASE_URL")}/functions/v1/flashcard-notifications`,
     word: card.word, reading: card.reading ?? "",
+    example: card.example_sentence_jp ?? "",
     l_know: ja ? "知ってる" : "I know",
     l_correct: ja ? "正解" : "Correct", l_incorrect: ja ? "不正解" : "Incorrect",
     l_dont_know: ja ? "わからない" : "I don't know",
