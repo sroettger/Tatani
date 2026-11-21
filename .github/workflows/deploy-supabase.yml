@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - "supabase/**"
+      - "scripts/provision-supabase.mjs"
       - ".github/workflows/deploy-supabase.yml"
 
 jobs:
@@ -14,56 +15,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check Supabase deployment secrets
-        id: check
+      - name: Provision or resolve Supabase project & apply SQL migrations
+        id: sb
         env:
-          HAS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN != '' }}
-          HAS_PROJECT: ${{ secrets.SUPABASE_PROJECT_ID != '' }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
         run: |
-          if [ "$HAS_TOKEN" != "true" ] || [ "$HAS_PROJECT" != "true" ]; then
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping Supabase deploy until SUPABASE_ACCESS_TOKEN and SUPABASE_PROJECT_ID are added to GitHub Secrets."
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          fi
+          node scripts/provision-supabase.mjs --provision
 
       - uses: supabase/setup-cli@v1
-        if: steps.check.outputs.configured == 'true'
+        if: steps.sb.outputs.configured == 'true'
         with:
           version: latest
 
-      - name: Link project & push SQL migrations
-        if: steps.check.outputs.configured == 'true'
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
-        run: |
-          supabase link --project-ref "$SUPABASE_PROJECT_ID"
-          supabase db push --include-all
-
       - name: Sync Edge Function secrets (Gemini & optional Firebase)
-        if: steps.check.outputs.configured == 'true'
+        if: steps.sb.outputs.configured == 'true'
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+          PROJECT_ID: ${{ steps.sb.outputs.project_id }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
         run: |
-          ARGS=()
+          ARGS=("WEB_BASE_PATH=/Tatani")
           if [ -n "$GEMINI_API_KEY" ]; then
             ARGS+=("GEMINI_API_KEY=$GEMINI_API_KEY")
           fi
           if [ -n "$FIREBASE_SERVICE_ACCOUNT_JSON" ]; then
             ARGS+=("FIREBASE_SERVICE_ACCOUNT_JSON=$FIREBASE_SERVICE_ACCOUNT_JSON")
           fi
-          ARGS+=("WEB_BASE_PATH=/Tatani")
-          supabase secrets set --project-ref "$SUPABASE_PROJECT_ID" "${ARGS[@]}"
+          supabase secrets set --project-ref "$PROJECT_ID" "${ARGS[@]}"
 
       - name: Deploy all Supabase Edge Functions
-        if: steps.check.outputs.configured == 'true'
+        if: steps.sb.outputs.configured == 'true'
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+          PROJECT_ID: ${{ steps.sb.outputs.project_id }}
         run: |
-          supabase functions deploy --project-ref "$SUPABASE_PROJECT_ID"
+          supabase functions deploy --project-ref "$PROJECT_ID"

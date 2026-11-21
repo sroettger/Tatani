@@ -23,16 +23,12 @@ Tatani is a standalone Japanese vocabulary & comprehension trainer built around 
 
 ## GitHub Actions Secrets for Standalone Deployment
 
-Configure these in **Settings → Secrets and variables → Actions**:
+Only **2 secrets** are required in **Settings → Secrets and variables → Actions** ([scripts/provision-supabase.mjs](scripts/provision-supabase.mjs) automatically creates/discovers your `Tatani` Supabase project, applies all SQL migrations, configures Auth redirect URLs, and resolves `SUPABASE_PROJECT_ID`, `SUPABASE_URL`, and `SUPABASE_ANON_KEY` on every build):
 
 | Secret Name | Purpose |
 | --- | --- |
-| `SUPABASE_PROJECT_ID` | Your 20-char Supabase project reference ID (e.g. `abcdefghijklmopqrstu`) |
-| `SUPABASE_URL` | `https://<SUPABASE_PROJECT_ID>.supabase.co` (used by Android & GitHub Pages builds) |
-| `SUPABASE_ANON_KEY` | Your Supabase project's public `anon` / publishable key |
-| `SUPABASE_ACCESS_TOKEN` | Personal access token from https://supabase.com/dashboard/account/tokens (for CI deploys) |
-| `SUPABASE_DB_PASSWORD` | Your Supabase Postgres database password (for `supabase db push` migrations) |
-| `GEMINI_API_KEY` | Google AI Studio API key from https://aistudio.google.com/apikey |
+| `SUPABASE_ACCESS_TOKEN` | **Required.** Unscoped Personal Access Token from https://supabase.com/dashboard/account/tokens |
+| `GEMINI_API_KEY` | **Required.** Google AI Studio API key from https://aistudio.google.com/apikey |
 | `ANDROID_KEYSTORE_BASE64` | Base64-encoded Android upload keystore *(already set)* |
 | `ANDROID_KEYSTORE_PASSWORD` | Keystore password *(already set)* |
 | `ANDROID_KEY_ALIAS` | Upload key alias *(already set)* |

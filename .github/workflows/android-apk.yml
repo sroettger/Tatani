@@ -32,10 +32,20 @@ jobs:
           java-version: 21
           cache: gradle
 
+      - name: Resolve Supabase URL & public key automatically
+        id: sb
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || vars.SUPABASE_ANON_KEY }}
+        run: |
+          node scripts/provision-supabase.mjs --resolve
+
       - name: Verify web tests & production bundle
         env:
-          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL || vars.SUPABASE_URL || 'https://placeholder.supabase.co' }}
-          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_ANON_KEY || vars.SUPABASE_ANON_KEY || 'public-anon-placeholder-key' }}
+          VITE_SUPABASE_URL: ${{ steps.sb.outputs.supabase_url }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ steps.sb.outputs.supabase_anon_key }}
         run: |
           bun install --frozen-lockfile
           bun run test
@@ -45,8 +55,8 @@ jobs:
         working-directory: android
         env:
           RUN_NUM: ${{ github.run_number }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || vars.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || vars.SUPABASE_ANON_KEY }}
+          SUPABASE_URL: ${{ steps.sb.outputs.supabase_url }}
+          SUPABASE_ANON_KEY: ${{ steps.sb.outputs.supabase_anon_key }}
         run: |
           chmod +x ./gradlew
           export ANDROID_VERSION_CODE=$((100 + RUN_NUM))
@@ -75,8 +85,8 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || vars.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || vars.SUPABASE_ANON_KEY }}
+          SUPABASE_URL: ${{ steps.sb.outputs.supabase_url }}
+          SUPABASE_ANON_KEY: ${{ steps.sb.outputs.supabase_anon_key }}
           RUN_NUM: ${{ github.run_number }}
         run: |
           echo "$ANDROID_KEYSTORE_BASE64" | tr -d '\n\r ' | base64 --decode > /tmp/tatani-upload.keystore
