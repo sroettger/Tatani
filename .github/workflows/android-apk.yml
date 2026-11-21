@@ -41,9 +41,12 @@ jobs:
       - name: Run native Kotlin unit tests & build debug APK/AAB
         working-directory: android
         env:
-          ANDROID_VERSION_CODE: ${{ 100 + github.run_number }}
-          ANDROID_VERSION_NAME: 2.0.${{ github.run_number }}
-        run: ./gradlew testDebugUnitTest assembleDebug bundleDebug --no-daemon
+          RUN_NUM: ${{ github.run_number }}
+        run: |
+          chmod +x ./gradlew
+          export ANDROID_VERSION_CODE=$((100 + RUN_NUM))
+          export ANDROID_VERSION_NAME="2.0.${RUN_NUM}"
+          ./gradlew testDebugUnitTest assembleDebug bundleDebug --no-daemon
 
       - name: Stage debug artifacts
         run: |
@@ -67,11 +70,12 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          ANDROID_VERSION_CODE: ${{ 100 + github.run_number }}
-          ANDROID_VERSION_NAME: 2.0.${{ github.run_number }}
+          RUN_NUM: ${{ github.run_number }}
         run: |
           echo "$ANDROID_KEYSTORE_BASE64" | tr -d '\n\r ' | base64 --decode > /tmp/tatani-upload.keystore
           export ANDROID_KEYSTORE_PATH=/tmp/tatani-upload.keystore
+          export ANDROID_VERSION_CODE=$((100 + RUN_NUM))
+          export ANDROID_VERSION_NAME="2.0.${RUN_NUM}"
           ./gradlew bundleRelease --no-daemon
           cp app/build/outputs/bundle/release/app-release.aab ../tatani-android-release.aab
           cp app/build/outputs/mapping/release/mapping.txt ../tatani-r8-mapping.txt
