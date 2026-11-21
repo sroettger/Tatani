@@ -308,6 +308,44 @@ export async function repairCatalogEpisodesAndReport({
   if (Array.isArray(summaryRows) && summaryRows[0]) {
     console.log("Catalog health summary:", JSON.stringify(summaryRows[0]));
   }
+
+  // Verify RLS visibility as ROLE authenticated for the user_anime owner (read-only, zero PII)
+  try {
+    const rlsCheck = await runSql(`
+      CREATE OR REPLACE FUNCTION pg_temp.verify_auth_rls()
+      RETURNS jsonb
+      LANGUAGE plpgsql
+      AS $$
+      DECLARE
+        v_uid uuid;
+        v_out jsonb;
+      BEGIN
+        SELECT user_id INTO v_uid FROM public.user_anime LIMIT 1;
+        IF v_uid IS NULL THEN
+          RETURN jsonb_build_object('note', 'no_user_anime');
+        END IF;
+        PERFORM set_config('request.jwt.claims', json_build_object('sub', v_uid::text, 'role', 'authenticated')::text, true);
+        EXECUTE 'SET LOCAL ROLE authenticated';
+        SELECT jsonb_build_object(
+          'rls_profiles', (SELECT count(*)::int FROM public.profiles WHERE user_id = auth.uid()),
+          'rls_progress', (SELECT count(*)::int FROM public.user_language_progress WHERE user_id = auth.uid() AND learning_language = 'ja'),
+          'rls_words', (SELECT count(*)::int FROM public.user_word_state WHERE user_id = auth.uid() AND learning_language = 'ja'),
+          'rls_chunks', (SELECT count(*)::int FROM public.study_chunks WHERE user_id = auth.uid() AND learning_language = 'ja'),
+          'rls_user_anime', (SELECT count(*)::int FROM public.user_anime WHERE user_id = auth.uid() AND learning_language = 'ja'),
+          'rls_anime', (SELECT count(*)::int FROM public.anime),
+          'rls_seasons', (SELECT count(*)::int FROM public.seasons),
+          'rls_episodes', (SELECT count(*)::int FROM public.episodes e JOIN public.seasons s ON s.id = e.season_id)
+        ) INTO v_out;
+        EXECUTE 'RESET ROLE';
+        RETURN v_out;
+      END;
+      $$;
+      SELECT pg_temp.verify_auth_rls() AS rls_result;
+    `);
+    console.log("Authenticated RLS check:", JSON.stringify(rlsCheck));
+  } catch (err) {
+    console.warn("Authenticated RLS check failed:", err instanceof Error ? err.message : err);
+  }
 }
 
 async function main() {

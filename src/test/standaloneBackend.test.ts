@@ -188,6 +188,13 @@ describe("standalone FCM HTTP v1 sender", () => {
           JSON.stringify([{ anime_count: 1, episodes_count: 3, user_anime_count: 1 }]),
           { status: 201 },
         ),
+      )
+      // 7. Authenticated RLS check
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([{ rls_user_anime: 1, rls_episodes: 3 }]),
+          { status: 201 },
+        ),
       );
 
     await repairCatalogEpisodesAndReport({
@@ -196,7 +203,7 @@ describe("standalone FCM HTTP v1 sender", () => {
       fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
-    expect(mockFetch).toHaveBeenCalledTimes(6);
+    expect(mockFetch).toHaveBeenCalledTimes(7);
     const insertEpisodesSql = JSON.parse(String(mockFetch.mock.calls[4][1]?.body)).query as string;
     expect(insertEpisodesSql).toContain("INSERT INTO public.episodes");
     expect(insertEpisodesSql).toContain("I''m Luffy!");
