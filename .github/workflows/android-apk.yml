@@ -33,6 +33,9 @@ jobs:
           cache: gradle
 
       - name: Verify web tests & production bundle
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL || vars.SUPABASE_URL || 'https://placeholder.supabase.co' }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_ANON_KEY || vars.SUPABASE_ANON_KEY || 'public-anon-placeholder-key' }}
         run: |
           bun install --frozen-lockfile
           bun run test
@@ -42,6 +45,8 @@ jobs:
         working-directory: android
         env:
           RUN_NUM: ${{ github.run_number }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || vars.SUPABASE_ANON_KEY }}
         run: |
           chmod +x ./gradlew
           export ANDROID_VERSION_CODE=$((100 + RUN_NUM))
@@ -70,6 +75,8 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || vars.SUPABASE_ANON_KEY }}
           RUN_NUM: ${{ github.run_number }}
         run: |
           echo "$ANDROID_KEYSTORE_BASE64" | tr -d '\n\r ' | base64 --decode > /tmp/tatani-upload.keystore
@@ -122,5 +129,5 @@ jobs:
             gh release create "$TAG" "${ASSETS[@]}" \
               --prerelease \
               --title "Tatani Native Android ($TAG)" \
-              --notes $'Native Kotlin + Jetpack Compose Android 16 (API 36) build of Tatani (`app.tatani.android`, minSdk 24 / targetSdk 36).\n\n### Install via Google Play Store (no sideloading)\n- **Instant Play Store Install (Internal App Sharing)**: Upload **`tatani-android-release.aab`** at `https://play.google.com/console/internal-app-sharing` and open the generated `play.google.com/apps/test/...` link on your Android phone.\n- **Google Play Internal Testing Track**: Upload **`tatani-android-release.aab`** once to **Testing → Internal testing** in Play Console (and add `PLAY_SERVICE_ACCOUNT_JSON` to GitHub Secrets for automatic future uploads).'
+              --notes $'Native Kotlin + Jetpack Compose Android 16 (API 36) build of Tatani (`app.tatani.android`, minSdk 24 / targetSdk 36).\n\n### Install via Google Play Store (no sideloading)\n- **Google Play Internal Testing Track**: Upload **`tatani-android-release.aab`** once to **Testing → Internal testing** in Play Console (and add `PLAY_SERVICE_ACCOUNT_JSON` to GitHub Secrets for automatic future uploads).\n- **Instant Play Store Install (Internal App Sharing)**: Upload **`tatani-android-release.aab`** at `https://play.google.com/console/internal-app-sharing`.'
           fi

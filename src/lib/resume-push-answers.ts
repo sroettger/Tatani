@@ -6,7 +6,7 @@ export function resumePushAnswers() {
     void navigator.serviceWorker.getRegistrations().then(registrations => {
       for (const registration of registrations) {
         const worker = registration.active;
-        if (worker && new URL(worker.scriptURL).pathname === "/firebase-messaging-sw.js") {
+        if (worker && new URL(worker.scriptURL).pathname.endsWith("/firebase-messaging-sw.js")) {
           worker.postMessage({ type: "FLUSH_PUSH_ANSWERS" });
           // The worker's /push/ scope never sees app navigations, so browsers rarely recheck it; force it.
           void registration.update().catch(() => {});

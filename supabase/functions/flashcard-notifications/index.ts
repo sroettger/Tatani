@@ -1,6 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders } from "npm:@supabase/supabase-js@2/cors";
 import { z } from "npm:zod@3";
+import { sendFcmWebPush } from "../_shared/fcm.ts";
 import { currentSlot, eligibleWord, hasUnhandledDelivery } from "../_shared/push-schedule.ts";
 
 const db = createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "");
@@ -82,14 +83,14 @@ async function sendCard(device: any, slot: string): Promise<string> {
   const pool = fresh.length ? fresh : candidates;
   const card = pool[Math.floor(Math.random() * pool.length)];
   const ja = profile.ui_language === "ja";
-  const projectKey = Deno.env.get("LOVABLE_API_KEY");
-  const connectionKey = Deno.env.get("FIREBASE_MESSAGING_API_KEY");
-  if (!projectKey || !connectionKey) throw new Error("Firebase is not configured");
+  const serviceAccountJson = Deno.env.get("FIREBASE_SERVICE_ACCOUNT_JSON");
+  if (!serviceAccountJson) throw new Error("Firebase is not configured (set FIREBASE_SERVICE_ACCOUNT_JSON)");
   const { data: delivery, error: insertError } = await db.from("flashcard_push_deliveries").insert({ user_id: device.user_id, device_id: device.id, slot, learning_language: language, word: card.word, reading: card.reading, meaning: card.meaning, example_sentence: card.example_sentence_jp, level: card.level, quiz_options: [ja ? "知ってる" : "I know", ja ? "わからない" : "I don't know"], quiz_correct_index: 0 }).select("id,review_token").single();
   if (insertError?.code === "P0001") return "unhandled";
   if (insertError?.code === "23505") return "duplicate";
   if (insertError || !delivery) throw insertError ?? new Error("Delivery was not created");
-  const path = `/notifications/review/${delivery.id}`;
+  const webBasePath = (Deno.env.get("WEB_BASE_PATH") ?? "").replace(/\/+$/, "");
+  const path = `${webBasePath}/notifications/review/${delivery.id}`;
   // Answer key stays server-side; the worker submits only the chosen answer index.
   const data: Record<string, string> = {
     path, delivery_id: delivery.id, token: delivery.review_token, api: `${Deno.env.get("SUPABASE_URL")}/functions/v1/flashcard-notifications`,
@@ -102,10 +103,7 @@ async function sendCard(device: any, slot: string): Promise<string> {
   };
   let response: Response;
   try {
-  response = await fetch("https://connector-gateway.lovable.dev/firebase_messaging/v1/projects/_/messages:send", {
-    method: "POST", headers: { Authorization: `Bearer ${projectKey}`, "X-Connection-Api-Key": connectionKey, "Content-Type": "application/json" },
-    body: JSON.stringify({ message: { token: device.token, data, webpush: { headers: { TTL: "3600", Urgency: "high" } } } }),
-  });
+    response = await sendFcmWebPush(device.token, data, serviceAccountJson);
   } catch (error) {
     // Keep uncertain deliveries pending: a network timeout may still have delivered the card.
     console.error("Firebase delivery outcome unknown", error);

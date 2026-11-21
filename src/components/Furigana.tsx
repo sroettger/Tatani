@@ -11,8 +11,10 @@ type KuromojiTokenizer = {
 let tokenizerPromise: Promise<KuromojiTokenizer> | null = null;
 
 const loadBuffer = async (path: string) => {
-  const response = await fetch(path);
-  if (!response.ok) throw new Error(`Failed to load dictionary file: ${path}`);
+  const base = (import.meta.env.BASE_URL || "/").replace(/\/+$/, "");
+  const normalized = path.startsWith("/") ? `${base}${path}` : `${base}/${path}`;
+  const response = await fetch(normalized);
+  if (!response.ok) throw new Error(`Failed to load dictionary file: ${normalized}`);
   return response.arrayBuffer();
 };
 

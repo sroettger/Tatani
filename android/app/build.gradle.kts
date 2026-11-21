@@ -9,6 +9,13 @@ plugins {
 val envVersionCode = System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull() ?: 100
 val envVersionName = System.getenv("ANDROID_VERSION_NAME")?.trim()?.takeIf { it.isNotEmpty() } ?: "2.0.0"
 
+val envSupabaseUrl = System.getenv("SUPABASE_URL")?.trim()?.takeIf { it.isNotEmpty() }
+    ?: System.getenv("VITE_SUPABASE_URL")?.trim()?.takeIf { it.isNotEmpty() }
+    ?: "https://placeholder.supabase.co"
+val envSupabaseAnonKey = System.getenv("SUPABASE_ANON_KEY")?.trim()?.takeIf { it.isNotEmpty() }
+    ?: System.getenv("VITE_SUPABASE_PUBLISHABLE_KEY")?.trim()?.takeIf { it.isNotEmpty() }
+    ?: "public-anon-placeholder-key"
+
 val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")?.trim()
 val keystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
 val keyAliasName = System.getenv("ANDROID_KEY_ALIAS")
@@ -36,12 +43,12 @@ android {
         buildConfigField(
             "String",
             "SUPABASE_URL",
-            "\"https://ppvvcmoaloqxxprgzdin.supabase.co\""
+            "\"${envSupabaseUrl.replace("\"", "\\\"")}\""
         )
         buildConfigField(
             "String",
             "SUPABASE_ANON_KEY",
-            "\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBwdnZjbW9hbG9xeHhwcmd6ZGluIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY1MjM1MDQsImV4cCI6MjA5MjA5OTUwNH0.LIAHVMkGNf6As3qNSq71iS-1Bs3B08np2cRCWQGV7HA\""
+            "\"${envSupabaseAnonKey.replace("\"", "\\\"")}\""
         )
     }
 

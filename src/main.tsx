@@ -9,19 +9,19 @@ if (root) createRoot(root).render(<App />);
 resumePushAnswers();
 void resumeForegroundPush().catch(() => {});
 
-// PWA service worker — only in production, never inside the editor iframe / preview hosts
+// PWA service worker — only in production, never inside an iframe
 if ("serviceWorker" in navigator) {
   const inIframe = (() => { try { return window.self !== window.top; } catch { return true; } })();
-  const host = window.location.hostname;
-  const isPreview = host.includes("lovableproject.com") || host.includes("id-preview--");
-  if (!inIframe && !isPreview && import.meta.env.PROD) {
+  const baseUrl = import.meta.env.BASE_URL || "/";
+  const swPath = `${baseUrl}sw.js`;
+  if (!inIframe && import.meta.env.PROD) {
     window.addEventListener("load", () => {
-      navigator.serviceWorker.register("/sw.js").catch(() => {});
+      navigator.serviceWorker.register(swPath).catch(() => {});
     });
   } else {
     navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r) => {
       const worker = r.active ?? r.waiting ?? r.installing;
-      if (worker && new URL(worker.scriptURL).pathname === "/sw.js") r.unregister();
+      if (worker && new URL(worker.scriptURL).pathname.endsWith("/sw.js")) r.unregister();
     }));
   }
 }

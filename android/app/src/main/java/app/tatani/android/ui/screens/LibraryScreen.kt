@@ -276,7 +276,7 @@ private fun AccountPrivacyModal(
                 OutlinedButton(
                     onClick = {
                         androidx.browser.customtabs.CustomTabsIntent.Builder().build()
-                            .launchUrl(context, android.net.Uri.parse("https://tatani.lovable.app/privacy"))
+                            .launchUrl(context, android.net.Uri.parse("https://sroettger.github.io/Tatani/privacy"))
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) {

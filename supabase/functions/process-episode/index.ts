@@ -2,6 +2,7 @@
 // tokenizer for latin-script languages), frequency-rank, then ask the AI for
 // meanings + grammar (in the learner's UI language) based on real example sentences.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { callAiChatCompletions, getAiApiKey } from "../_shared/ai.ts";
 import { getOfficialJlptLevel } from "../_shared/jlpt-lookup.ts";
 import { extractVocabFromSubtitles, type VocabEntry } from "../_shared/tokenize-jp.ts";
 import { extractVocabLatin } from "../_shared/tokenize-latin.ts";
@@ -141,19 +142,15 @@ SUBTITLE TEXT:
 ${sample}`;
 
   try {
-    const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: "You help Japanese language learners by spotting common words written in unusual kana spellings that morphological tokenizers fail to recognize. You MUST call the report_unusual_kana_spellings function." },
-          { role: "user", content: userMessage },
-        ],
-        tools: [UNUSUAL_KANA_TOOL],
-        tool_choice: { type: "function", function: { name: "report_unusual_kana_spellings" } },
-      }),
-    });
+    const aiResp = await callAiChatCompletions({
+      model: "gemini-2.5-flash",
+      messages: [
+        { role: "system", content: "You help Japanese language learners by spotting common words written in unusual kana spellings that morphological tokenizers fail to recognize. You MUST call the report_unusual_kana_spellings function." },
+        { role: "user", content: userMessage },
+      ],
+      tools: [UNUSUAL_KANA_TOOL],
+      tool_choice: { type: "function", function: { name: "report_unusual_kana_spellings" } },
+    }, apiKey);
     if (!aiResp.ok) {
       console.warn(`unusual-kana AI call failed: ${aiResp.status}`);
       return [];
@@ -218,8 +215,7 @@ Deno.serve(async (req) => {
     }
     const userId = claims.claims.sub as string;
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY missing");
+    const aiApiKey = getAiApiKey();
 
     const { episode_id, subtitle_text } = await req.json();
     if (!episode_id || !subtitle_text) {
@@ -273,7 +269,7 @@ Deno.serve(async (req) => {
         if (isJapanese) {
           const knownSurfaces = new Set(allVocab.map((v) => v.word));
           const subtitleLines = cleaned.split("\n").filter((l) => l.trim().length > 0);
-          const extraKanaVocab = await detectUnusualKanaSpellings(cleaned, subtitleLines, knownSurfaces, LOVABLE_API_KEY);
+          const extraKanaVocab = await detectUnusualKanaSpellings(cleaned, subtitleLines, knownSurfaces, aiApiKey);
           if (extraKanaVocab.length > 0) {
             console.log(`Episode ${episode_id}: +${extraKanaVocab.length} unusual-kana vocab merged`);
             allVocab.push(...extraKanaVocab);
@@ -324,19 +320,15 @@ Deno.serve(async (req) => {
           const userMessage = `Translate each ${learning.name} word below into ${explainLang} using its example sentence as context. ${levelInstruction} Also extract any meaningful grammar points used in these sentences (particles/conjugations/common patterns), each tagged with a difficulty level from: ${learning.levels.join(", ")}.\n\nWORDS:\n${JSON.stringify(wordsPayload, null, 2)}`;
 
           try {
-            const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-              method: "POST",
-              headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: "google/gemini-2.5-flash",
-                messages: [
-                  { role: "system", content: `You are a ${learning.name}-to-${explainLang} translator helping language learners. For each word given, provide a concise ${explainLang} meaning that fits its example sentence context, plus a natural ${explainLang} translation of that example sentence. Then extract grammar points actually used in the supplied sentences, explained in ${explainLang}. You MUST call the translate_vocab_and_extract_grammar function.` },
-                  { role: "user", content: userMessage },
-                ],
-                tools: [TRANSLATE_TOOL],
-                tool_choice: { type: "function", function: { name: "translate_vocab_and_extract_grammar" } },
-              }),
-            });
+            const aiResp = await callAiChatCompletions({
+              model: "gemini-2.5-flash",
+              messages: [
+                { role: "system", content: `You are a ${learning.name}-to-${explainLang} translator helping language learners. For each word given, provide a concise ${explainLang} meaning that fits its example sentence context, plus a natural ${explainLang} translation of that example sentence. Then extract grammar points actually used in the supplied sentences, explained in ${explainLang}. You MUST call the translate_vocab_and_extract_grammar function.` },
+                { role: "user", content: userMessage },
+              ],
+              tools: [TRANSLATE_TOOL],
+              tool_choice: { type: "function", function: { name: "translate_vocab_and_extract_grammar" } },
+            }, aiApiKey);
             if (!aiResp.ok) {
               const t = await aiResp.text();
               throw new Error(`ai_${aiResp.status}: ${t.slice(0, 300)}`);

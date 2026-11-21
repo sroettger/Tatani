@@ -1,4 +1,4 @@
-project_id = "ppvvcmoaloqxxprgzdin"
+project_id = "tatani"
 
 [functions.search-anime]
 verify_jwt = false
@@ -13,4 +13,25 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.add-anime-to-library]
+verify_jwt = false
+
+[functions.recommend-anime]
+verify_jwt = false
+
+[functions.tutor-chat]
+verify_jwt = false
+
+[functions.episode-discuss]
+verify_jwt = false
+
+[functions.episode-summary]
+verify_jwt = false
+
+[functions.flashcard-notifications]
+verify_jwt = false
+
+[functions.backfill-episode-titles]
+verify_jwt = false
+
+[functions.wipe-anime-data]
 verify_jwt = false

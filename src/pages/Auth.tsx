@@ -6,11 +6,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { useAuth } from "@/context/AuthContext";
-import { lovable } from "@/integrations/lovable";
-import { supabase } from "@/integrations/supabase/client";
+import { isSupabaseConfigured, supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Sparkles, Eye, EyeOff, Mail } from "lucide-react";
 import { useI18n } from "@/i18n";
+
+function appBaseUrl(): string {
+  return new URL(import.meta.env.BASE_URL || "/", window.location.origin).toString();
+}
 
 export default function Auth() {
   const { user, loading } = useAuth();
@@ -34,11 +37,14 @@ export default function Auth() {
   const signInGoogle = async () => {
     setBusy(true);
     try {
-      const result = await lovable.auth.signInWithOAuth("google", {
-        redirect_uri: window.location.origin,
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: appBaseUrl(),
+        },
       });
-      if ((result as any)?.error) {
-        toast.error(t("auth.signInFailed"), { description: String((result as any).error?.message ?? t("auth.unknownError")) });
+      if (error) {
+        toast.error(t("auth.signInFailed"), { description: error.message || t("auth.unknownError") });
       }
     } catch (e) {
       toast.error(t("auth.signInFailed"), { description: e instanceof Error ? e.message : t("auth.unknownError") });
@@ -55,7 +61,7 @@ export default function Auth() {
         const { error } = await supabase.auth.signUp({
           email,
           password,
-          options: { emailRedirectTo: window.location.origin },
+          options: { emailRedirectTo: appBaseUrl() },
         });
         if (error) throw error;
         setConfirmSent(true);
@@ -64,9 +70,9 @@ export default function Auth() {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       toast.error(isSignUp ? t("auth.signUpFailed") : t("auth.signInFailed"), {
-        description: e?.message ?? t("auth.unknownError"),
+        description: e instanceof Error ? e.message : t("auth.unknownError"),
       });
     } finally {
       setBusy(false);
@@ -80,7 +86,7 @@ export default function Auth() {
     }
     setBusy(true);
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/reset-password`,
+      redirectTo: new URL("reset-password", appBaseUrl()).toString(),
     });
     setBusy(false);
     if (error) {
@@ -123,6 +129,12 @@ export default function Auth() {
         <p className="text-sm text-muted-foreground text-center mb-8">
           {t("auth.tagline")}
         </p>
+
+        {!isSupabaseConfigured && (
+          <div className="mb-5 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200">
+            Backend not configured yet: set <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_PUBLISHABLE_KEY</code> in your environment or GitHub Actions variables.
+          </div>
+        )}
 
         <form onSubmit={handleEmailSubmit} className="space-y-4">
           <div className="space-y-2">

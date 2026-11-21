@@ -1,10 +1,11 @@
 importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js');
-importScripts('/push-answer-outbox.js');
+importScripts('./push-answer-outbox.js');
 firebase.initializeApp(Object.fromEntries(new URL(self.location).searchParams));
 const messaging = firebase.messaging();
 const outbox = self.TataniPushOutbox.createOutbox();
 const SYNC_TAG = 'tatani-push-answers';
+const ICON_URL = new URL('./icon-192.png', self.location).pathname;
 // Activate updated notification handling right away instead of waiting for the old worker to idle.
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
@@ -12,11 +13,11 @@ self.addEventListener('activate', event => event.waitUntil(self.clients.claim())
 const wordLabel = (d) => `${d.word}${d.reading && d.reading !== d.word ? ` (${d.reading})` : ''}`;
 const feedback = (entry, result) => self.registration.showNotification(`${result.correct ? entry.data.l_correct : entry.data.l_incorrect}`, {
   // Re-alert after the silent local acknowledgement so Android surfaces the translation.
-  body: `${wordLabel(entry.data)} — ${result.meaning}`, tag: entry.id, icon: '/icon-192.png', renotify: true, requireInteraction: true,
+  body: `${wordLabel(entry.data)} — ${result.meaning}`, tag: entry.id, icon: ICON_URL, renotify: true, requireInteraction: true,
   data: { ...entry.data, stage: 'done' },
 });
 const rejected = (entry) => self.registration.showNotification(`${entry.data.word}`, {
-  body: entry.data.l_failed, tag: entry.id, icon: '/icon-192.png', renotify: false,
+  body: entry.data.l_failed, tag: entry.id, icon: ICON_URL, renotify: false,
   data: { ...entry.data, stage: 'failed' },
 });
 const flushAnswers = () => outbox.flush(feedback, rejected);
@@ -34,7 +35,7 @@ function showPushQuiz(payload) {
   const d = payload.data || {};
   if (!d.delivery_id) return;
   const options = {
-    tag: d.delivery_id, icon: '/icon-192.png', renotify: true, requireInteraction: true,
+    tag: d.delivery_id, icon: ICON_URL, renotify: true, requireInteraction: true,
     data: { ...d, stage: d.l_know || d.quiz_options ? 'quiz' : 'prompt' },
     // New cards are self-reported ("I know" / "I don't know"); older deliveries keep the meaning quiz.
     actions: d.l_know ? [{ action: 'answer_0', title: d.l_know }, { action: 'answer_1', title: d.l_dont_know }]
@@ -62,7 +63,7 @@ self.addEventListener('notificationclick', (event) => {
         // Acknowledge the durable local save before any network request.
         await self.registration.showNotification(`${wordLabel(d)}`, {
           body: d.l_know ? (answer === 0 ? d.l_know : d.l_dont_know) : (answer === -1 ? d.l_dont_know : JSON.parse(d.quiz_options)[answer]),
-          tag: d.delivery_id, icon: '/icon-192.png', renotify: false,
+          tag: d.delivery_id, icon: ICON_URL, renotify: false,
           data: { ...d, stage: 'queued' },
         });
       } catch {
@@ -78,7 +79,7 @@ self.addEventListener('notificationclick', (event) => {
   if (d.stage === 'queued') return event.waitUntil(flushAnswers().catch(requestRetry));
   if (d.stage === 'failed') return event.waitUntil(self.clients.openWindow(d.path));
   const showAnswer = () => self.registration.showNotification(`${d.word}${d.reading && d.reading !== d.word ? ` (${d.reading})` : ''}`, {
-    body: [d.meaning, d.example].filter(Boolean).join('\n'), tag: d.delivery_id, icon: '/icon-192.png', requireInteraction: true,
+    body: [d.meaning, d.example].filter(Boolean).join('\n'), tag: d.delivery_id, icon: ICON_URL, requireInteraction: true,
     data: { ...d, stage: 'answer' },
     actions: [{ action: 'yes', title: d.l_yes }, { action: 'no', title: d.l_no }],
   });

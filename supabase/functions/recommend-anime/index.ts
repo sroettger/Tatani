@@ -1,5 +1,6 @@
-// Recommend anime via Lovable AI based on JLPT level + exclusions
+// Recommend anime via Gemini API based on JLPT/CEFR level + library exclusions
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { callAiChatCompletions, getAiApiKey } from "../_shared/ai.ts";
 import { getUserLanguages, uiLanguageName } from "../_shared/languages.ts";
 
 const corsHeaders = {
@@ -100,9 +101,11 @@ Deno.serve(async (req) => {
       .map((r: any) => [r.anime?.title_en, r.anime?.title_romaji, r.anime?.title_jp].filter(Boolean))
       .flat();
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      return new Response(JSON.stringify({ error: "AI not configured" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    let aiApiKey: string;
+    try {
+      aiApiKey = getAiApiKey();
+    } catch {
+      return new Response(JSON.stringify({ error: "AI not configured (set GEMINI_API_KEY)" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     const guide = LEVEL_GUIDE[level] ?? LEVEL_GUIDE.none;
@@ -145,27 +148,20 @@ Write every "reason" in ${nativeLang}.
 
 Return ONLY JSON in this exact shape: {"suggestions":[{"title":"...","reason":"one short sentence connecting it to their library and level"}]}.`;
 
-    const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: `You are an expert in anime and ${learning.name} language learning. Reply with valid JSON only.` },
-          { role: "user", content: prompt },
-        ],
-        response_format: { type: "json_object" },
-      }),
-    });
+    const aiResp = await callAiChatCompletions({
+      model: "gemini-2.5-flash",
+      messages: [
+        { role: "system", content: `You are an expert in anime and ${learning.name} language learning. Reply with valid JSON only.` },
+        { role: "user", content: prompt },
+      ],
+      response_format: { type: "json_object" },
+    }, aiApiKey);
 
     if (aiResp.status === 429) {
       return new Response(JSON.stringify({ error: "Rate limit, try again shortly." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
     if (aiResp.status === 402) {
-      return new Response(JSON.stringify({ error: "AI credits exhausted." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ error: "AI quota exhausted." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
     if (!aiResp.ok) {
       const t = await aiResp.text();

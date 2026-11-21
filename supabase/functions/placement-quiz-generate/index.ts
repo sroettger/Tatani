@@ -1,5 +1,6 @@
-// Generate a placement quiz (~20 adaptive questions across the learner's level scale) via Lovable AI.
+// Generate a placement quiz (~20 adaptive questions across the learner's level scale) via Gemini API.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { callAiChatCompletions, getAiApiKey } from "../_shared/ai.ts";
 import { getUserLanguages, uiLanguageName } from "../_shared/languages.ts";
 
 const corsHeaders = {
@@ -59,30 +60,25 @@ Deno.serve(async (req) => {
     const levels = learning.levels;
     const perLevel = Math.round(20 / levels.length);
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY missing");
+    const aiApiKey = getAiApiKey();
 
     const genForLevels = async (batchLevels: string[], count: number) => {
-      const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "google/gemini-3-flash-preview",
-          reasoning_effort: "low",
-          messages: [
-            {
-              role: "system",
-              content: `You write ${learning.name} placement quizzes. Return exactly ${count} multiple-choice questions at ${scale} level(s) ${batchLevels.join(", ")}. Each question tests vocabulary recognition (${learning.name} word → its meaning). Write the prompt and all four answer choices in ${nativeLang}. ${learning.morphological ? "Include the kana reading for each word." : "Leave the reading field as an empty string."} Provide 4 plausible distractors.`,
-            },
-            { role: "user", content: "Generate the questions now." },
-          ],
-          tools: [buildTool(learning.name, scale, batchLevels)],
-          tool_choice: { type: "function", function: { name: "build_placement_quiz" } },
-        }),
-      });
+      const aiResp = await callAiChatCompletions({
+        model: "gemini-2.5-flash",
+        reasoning_effort: "low",
+        messages: [
+          {
+            role: "system",
+            content: `You write ${learning.name} placement quizzes. Return exactly ${count} multiple-choice questions at ${scale} level(s) ${batchLevels.join(", ")}. Each question tests vocabulary recognition (${learning.name} word → its meaning). Write the prompt and all four answer choices in ${nativeLang}. ${learning.morphological ? "Include the kana reading for each word." : "Leave the reading field as an empty string."} Provide 4 plausible distractors.`,
+          },
+          { role: "user", content: "Generate the questions now." },
+        ],
+        tools: [buildTool(learning.name, scale, batchLevels)],
+        tool_choice: { type: "function", function: { name: "build_placement_quiz" } },
+      }, aiApiKey);
       if (!aiResp.ok) {
         const t = await aiResp.text();
-        console.error("AI gateway error", aiResp.status, t);
+        console.error("AI API error", aiResp.status, t);
         return { status: aiResp.status, questions: [] as any[] };
       }
       const aiJson = await aiResp.json();

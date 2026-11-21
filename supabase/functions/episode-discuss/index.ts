@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { callAiChatCompletions } from "../_shared/ai.ts";
 import { getUserLanguages, uiLanguageName } from "../_shared/languages.ts";
 
 const corsHeaders = {
@@ -108,20 +109,13 @@ ${sentenceContext || "(no subtitles available — ask general questions instead)
         }]
       : messages;
 
-    const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${Deno.env.get("LOVABLE_API_KEY")}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...finalMessages,
-        ],
-        stream: true,
-      }),
+    const aiResp = await callAiChatCompletions({
+      model: "gemini-2.5-flash",
+      messages: [
+        { role: "system", content: systemPrompt },
+        ...finalMessages,
+      ],
+      stream: true,
     });
 
     if (!aiResp.ok) {
@@ -131,13 +125,13 @@ ${sentenceContext || "(no subtitles available — ask general questions instead)
         });
       }
       if (aiResp.status === 402) {
-        return new Response(JSON.stringify({ error: "AI credits exhausted. Please add funds in Settings." }), {
+        return new Response(JSON.stringify({ error: "AI quota exhausted." }), {
           status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
       const t = await aiResp.text();
       console.error("AI error:", aiResp.status, t);
-      return new Response(JSON.stringify({ error: "AI gateway error" }), {
+      return new Response(JSON.stringify({ error: "AI API error" }), {
         status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }

@@ -24,7 +24,7 @@ type VocabItem = {
 
 type Msg = { role: "user" | "assistant"; content: string };
 
-type ToolCall = { name: string; args: any };
+type ToolCall = { name: string; args: Record<string, unknown> };
 
 export type TutorChatProps = {
   vocab: VocabItem[];
@@ -132,12 +132,14 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
     abortRef.current = controller;
 
     try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token ?? import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
       const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/tutor-chat`;
       const resp = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+          Authorization: `Bearer ${accessToken}`,
         },
         signal: controller.signal,
         body: JSON.stringify({
@@ -203,11 +205,11 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
 
       // Fire any tool calls we accumulated
       const calls: ToolCall[] = Object.values(toolAccum)
-        .filter((t) => t.name)
-        .map((t) => {
-          let args: any = {};
-          try { args = t.args ? JSON.parse(t.args) : {}; } catch { /* ignore */ }
-          return { name: t.name, args };
+        .filter((item) => item.name)
+        .map((item) => {
+          let args: Record<string, unknown> = {};
+          try { args = item.args ? (JSON.parse(item.args) as Record<string, unknown>) : {}; } catch { /* ignore */ }
+          return { name: item.name, args };
         });
       if (calls.length) handleToolCalls(calls);
 
@@ -215,8 +217,8 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
       if (!assistantSoFar && calls.length) {
         upsertAssistant("_(done)_");
       }
-    } catch (e: any) {
-      if (e?.name !== "AbortError") {
+    } catch (e: unknown) {
+      if (!(e instanceof Error && e.name === "AbortError")) {
         console.error(e);
         toast.error(t("tutor.connectionLost"));
       }

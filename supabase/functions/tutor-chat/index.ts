@@ -1,6 +1,8 @@
 // Streaming AI tutor for vocabulary learning in the learner's target language.
-// Uses Lovable AI Gateway. Supports tool calls for marking words known and
-// starting a mini-quiz from the episode's vocab.
+// Uses Google Gemini API (OpenAI-compatible) and supports tool calls for marking words known
+// and starting a mini-quiz from the episode's vocab.
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { callAiChatCompletions, getAiApiKey } from "../_shared/ai.ts";
 import { langInfo, uiLanguageName } from "../_shared/languages.ts";
 
 const corsHeaders = {
@@ -25,8 +27,27 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const supa = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_ANON_KEY") ?? Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ?? "",
+      { global: { headers: { Authorization: authHeader } } },
+    );
+    const { data: { user } } = await supa.auth.getUser();
+    if (!user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const aiApiKey = getAiApiKey();
 
     const body = await req.json();
     const messages: ChatMsg[] = Array.isArray(body?.messages) ? body.messages : [];
@@ -107,19 +128,12 @@ ${learning.morphological ? `- When showing ${learningLangName} text, include rea
       },
     ];
 
-    const upstream = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [{ role: "system", content: systemPrompt }, ...messages],
-        tools,
-        stream: true,
-      }),
-    });
+    const upstream = await callAiChatCompletions({
+      model: "gemini-2.5-flash",
+      messages: [{ role: "system", content: systemPrompt }, ...messages],
+      tools,
+      stream: true,
+    }, aiApiKey);
 
     if (!upstream.ok) {
       if (upstream.status === 429) {
@@ -130,13 +144,13 @@ ${learning.morphological ? `- When showing ${learningLangName} text, include rea
       }
       if (upstream.status === 402) {
         return new Response(
-          JSON.stringify({ error: "AI credits exhausted. Add funds in Settings → Workspace → Usage." }),
+          JSON.stringify({ error: "AI quota exhausted." }),
           { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
       const t = await upstream.text();
-      console.error("AI gateway error", upstream.status, t);
-      return new Response(JSON.stringify({ error: "AI gateway error" }), {
+      console.error("AI API error", upstream.status, t);
+      return new Response(JSON.stringify({ error: "AI API error" }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });

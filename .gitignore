@@ -10,7 +10,19 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+.env
+.env.*
+!.env.example
 *.local
+
+# Android build outputs
+android/.gradle
+android/.kotlin
+android/build
+android/app/build
+android/local.properties
+*.keystore
+*.jks
 
 # Editor directories and files
 .vscode/*

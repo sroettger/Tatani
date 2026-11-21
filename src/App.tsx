@@ -35,7 +35,7 @@ const App = () => (
     <TooltipProvider>
       <Toaster />
       <Sonner theme="dark" />
-      <BrowserRouter>
+      <BrowserRouter basename={import.meta.env.BASE_URL}>
         <AuthProvider>
           <I18nProvider>
             <Routes>

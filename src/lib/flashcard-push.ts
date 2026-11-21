@@ -13,7 +13,7 @@ export async function resumeForegroundPush() {
   const registrations = await navigator.serviceWorker.getRegistrations();
   const registration = registrations.find(r => {
     const worker = r.active;
-    return worker && new URL(worker.scriptURL).pathname === "/firebase-messaging-sw.js";
+    return worker && new URL(worker.scriptURL).pathname.endsWith("/firebase-messaging-sw.js");
   });
   const worker = registration?.active;
   if (!worker) return;
@@ -36,12 +36,13 @@ export async function notificationRequest<T>(body: Record<string, unknown>): Pro
 
 export async function enableFlashcardPush(): Promise<{ status: "registered"; token: string } | { status: "not-configured" | "unsupported" | "open-in-new-tab" | "denied" }> {
   if (window.top !== window.self) return { status: "open-in-new-tab" };
-  const appId = import.meta.env.VITE_LOVABLE_CONNECTOR_FIREBASE_MESSAGING_APP_ID;
-  const vapidKey = import.meta.env.VITE_LOVABLE_CONNECTOR_FIREBASE_MESSAGING_VAPID_KEY;
+  const appId = import.meta.env.VITE_FIREBASE_APP_ID;
+  const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
   const config = {
-    apiKey: import.meta.env.VITE_LOVABLE_CONNECTOR_FIREBASE_MESSAGING_WEB_API_KEY,
-    projectId: import.meta.env.VITE_LOVABLE_CONNECTOR_FIREBASE_MESSAGING_PROJECT_ID,
-    appId, messagingSenderId: appId?.split(":")[1] ?? "",
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+    appId,
+    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || appId?.split(":")[1] || "",
   };
   if (!config.apiKey || !config.projectId || !appId || !vapidKey || !config.messagingSenderId) return { status: "not-configured" };
   if (!("Notification" in window) || !("serviceWorker" in navigator)) return { status: "unsupported" };
@@ -49,7 +50,8 @@ export async function enableFlashcardPush(): Promise<{ status: "registered"; tok
   const permission = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
   if (permission !== "granted") return { status: "denied" };
   if (!(await isSupported())) return { status: "unsupported" };
-  const registration = await navigator.serviceWorker.register(`/firebase-messaging-sw.js?${new URLSearchParams(config)}`, { scope: "/push/", updateViaCache: "none" });
+  const baseUrl = import.meta.env.BASE_URL || "/";
+  const registration = await navigator.serviceWorker.register(`${baseUrl}firebase-messaging-sw.js?${new URLSearchParams(config)}`, { scope: `${baseUrl}push/`, updateViaCache: "none" });
   if (!registration.active) {
     await new Promise<void>((resolve, reject) => {
       const worker = registration.installing ?? registration.waiting;

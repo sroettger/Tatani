@@ -1,1 +1,0 @@
-ALTER TABLE public.flashcard_push_deliveries ADD COLUMN IF NOT EXISTS review_token uuid NOT NULL DEFAULT gen_random_uuid();

@@ -80,6 +80,14 @@ fun AuthScreen(
                     color = WashiMuted,
                 )
 
+                if (app.tatani.android.BuildConfig.SUPABASE_URL.contains("placeholder.supabase.co")) {
+                    Text(
+                        text = "Backend not configured yet: add SUPABASE_URL and SUPABASE_ANON_KEY to GitHub Secrets and rebuild.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+
                 if (!message.isNullOrBlank()) {
                     Text(
                         text = message,
