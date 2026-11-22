@@ -4,7 +4,7 @@ import {
   jsonResponse,
   requireAuthUser,
 } from "../_shared/auth.ts";
-import { callAiChatCompletions } from "../_shared/ai.ts";
+import { callAiChatCompletions, DEFAULT_AI_MODEL, getAiApiKey } from "../_shared/ai.ts";
 import { getUserLanguages, uiLanguageName } from "../_shared/languages.ts";
 
 type StudiedWordRow = {
@@ -118,44 +118,47 @@ ${wordList}
 EPISODE SENTENCE CONTEXT (for plot reference):
 ${sentenceContext}`;
 
-    const aiResp = await callAiChatCompletions({
-      model: "gemini-2.5-flash",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      tools: [
-        {
-          type: "function",
-          function: {
-            name: "write_summary",
-            description: "Write the recap summary",
-            parameters: {
-              type: "object",
-              properties: {
-                summary_jp: {
-                  type: "string",
-                  description: `${learning.name} recap, 4-7 sentences, with **word** highlights.`,
+    const aiResp = await callAiChatCompletions(
+      {
+        model: DEFAULT_AI_MODEL,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "write_summary",
+              description: "Write the recap summary",
+              parameters: {
+                type: "object",
+                properties: {
+                  summary_jp: {
+                    type: "string",
+                    description: `${learning.name} recap, 4-7 sentences, with **word** highlights.`,
+                  },
+                  summary_en: {
+                    type: "string",
+                    description: `Translation into ${nativeLang} with **word** highlights matching the ${learning.name} version.`,
+                  },
+                  used_words: {
+                    type: "array",
+                    description:
+                      "List of vocabulary words from the studied list that were actually used in the summary.",
+                    items: { type: "string" },
+                  },
                 },
-                summary_en: {
-                  type: "string",
-                  description: `Translation into ${nativeLang} with **word** highlights matching the ${learning.name} version.`,
-                },
-                used_words: {
-                  type: "array",
-                  description:
-                    "List of vocabulary words from the studied list that were actually used in the summary.",
-                  items: { type: "string" },
-                },
+                required: ["summary_jp", "summary_en", "used_words"],
+                additionalProperties: false,
               },
-              required: ["summary_jp", "summary_en", "used_words"],
-              additionalProperties: false,
             },
           },
-        },
-      ],
-      tool_choice: { type: "function", function: { name: "write_summary" } },
-    });
+        ],
+        tool_choice: { type: "function", function: { name: "write_summary" } },
+      },
+      getAiApiKey(req),
+    );
 
     if (!aiResp.ok) {
       if (aiResp.status === 429) {

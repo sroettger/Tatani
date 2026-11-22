@@ -5,7 +5,7 @@ import {
   jsonResponse,
   requireAuthUser,
 } from "../_shared/auth.ts";
-import { callAiChatCompletions, getAiApiKey } from "../_shared/ai.ts";
+import { callAiChatCompletions, DEFAULT_AI_MODEL, getAiApiKey } from "../_shared/ai.ts";
 import { getUserLanguages, uiLanguageName } from "../_shared/languages.ts";
 
 const ANILIST_URL = "https://graphql.anilist.co";
@@ -182,7 +182,7 @@ Deno.serve(async (req) => {
 
     let aiApiKey: string;
     try {
-      aiApiKey = getAiApiKey();
+      aiApiKey = getAiApiKey(req);
     } catch {
       return jsonResponse({ error: "AI not configured (set GEMINI_API_KEY)" }, 500);
     }
@@ -224,7 +224,7 @@ Return ONLY JSON in this exact shape: {"suggestions":[{"title":"...","reason":"o
 
     const aiResp = await callAiChatCompletions(
       {
-        model: "gemini-2.5-flash",
+        model: DEFAULT_AI_MODEL,
         messages: [
           {
             role: "system",

@@ -4,7 +4,12 @@ import {
   jsonResponse,
   requireAuthUser,
 } from "../_shared/auth.ts";
-import { callAiChatCompletions, validateClientMessages } from "../_shared/ai.ts";
+import {
+  callAiChatCompletions,
+  DEFAULT_AI_MODEL,
+  getAiApiKey,
+  validateClientMessages,
+} from "../_shared/ai.ts";
 import { getUserLanguages, uiLanguageName } from "../_shared/languages.ts";
 
 type StudiedWordRow = {
@@ -145,11 +150,14 @@ ${sentenceContext || "(no subtitles available — ask general questions instead)
           ]
         : messages;
 
-    const aiResp = await callAiChatCompletions({
-      model: "gemini-2.5-flash",
-      messages: [{ role: "system", content: systemPrompt }, ...finalMessages],
-      stream: true,
-    });
+    const aiResp = await callAiChatCompletions(
+      {
+        model: DEFAULT_AI_MODEL,
+        messages: [{ role: "system", content: systemPrompt }, ...finalMessages],
+        stream: true,
+      },
+      getAiApiKey(req),
+    );
 
     if (!aiResp.ok) {
       if (aiResp.status === 429) {

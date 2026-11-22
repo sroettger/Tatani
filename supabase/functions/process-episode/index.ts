@@ -7,7 +7,12 @@ import {
   jsonResponse,
   requireAuthUser,
 } from "../_shared/auth.ts";
-import { callAiChatCompletions, getAiApiKey } from "../_shared/ai.ts";
+import {
+  callAiChatCompletions,
+  DEFAULT_AI_MODEL,
+  extractAiErrorDetail,
+  getAiApiKey,
+} from "../_shared/ai.ts";
 import { getOfficialJlptLevel } from "../_shared/jlpt-lookup.ts";
 import { cleanSubtitleDialogue } from "../_shared/subtitles.ts";
 import { extractVocabFromSubtitles, type VocabEntry } from "../_shared/tokenize-jp.ts";
@@ -15,8 +20,8 @@ import { extractVocabLatin } from "../_shared/tokenize-latin.ts";
 import { getUserLanguages, uiLanguageName } from "../_shared/languages.ts";
 
 const MAX_SUBTITLE_LENGTH = 600_000;
-const BATCH_SIZE = 50;
-const MAX_CONCURRENCY = 4;
+const BATCH_SIZE = 100;
+const MAX_CONCURRENCY = 2;
 const MOBILE_SYNC_WORD_CAP = 200;
 
 type UnusualKanaSuggestion = {
@@ -201,7 +206,7 @@ ${sample}`;
   try {
     const aiResp = await callAiChatCompletions(
       {
-        model: "gemini-2.5-flash",
+        model: DEFAULT_AI_MODEL,
         messages: [
           {
             role: "system",
@@ -283,7 +288,7 @@ Deno.serve(async (req) => {
     if (auth instanceof Response) return auth;
     const { userId } = auth;
 
-    const aiApiKey = getAiApiKey();
+    const aiApiKey = getAiApiKey(req);
 
     const { episode_id, subtitle_text, wait } = (await req.json()) as {
       episode_id?: unknown;
@@ -348,7 +353,7 @@ Deno.serve(async (req) => {
       batch: TaggedVocab[],
       idx: number,
       onDone?: () => void,
-    ): Promise<BatchResult | null> => {
+    ): Promise<{ ok: true; data: BatchResult } | { ok: false; error: string }> => {
       const wordsPayload = batch.map((v) => ({
         word: v.word,
         reading: v.reading,
@@ -361,12 +366,12 @@ Deno.serve(async (req) => {
       const userMessage = `Translate each ${learning.name} word below into ${explainLang} using its example sentence as context. ${levelInstruction} Also extract any meaningful grammar points used in these sentences (particles/conjugations/common patterns), each tagged with a difficulty level from: ${learning.levels.join(", ")}.\n\nWORDS:\n${JSON.stringify(wordsPayload, null, 2)}`;
 
       try {
-        let lastErr: unknown;
+        let lastErrMsg = "unknown AI error";
         for (let attempt = 0; attempt < 3; attempt++) {
           try {
             const aiResp = await callAiChatCompletions(
               {
-                model: "gemini-2.5-flash",
+                model: DEFAULT_AI_MODEL,
                 messages: [
                   {
                     role: "system",
@@ -383,12 +388,13 @@ Deno.serve(async (req) => {
             if (!aiResp.ok) {
               const status = aiResp.status;
               const t = await aiResp.text();
+              const detail = extractAiErrorDetail(t, status);
               if ((status === 429 || status === 500 || status === 502 || status === 503) && attempt < 2) {
-                const backoffMs = 800 * Math.pow(2, attempt) + Math.floor(Math.random() * 250);
+                const backoffMs = 2500 * Math.pow(2, attempt) + Math.floor(Math.random() * 400);
                 await new Promise((r) => setTimeout(r, backoffMs));
                 continue;
               }
-              throw new Error(`ai_${status}: ${t.slice(0, 300)}`);
+              throw new Error(`ai_${detail}`);
             }
 
             const aiJson = (await aiResp.json()) as {
@@ -437,19 +443,19 @@ Deno.serve(async (req) => {
               }
             }
 
-            return { meanings, grammar };
+            return { ok: true, data: { meanings, grammar } };
           } catch (attemptErr) {
-            lastErr = attemptErr;
-            if (attempt < 2 && !(attemptErr instanceof Error && attemptErr.message.startsWith("ai_4"))) {
-              const backoffMs = 800 * Math.pow(2, attempt) + Math.floor(Math.random() * 250);
+            lastErrMsg = attemptErr instanceof Error ? attemptErr.message : String(attemptErr);
+            if (attempt < 2 && !lastErrMsg.startsWith("ai_40") && !lastErrMsg.startsWith("ai_429")) {
+              const backoffMs = 2000 * Math.pow(2, attempt) + Math.floor(Math.random() * 400);
               await new Promise((r) => setTimeout(r, backoffMs));
               continue;
             }
             break;
           }
         }
-        console.warn(`Batch ${idx} failed:`, lastErr instanceof Error ? lastErr.message : String(lastErr));
-        return null;
+        console.warn(`Batch ${idx} failed:`, lastErrMsg);
+        return { ok: false, error: lastErrMsg.replace(/^ai_/, "") };
       } finally {
         onDone?.();
       }
@@ -463,6 +469,7 @@ Deno.serve(async (req) => {
       grammarMap: Map<string, GrammarItem>;
       okBatches: number;
       totalBatches: number;
+      firstError: string | null;
     }> => {
       const batches: TaggedVocab[][] = [];
       for (let i = 0; i < slice.length; i += BATCH_SIZE) {
@@ -490,7 +497,9 @@ Deno.serve(async (req) => {
           }
         : undefined;
 
-      const results: Array<BatchResult | null> = new Array(batches.length);
+      const results: Array<{ ok: true; data: BatchResult } | { ok: false; error: string }> = new Array(
+        batches.length,
+      );
       let cursor = 0;
       const workers = Array.from({ length: Math.min(MAX_CONCURRENCY, batches.length) }, async () => {
         while (true) {
@@ -504,11 +513,15 @@ Deno.serve(async (req) => {
       const allMeanings = new Map<string, TranslatedWord>();
       const grammarMap = new Map<string, GrammarItem>();
       let okBatches = 0;
+      let firstError: string | null = null;
       for (const r of results) {
-        if (!r) continue;
+        if (!r.ok) {
+          if (!firstError) firstError = r.error;
+          continue;
+        }
         okBatches++;
-        for (const [w, m] of r.meanings) allMeanings.set(w, m);
-        for (const g of r.grammar) {
+        for (const [w, m] of r.data.meanings) allMeanings.set(w, m);
+        for (const g of r.data.grammar) {
           if (g.pattern && !grammarMap.has(g.pattern)) grammarMap.set(g.pattern, g);
         }
       }
@@ -531,7 +544,7 @@ Deno.serve(async (req) => {
         })
         .filter((v) => v.meaning.length > 0);
 
-      return { vocab, grammarMap, okBatches, totalBatches: batches.length };
+      return { vocab, grammarMap, okBatches, totalBatches: batches.length, firstError };
     };
 
     const work = (async (): Promise<
@@ -578,10 +591,14 @@ Deno.serve(async (req) => {
         const top = waitForCompletion ? tagged.slice(0, MOBILE_SYNC_WORD_CAP) : tagged;
         const remainingTagged = waitForCompletion ? tagged.slice(MOBILE_SYNC_WORD_CAP) : [];
 
-        const { vocab: finalVocab, grammarMap, okBatches, totalBatches } = await translateSlice(top, true);
+        const { vocab: finalVocab, grammarMap, okBatches, totalBatches, firstError } = await translateSlice(
+          top,
+          true,
+        );
 
         if (totalBatches === 0 || okBatches / totalBatches < 0.8) {
-          throw new Error(`Insufficient AI batch success (${okBatches}/${totalBatches} batches succeeded)`);
+          const suffix = firstError ? `: ${firstError}` : "";
+          throw new Error(`AI translation failed (${okBatches}/${totalBatches} batches succeeded)${suffix}`);
         }
         if (finalVocab.length === 0) {
           throw new Error("No translated vocabulary produced");

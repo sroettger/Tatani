@@ -6,7 +6,12 @@ import {
   jsonResponse,
   requireAuthUser,
 } from "../_shared/auth.ts";
-import { callAiChatCompletions, getAiApiKey, validateClientMessages } from "../_shared/ai.ts";
+import {
+  callAiChatCompletions,
+  DEFAULT_AI_MODEL,
+  getAiApiKey,
+  validateClientMessages,
+} from "../_shared/ai.ts";
 import { langInfo, uiLanguageName } from "../_shared/languages.ts";
 
 type VocabItem = {
@@ -26,7 +31,7 @@ Deno.serve(async (req) => {
     const auth = await requireAuthUser(req);
     if (auth instanceof Response) return auth;
 
-    const aiApiKey = getAiApiKey();
+    const aiApiKey = getAiApiKey(req);
 
     const body = (await req.json()) as {
       messages?: unknown;
@@ -128,7 +133,7 @@ ${learning.morphological ? `- When showing ${learningLangName} text, include rea
 
     const upstream = await callAiChatCompletions(
       {
-        model: "gemini-2.5-flash",
+        model: DEFAULT_AI_MODEL,
         messages: [{ role: "system", content: systemPrompt }, ...messages],
         tools,
         stream: true,

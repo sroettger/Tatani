@@ -16,7 +16,7 @@ Tatani is a standalone Japanese vocabulary & comprehension trainer built around 
    - Encodes 6 new episode words at a time with full subtitle scene context, kanji character breakdowns, readings, and immediate short-lag recall before graduating words (`srs_due_at`) into spaced repetition.
 3. **Standalone Backend (Supabase + Direct Google Gemini API):**
    - **Database & Auth:** Self-owned Supabase project (`supabase/migrations/`), with standard Supabase Email/Password + Google OAuth.
-   - **AI Extraction & Tutoring:** Direct calls to Google Gemini's OpenAI-compatible endpoint (`gemini-2.5-flash`) via `GEMINI_API_KEY` in `supabase/functions/_shared/ai.ts`.
+   - **AI Extraction & Tutoring:** Direct calls to Google Gemini's OpenAI-compatible endpoint (`gemini-3.5-flash-lite` with automatic fallback across `3.1` / `2.5` Flash-Lite) via `GEMINI_API_KEY` in `supabase/functions/_shared/ai.ts`.
    - **Notifications:** Native Android `WorkManager` booster notifications (`DueBoosterWorker.kt`) + direct Firebase Cloud Messaging HTTP v1 (`supabase/functions/_shared/fcm.ts`) for web push.
 
 ---

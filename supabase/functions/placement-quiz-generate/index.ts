@@ -5,7 +5,7 @@ import {
   jsonResponse,
   requireAuthUser,
 } from "../_shared/auth.ts";
-import { callAiChatCompletions, getAiApiKey } from "../_shared/ai.ts";
+import { callAiChatCompletions, DEFAULT_AI_MODEL, getAiApiKey } from "../_shared/ai.ts";
 import { getUserLanguages, uiLanguageName } from "../_shared/languages.ts";
 
 type RawQuizQuestion = {
@@ -116,7 +116,7 @@ Deno.serve(async (req) => {
     const scale = learning.scale === "jlpt" ? "JLPT" : "CEFR";
     const levels = learning.levels;
 
-    const aiApiKey = getAiApiKey();
+    const aiApiKey = getAiApiKey(req);
 
     const genForLevelsOnce = async (
       batchLevels: string[],
@@ -125,8 +125,7 @@ Deno.serve(async (req) => {
       try {
         const aiResp = await callAiChatCompletions(
           {
-            model: "gemini-2.5-flash",
-            reasoning_effort: "low",
+            model: DEFAULT_AI_MODEL,
             messages: [
               {
                 role: "system",

@@ -3,9 +3,24 @@
 // with optional AI_BASE_URL / AI_API_KEY / AI_MODEL overrides for any OpenAI-compatible provider.
 
 const DEFAULT_AI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
-const DEFAULT_AI_MODEL = "gemini-2.5-flash";
+export const DEFAULT_AI_MODEL = "gemini-3.5-flash-lite";
+export const GEMINI_FALLBACK_MODELS = [
+  "gemini-3.5-flash-lite",
+  "gemini-3.1-flash-lite",
+  "gemini-2.5-flash-lite",
+] as const;
 
-export function getAiApiKey(): string {
+const DEPRECATED_GEMINI_MODELS = new Set([
+  "gemini-2.5-flash",
+  "gemini-2.5-pro",
+  "gemini-3-flash-preview",
+  "gemini-2.0-flash",
+  "gemini-2.0-flash-lite",
+]);
+
+export function getAiApiKey(req?: Request): string {
+  const userKey = req?.headers.get("x-gemini-api-key")?.trim();
+  if (userKey) return userKey;
   const key = Deno.env.get("GEMINI_API_KEY")?.trim() || Deno.env.get("AI_API_KEY")?.trim();
   if (!key) {
     throw new Error("GEMINI_API_KEY is not configured in Supabase Edge Function secrets");
@@ -17,9 +32,28 @@ export function resolveAiModel(requested?: string): string {
   const override = Deno.env.get("AI_MODEL")?.trim();
   if (override) return override;
   if (!requested) return DEFAULT_AI_MODEL;
-  const stripped = requested.replace(/^google\//i, "");
-  if (stripped === "gemini-3-flash-preview") return DEFAULT_AI_MODEL;
-  return stripped || DEFAULT_AI_MODEL;
+  const stripped = requested.replace(/^google\//i, "").trim();
+  if (!stripped || DEPRECATED_GEMINI_MODELS.has(stripped)) return DEFAULT_AI_MODEL;
+  return stripped;
+}
+
+export function extractAiErrorDetail(rawBody: string, status: number): string {
+  const trimmed = rawBody.trim();
+  if (!trimmed) return `HTTP ${status}`;
+  try {
+    const parsed = JSON.parse(trimmed) as {
+      error?: { message?: string; status?: string } | string;
+      message?: string;
+    };
+    if (typeof parsed.error === "string") return `${status}: ${parsed.error}`.slice(0, 220);
+    if (parsed.error && typeof parsed.error === "object" && parsed.error.message) {
+      return `${status}: ${parsed.error.message}`.slice(0, 220);
+    }
+    if (typeof parsed.message === "string") return `${status}: ${parsed.message}`.slice(0, 220);
+  } catch {
+    // Non-JSON upstream error
+  }
+  return `${status}: ${trimmed.slice(0, 200)}`;
 }
 
 /**
@@ -39,31 +73,93 @@ export function sanitizeToolsForGemini(val: unknown): unknown {
   return val;
 }
 
+function isPermanentAuthFailure(status: number, bodyText: string): boolean {
+  if (status === 401) return true;
+  if (status === 400 || status === 403) {
+    const lower = bodyText.toLowerCase();
+    return lower.includes("api_key_invalid") || lower.includes("api key not valid");
+  }
+  return false;
+}
+
 export async function callAiChatCompletions(
   payload: Record<string, unknown>,
   explicitApiKey?: string,
+  fetchImpl: typeof fetch = fetch,
 ): Promise<Response> {
   const apiKey = explicitApiKey || getAiApiKey();
   const endpoint = Deno.env.get("AI_BASE_URL")?.trim() || DEFAULT_AI_URL;
-  const model = resolveAiModel(typeof payload.model === "string" ? payload.model : undefined);
+  const primaryModel = resolveAiModel(typeof payload.model === "string" ? payload.model : undefined);
+  const isGeminiEndpoint = endpoint.includes("generativelanguage.googleapis.com");
+  const hasExplicitModelEnv = Boolean(Deno.env.get("AI_MODEL")?.trim());
 
-  const body: Record<string, unknown> = {
-    ...payload,
-    model,
-  };
+  const sanitizedTools =
+    isGeminiEndpoint && payload.tools ? sanitizeToolsForGemini(payload.tools) : payload.tools;
 
-  if (endpoint.includes("generativelanguage.googleapis.com") && body.tools) {
-    body.tools = sanitizeToolsForGemini(body.tools);
+  const candidateModels =
+    isGeminiEndpoint && !hasExplicitModelEnv
+      ? Array.from(new Set([primaryModel, ...GEMINI_FALLBACK_MODELS]))
+      : [primaryModel];
+
+  let lastResponse: Response | null = null;
+  for (let i = 0; i < candidateModels.length; i++) {
+    const model = candidateModels[i];
+    const body: Record<string, unknown> = {
+      ...payload,
+      model,
+    };
+    if (sanitizedTools !== undefined) {
+      body.tools = sanitizedTools;
+    }
+
+    const resp = await fetchImpl(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (resp.ok || i === candidateModels.length - 1) {
+      return resp;
+    }
+
+    const errText = await resp.text();
+    if (isPermanentAuthFailure(resp.status, errText)) {
+      return new Response(errText, {
+        status: resp.status,
+        statusText: resp.statusText,
+        headers: resp.headers,
+      });
+    }
+
+    if (
+      resp.status === 429 ||
+      resp.status === 404 ||
+      resp.status === 403 ||
+      resp.status === 400 ||
+      resp.status >= 500
+    ) {
+      console.warn(
+        `Gemini model '${model}' returned ${resp.status} (${extractAiErrorDetail(errText, resp.status)}); falling back to '${candidateModels[i + 1]}'`,
+      );
+      lastResponse = new Response(errText, {
+        status: resp.status,
+        statusText: resp.statusText,
+        headers: resp.headers,
+      });
+      continue;
+    }
+
+    return new Response(errText, {
+      status: resp.status,
+      statusText: resp.statusText,
+      headers: resp.headers,
+    });
   }
 
-  return await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+  return lastResponse as Response;
 }
 
 export type ValidatedChatMessage = {
