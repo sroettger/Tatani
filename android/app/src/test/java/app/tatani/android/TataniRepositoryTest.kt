@@ -555,4 +555,50 @@ class TataniRepositoryTest {
         assertTrue(okRes.isSuccess)
         assertNull("Session must be cleared once server deletion succeeds", store.session.value)
     }
+
+    @Test
+    fun largeMultiEpisodeAnimeProbesVocabCachesWithoutFullPayloadLoops() = runTest {
+        val probeCalls = ArrayList<String>()
+        val vocabCalls = ArrayList<String>()
+
+        val http = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                if (req.url.encodedPath.endsWith("/rest/v1/episode_vocab_cache")) {
+                    val select = req.url.queryParameter("select").orEmpty()
+                    val epFilter = req.url.queryParameter("episode_id").orEmpty()
+                    val queriedIds = epFilter.removePrefix("in.(").removeSuffix(")").split(",")
+                    if (select == "episode_id") {
+                        probeCalls += epFilter
+                        if ("ep-1" in queriedIds) {
+                            jsonResponse(req, 200, """[{"episode_id":"ep-1"}]""")
+                        } else {
+                            jsonResponse(req, 200, "[]")
+                        }
+                    } else {
+                        vocabCalls += epFilter
+                        jsonResponse(
+                            req,
+                            200,
+                            """[{"episode_id":"ep-1","vocab":[{"word":"冒険","reading":"ぼうけん","meaning":"adventure","level":"N3"}]}]"""
+                        )
+                    }
+                } else {
+                    jsonResponse(req, 200, "[]")
+                }
+            }
+            .build()
+
+        val store = SessionStore.inMemory(activeSession())
+        val client = SupabaseClient(store, "https://mock.supabase.co", "anon", http)
+
+        val twoHundredIds = (1..200).map { "ep-$it" }
+        val result = client.fetchEpisodeVocabCaches(twoHundredIds, "ja")
+
+        assertEquals(2, probeCalls.size)
+        assertEquals(1, vocabCalls.size)
+        assertEquals("in.(ep-1)", vocabCalls.single())
+        assertEquals(1, result.size)
+        assertEquals("ep-1", result.single().episodeId)
+    }
 }

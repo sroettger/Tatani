@@ -593,8 +593,41 @@ class SupabaseClient(
     suspend fun fetchEpisodeVocabCaches(episodeIds: List<String>, lang: String): List<EpisodeVocabCacheDto> =
         withContext(Dispatchers.IO) {
             if (episodeIds.isEmpty()) return@withContext emptyList()
+
+            val targetIds: List<String> = if (episodeIds.size > 25) {
+                val cachedIds = LinkedHashSet<String>()
+                for (batch in episodeIds.chunked(180)) {
+                    val inList = batch.joinToString(",")
+                    val url = "$baseUrl/rest/v1/episode_vocab_cache".toHttpUrl().newBuilder()
+                        .addQueryParameter("episode_id", "in.($inList)")
+                        .addQueryParameter("language", "eq.$lang")
+                        .addQueryParameter("select", "episode_id")
+                        .build()
+                    executeAuthenticated { token ->
+                        Request.Builder()
+                            .url(url)
+                            .header("apikey", anonKey)
+                            .header("Authorization", "Bearer $token")
+                            .get()
+                            .build()
+                    }.use { resp ->
+                        val raw = resp.body?.string().orEmpty()
+                        if (!resp.isSuccessful) {
+                            throw IOException("Episode vocab cache probe failed (${resp.code}): ${raw.take(180)}")
+                        }
+                        for (row in json.decodeFromString<List<EpisodeCacheExistsDto>>(raw)) {
+                            cachedIds += row.episodeId
+                        }
+                    }
+                }
+                if (cachedIds.isEmpty()) return@withContext emptyList()
+                cachedIds.toList()
+            } else {
+                episodeIds
+            }
+
             val out = mutableListOf<EpisodeVocabCacheDto>()
-            for (batch in episodeIds.chunked(25)) {
+            for (batch in targetIds.chunked(25)) {
                 val inList = batch.joinToString(",")
                 val url = "$baseUrl/rest/v1/episode_vocab_cache".toHttpUrl().newBuilder()
                     .addQueryParameter("episode_id", "in.($inList)")

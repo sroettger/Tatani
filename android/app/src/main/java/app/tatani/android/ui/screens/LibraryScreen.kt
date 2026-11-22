@@ -94,6 +94,8 @@ fun LibraryScreen(
     val dailyStreak by viewModel.dailyStreak.collectAsState()
     val processingIds by viewModel.processingEpisodeIds.collectAsState()
     val batchProcessState by viewModel.batchProcessState.collectAsState()
+    val addingAnime by viewModel.addingAnime.collectAsState()
+    val addAnimeError by viewModel.addAnimeError.collectAsState()
 
     val groupedByAnime = remember(episodes) {
         episodes.groupBy { it.animeId }.values.toList()
@@ -159,7 +161,10 @@ fun LibraryScreen(
                         Icon(Icons.Outlined.Refresh, contentDescription = "Sync")
                     }
                 }
-                IconButton(onClick = { addDialogOpen = true }) {
+                IconButton(onClick = {
+                    viewModel.clearAddAnimeError()
+                    addDialogOpen = true
+                }) {
                     Icon(Icons.Outlined.Add, contentDescription = "Add anime")
                 }
                 IconButton(onClick = { accountDialogOpen = true }) {
@@ -181,7 +186,7 @@ fun LibraryScreen(
         )
         Spacer(Modifier.height(14.dp))
 
-        val visibleError = removeError ?: syncError
+        val visibleError = addAnimeError ?: removeError ?: syncError
         if (!visibleError.isNullOrBlank()) {
             Text(
                 text = visibleError,
@@ -191,7 +196,69 @@ fun LibraryScreen(
             )
         }
 
-        if (groupedByAnime.isEmpty()) {
+        val pendingAdd = addingAnime
+        if (pendingAdd != null) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 10.dp),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = SumiSurface),
+                border = BorderStroke(1.dp, VermilionPrimary.copy(alpha = 0.55f)),
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (!pendingAdd.coverUrl.isNullOrBlank()) {
+                            AsyncImage(
+                                model = pendingAdd.coverUrl,
+                                contentDescription = pendingAdd.title,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(width = 44.dp, height = 60.dp)
+                                    .clip(RoundedCornerShape(8.dp)),
+                            )
+                            Spacer(Modifier.width(12.dp))
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Adding \"${pendingAdd.title}\"…",
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = if (pendingAdd.episodeCount > 0) {
+                                    "Setting up ${pendingAdd.episodeCount} episodes in your library…"
+                                } else {
+                                    "Setting up episodes in your library…"
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                color = WashiMuted,
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        CircularProgressIndicator(
+                            strokeWidth = 2.5.dp,
+                            color = VermilionPrimary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    LinearProgressIndicator(
+                        color = VermilionPrimary,
+                        trackColor = SumiElevated,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(4.dp)),
+                    )
+                }
+            }
+        }
+
+        if (groupedByAnime.isEmpty() && pendingAdd == null) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(18.dp),
@@ -208,7 +275,10 @@ fun LibraryScreen(
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Button(
-                        onClick = { addDialogOpen = true },
+                        onClick = {
+                            viewModel.clearAddAnimeError()
+                            addDialogOpen = true
+                        },
                         colors = ButtonDefaults.buttonColors(containerColor = VermilionPrimary),
                         shape = RoundedCornerShape(12.dp),
                     ) {
@@ -218,7 +288,7 @@ fun LibraryScreen(
                     }
                 }
             }
-        } else {
+        } else if (groupedByAnime.isNotEmpty()) {
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.fillMaxSize(),
@@ -801,11 +871,14 @@ private fun AddAnimeModal(
     onDismiss: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val addingAnime by viewModel.addingAnime.collectAsState()
+    val addAnimeError by viewModel.addAnimeError.collectAsState()
     var query by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
-    var addingId by remember { mutableStateOf<Int?>(null) }
-    var errorText by remember { mutableStateOf<String?>(null) }
+    var searchErrorText by remember { mutableStateOf<String?>(null) }
     var results by remember { mutableStateOf<List<AnimeSearchResultDto>>(emptyList()) }
+
+    val activeError = addAnimeError ?: searchErrorText
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -829,22 +902,64 @@ private fun AddAnimeModal(
                             if (query.isBlank()) return@Button
                             scope.launch {
                                 searching = true
-                                errorText = null
+                                searchErrorText = null
+                                viewModel.clearAddAnimeError()
                                 viewModel.searchAnime(query)
                                     .onSuccess { results = it }
-                                    .onFailure { errorText = it.message }
+                                    .onFailure { searchErrorText = it.message }
                                 searching = false
                             }
                         },
                         enabled = !searching && query.isNotBlank(),
                         colors = ButtonDefaults.buttonColors(containerColor = VermilionPrimary),
                     ) {
-                        Text(if (searching) "…" else "Go")
+                        if (searching) {
+                            CircularProgressIndicator(
+                                strokeWidth = 2.dp,
+                                color = WashiForeground,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        } else {
+                            Text("Go")
+                        }
                     }
                 }
 
-                if (!errorText.isNullOrBlank()) {
-                    Text(errorText!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelMedium)
+                val inFlight = addingAnime
+                if (inFlight != null) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = SumiElevated,
+                        border = BorderStroke(1.dp, VermilionPrimary.copy(alpha = 0.5f)),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text(
+                                text = if (inFlight.episodeCount > 0) {
+                                    "Adding \"${inFlight.title}\" (${inFlight.episodeCount} eps)… Safe to close — continues in background."
+                                } else {
+                                    "Adding \"${inFlight.title}\"… Safe to close — continues in background."
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                color = WashiForeground,
+                            )
+                            LinearProgressIndicator(
+                                color = VermilionPrimary,
+                                trackColor = SumiSurface,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(3.dp)
+                                    .clip(RoundedCornerShape(3.dp)),
+                            )
+                        }
+                    }
+                }
+
+                if (!activeError.isNullOrBlank()) {
+                    Text(activeError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelMedium)
                 }
 
                 LazyColumn(
@@ -852,6 +967,7 @@ private fun AddAnimeModal(
                     modifier = Modifier.height(280.dp),
                 ) {
                     items(results, key = { it.anilistId }) { item ->
+                        val isAddingThis = inFlight?.anilistId == item.anilistId
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = SumiElevated,
@@ -869,25 +985,32 @@ private fun AddAnimeModal(
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
+                                    val epLabel = if (item.episodeCount > 0) "${item.episodeCount} eps" else "? eps"
+                                    val yearLabel = item.year?.toString().orEmpty()
                                     Text(
-                                        text = "${item.episodeCount} eps · ${item.year ?: ""}",
+                                        text = if (yearLabel.isNotBlank()) "$epLabel · $yearLabel" else epLabel,
                                         style = MaterialTheme.typography.labelMedium,
                                         color = WashiMuted,
                                     )
                                 }
                                 OutlinedButton(
                                     onClick = {
-                                        scope.launch {
-                                            addingId = item.anilistId
-                                            viewModel.addAnime(item)
-                                                .onSuccess { onDismiss() }
-                                                .onFailure { errorText = it.message }
-                                            addingId = null
-                                        }
+                                        searchErrorText = null
+                                        viewModel.enqueueAddAnime(item, onSuccess = onDismiss)
                                     },
-                                    enabled = addingId == null,
+                                    enabled = inFlight == null,
                                 ) {
-                                    Text(if (addingId == item.anilistId) "…" else "Add")
+                                    if (isAddingThis) {
+                                        CircularProgressIndicator(
+                                            strokeWidth = 2.dp,
+                                            color = VermilionPrimary,
+                                            modifier = Modifier.size(14.dp),
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Adding…")
+                                    } else {
+                                        Text("Add")
+                                    }
                                 }
                             }
                         }

@@ -3,12 +3,12 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { Plus, ChevronRight, Sparkles, Trash2, GripVertical } from "lucide-react";
+import { Plus, ChevronRight, Sparkles, Trash2, GripVertical, Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import { useI18n } from "@/i18n";
-import { AddAnimeDialog } from "@/components/AddAnimeDialog";
+import { AddAnimeDialog, type AnimeSearchResult } from "@/components/AddAnimeDialog";
 import { invalidateLocalSrsCache } from "@/lib/srs-store";
 import { fetchAllPages, fetchBatchedPages } from "@/lib/supabase-pagination";
 import {
@@ -141,6 +141,7 @@ export default function Home() {
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
+  const [addingAnime, setAddingAnime] = useState<AnimeSearchResult | null>(null);
   const [removeTarget, setRemoveTarget] = useState<LibraryEntry | null>(null);
   const [removing, setRemoving] = useState(false);
 
@@ -280,8 +281,47 @@ export default function Home() {
       </div>
 
       <div className="px-5 grid gap-3 min-w-0">
-        {loading && <div className="text-muted-foreground text-sm">{t("common.loading")}</div>}
-        {!loading && library.length === 0 && (
+        {addingAnime && (
+          <Card
+            role="status"
+            aria-live="polite"
+            className="p-3 gradient-card border-primary/50 shadow-card overflow-hidden"
+          >
+            <div className="flex gap-3 items-center min-w-0">
+              <div className="w-12 h-16 rounded-lg overflow-hidden bg-muted flex-shrink-0">
+                {addingAnime.cover_url ? (
+                  <img
+                    src={addingAnime.cover_url}
+                    alt={addingAnime.title_romaji}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="w-full h-full grid place-items-center text-muted-foreground text-xs">
+                    {t("home.noCover")}
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold text-sm truncate">
+                  {t("home.addingCardTitle", {
+                    title: addingAnime.title_en ?? addingAnime.title_romaji,
+                  })}
+                </div>
+                <div className="text-xs text-muted-foreground mt-0.5 truncate">
+                  {addingAnime.episode_count > 0
+                    ? t("home.addingCardSub", { n: addingAnime.episode_count })
+                    : t("home.addingCardSubNoCount")}
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted mt-2">
+                  <div className="h-full w-1/2 animate-pulse rounded-full bg-primary" />
+                </div>
+              </div>
+              <Loader2 className="h-5 w-5 animate-spin text-primary flex-shrink-0" />
+            </div>
+          </Card>
+        )}
+        {loading && !addingAnime && <div className="text-muted-foreground text-sm">{t("common.loading")}</div>}
+        {!loading && library.length === 0 && !addingAnime && (
           <Card className="p-8 text-center gradient-card border-border/50">
             <div className="text-4xl mb-2">🎬</div>
             <h3 className="font-semibold mb-1">{t("home.noAnimeTitle")}</h3>
@@ -308,9 +348,10 @@ export default function Home() {
       <AddAnimeDialog
         open={addOpen}
         onOpenChange={setAddOpen}
-        onAdded={() => {
+        onAddingChange={setAddingAnime}
+        onAdded={async () => {
           if (user) invalidateLocalSrsCache(user.id, learningLanguage);
-          void load();
+          await load();
         }}
       />
 

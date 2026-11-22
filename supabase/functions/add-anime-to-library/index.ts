@@ -31,6 +31,16 @@ type JikanEpisodesPayload = {
   data?: JikanEpisodeItem[];
 };
 
+const MAX_EPISODES = 1000;
+const EPISODE_UPSERT_BATCH = 250;
+const ANILIST_TIMEOUT_MS = 2500;
+const JIKAN_TIMEOUT_MS = 4000;
+const MAX_JIKAN_PAGES = 10;
+
+const edgeRuntime = (
+  globalThis as { EdgeRuntime?: { waitUntil?: (promise: Promise<unknown>) => void } }
+).EdgeRuntime;
+
 const ANILIST_CANONICAL_QUERY = `
 query ($id: Int) {
   Media(id: $id, type: ANIME) {
@@ -77,47 +87,60 @@ Deno.serve(async (req) => {
 
     const admin = createAdminClient();
 
-    const { data: prof } = await admin
-      .from("profiles")
-      .select("learning_language")
-      .eq("user_id", userId)
-      .maybeSingle();
+    const [{ data: prof }, { data: existing }] = await Promise.all([
+      admin
+        .from("profiles")
+        .select("learning_language")
+        .eq("user_id", userId)
+        .maybeSingle(),
+      admin
+        .from("anime")
+        .select("id, episode_count, mal_id")
+        .eq("anilist_id", anilistId)
+        .maybeSingle(),
+    ]);
+
     const learningLanguage = langInfo(
       typeof body?.learning_language === "string" && body.learning_language.trim()
         ? body.learning_language
         : prof?.learning_language,
     ).code;
 
-    const { data: existing } = await admin
-      .from("anime")
-      .select("id, episode_count, mal_id")
-      .eq("anilist_id", anilistId)
-      .maybeSingle();
+    const clientEpCount = Math.max(0, Math.floor(Number(r.episode_count) || 0));
+    const existingCatalogCount = existing?.episode_count ?? 0;
+    const shouldFetchCanonical =
+      !existing?.id ||
+      existingCatalogCount <= 0 ||
+      clientEpCount === 0 ||
+      clientEpCount > existingCatalogCount;
 
-    // Fetch canonical AniList metadata when inserting new shared catalog rows or checking aired episodes.
+    // Fetch canonical AniList metadata when inserting new shared catalog rows or checking newly aired episodes.
     let canonical: AniListMedia | null = null;
-    try {
-      const ar = await fetch("https://graphql.anilist.co", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          "User-Agent": "Tatani/2.0",
-        },
-        body: JSON.stringify({
-          query: ANILIST_CANONICAL_QUERY,
-          variables: { id: anilistId },
-        }),
-      });
-      if (ar.status === 404 && !existing?.id) {
-        return jsonResponse({ error: "Anime not found on AniList" }, 404);
+    if (shouldFetchCanonical) {
+      try {
+        const ar = await fetch("https://graphql.anilist.co", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "User-Agent": "Tatani/2.0",
+          },
+          body: JSON.stringify({
+            query: ANILIST_CANONICAL_QUERY,
+            variables: { id: anilistId },
+          }),
+          signal: AbortSignal.timeout(ANILIST_TIMEOUT_MS),
+        });
+        if (ar.status === 404 && !existing?.id) {
+          return jsonResponse({ error: "Anime not found on AniList" }, 404);
+        }
+        if (ar.ok) {
+          const ad = (await ar.json()) as { data?: { Media?: AniListMedia | null } };
+          canonical = ad?.data?.Media ?? null;
+        }
+      } catch (err) {
+        console.warn("AniList canonical metadata lookup timed out or failed", err);
       }
-      if (ar.ok) {
-        const ad = (await ar.json()) as { data?: { Media?: AniListMedia | null } };
-        canonical = ad?.data?.Media ?? null;
-      }
-    } catch (err) {
-      console.warn("AniList canonical metadata lookup failed", err);
     }
 
     const aired =
@@ -126,8 +149,8 @@ Deno.serve(async (req) => {
         : 0;
     const canonicalEpCount =
       canonical?.episodes ?? (aired > 0 ? aired : canonical?.format === "MOVIE" ? 1 : 0);
-    const clientEpCount = Number(r.episode_count) || 0;
-    const resolvedEpCount = canonicalEpCount > 0 ? canonicalEpCount : Math.max(clientEpCount, 0);
+    const resolvedEpCount =
+      canonicalEpCount > 0 ? canonicalEpCount : Math.max(clientEpCount, existingCatalogCount, 0);
 
     let animeId: string;
     let effectiveMalId: number | null =
@@ -154,7 +177,7 @@ Deno.serve(async (req) => {
         cover_url: canonical ? (canonical.coverImage?.large ?? null) : (typeof r.cover_url === "string" ? r.cover_url : null),
         year: canonical ? (canonical.seasonYear ?? null) : (typeof r.year === "number" ? r.year : null),
         season_count: 1,
-        episode_count: resolvedEpCount,
+        episode_count: Math.max(resolvedEpCount, 1),
         synopsis: canonicalSynopsis,
       };
       let { data: ins, error } = await admin.from("anime").insert(insertPayload).select("id").single();
@@ -184,7 +207,7 @@ Deno.serve(async (req) => {
     if (!season) {
       const { data: createdSeason, error: seasonInsErr } = await admin
         .from("seasons")
-        .insert({ anime_id: animeId, season_number: 1, episode_count: resolvedEpCount })
+        .insert({ anime_id: animeId, season_number: 1, episode_count: Math.max(resolvedEpCount, 1) })
         .select("id, episode_count")
         .single();
       if (seasonInsErr || !createdSeason) {
@@ -193,79 +216,105 @@ Deno.serve(async (req) => {
       season = createdSeason;
     }
 
-    // Check existing episodes so ongoing shows can append newly aired episodes (`existingEpCount < epCount`)
+    // Check existing episodes so ongoing shows append newly aired episodes and untitled episodes can be enriched
     const { data: existingEps } = await admin
       .from("episodes")
-      .select("episode_number")
-      .eq("season_id", season.id);
-    const existingEpNums = new Set((existingEps ?? []).map((e: { episode_number: number }) => e.episode_number));
-    const existingEpCount = existingEpNums.size;
-    const epCount = Math.min(Math.max(resolvedEpCount, existing?.episode_count ?? 0, season.episode_count ?? 0, 1), 200);
+      .select("episode_number, title_en, title_jp")
+      .eq("season_id", season.id)
+      .limit(MAX_EPISODES);
 
-    if ((existingEpCount ?? 0) < epCount) {
-      const titles: Record<number, { en: string | null; jp: string | null }> = {};
-      let maxJikanEp = 0;
-      if (effectiveMalId) {
-        try {
-          const initialPages = Math.max(1, Math.min(2, Math.ceil((epCount || 100) / 100)));
-          for (let p = 1; p <= initialPages; p++) {
-            const jr = await fetch(`https://api.jikan.moe/v4/anime/${effectiveMalId}/episodes?page=${p}`, {
-              headers: { "User-Agent": "Tatani/2.0", Accept: "application/json" },
-            });
-            if (!jr.ok) break;
-            const jd = (await jr.json()) as JikanEpisodesPayload;
-            const totalItems = Number(jd?.pagination?.items?.total) || 0;
-            if (totalItems > maxJikanEp) maxJikanEp = totalItems;
-            for (const e of jd?.data ?? []) {
-              if (typeof e?.mal_id === "number") {
-                if (e.mal_id > maxJikanEp) maxJikanEp = e.mal_id;
-                titles[e.mal_id] = { en: e.title ?? null, jp: e.title_japanese ?? null };
-              }
-            }
-            if (!jd?.pagination?.has_next_page) break;
-            if (p < initialPages) await new Promise((res) => setTimeout(res, 400));
-          }
-        } catch (err) {
-          console.warn("Jikan episode title fetch failed", err);
-        }
-      }
-
-      const finalCatalogTotal = Math.max(resolvedEpCount, maxJikanEp, epCount, 1);
-      const finalEpCount = Math.min(finalCatalogTotal, 200);
-      const missingEps: Array<{
-        season_id: string;
-        episode_number: number;
-        title_en: string | null;
-        title_jp: string | null;
-      }> = [];
-      for (let num = 1; num <= finalEpCount; num++) {
-        if (existingEpNums.has(num)) continue;
-        missingEps.push({
-          season_id: season.id,
-          episode_number: num,
-          title_en: titles[num]?.en ?? null,
-          title_jp: titles[num]?.jp ?? null,
-        });
-      }
-
-      if (missingEps.length > 0) {
-        const { error: epInsErr } = await admin
-          .from("episodes")
-          .upsert(missingEps, { onConflict: "season_id,episode_number", ignoreDuplicates: true });
-        if (epInsErr) {
-          return jsonResponse({ error: epInsErr.message }, 500);
-        }
-      }
-
-      if ((existing?.episode_count ?? 0) < finalCatalogTotal) {
-        await admin.from("anime").update({ episode_count: finalCatalogTotal }).eq("id", animeId);
-      }
-      if ((season.episode_count ?? 0) < finalCatalogTotal) {
-        await admin.from("seasons").update({ episode_count: finalCatalogTotal }).eq("id", season.id);
+    const existingEpNums = new Set<number>();
+    const titledEpNums = new Set<number>();
+    for (const e of (existingEps ?? []) as Array<{
+      episode_number: number;
+      title_en: string | null;
+      title_jp: string | null;
+    }>) {
+      existingEpNums.add(e.episode_number);
+      if ((e.title_en && e.title_en.trim()) || (e.title_jp && e.title_jp.trim())) {
+        titledEpNums.add(e.episode_number);
       }
     }
 
-    // Link to user library (idempotent)
+    const prefetchedTitles: Record<number, { en: string | null; jp: string | null }> = {};
+    let prefetchedMaxEp = 0;
+    let startJikanPage = 1;
+    let hasMoreJikanPages = true;
+
+    // Only block on Jikan page 1 when neither AniList nor the DB knows how many episodes exist at all
+    const knownCountBeforeJikan = Math.max(resolvedEpCount, existingCatalogCount, season.episode_count ?? 0, existingEpNums.size);
+    if (knownCountBeforeJikan === 0 && effectiveMalId) {
+      try {
+        const jr = await fetch(`https://api.jikan.moe/v4/anime/${effectiveMalId}/episodes?page=1`, {
+          headers: { "User-Agent": "Tatani/2.0", Accept: "application/json" },
+          signal: AbortSignal.timeout(ANILIST_TIMEOUT_MS),
+        });
+        if (jr.ok) {
+          const jd = (await jr.json()) as JikanEpisodesPayload;
+          const totalItems = Number(jd?.pagination?.items?.total) || 0;
+          if (totalItems > prefetchedMaxEp) prefetchedMaxEp = totalItems;
+          for (const e of jd?.data ?? []) {
+            if (typeof e?.mal_id === "number" && e.mal_id > 0) {
+              if (e.mal_id > prefetchedMaxEp) prefetchedMaxEp = e.mal_id;
+              prefetchedTitles[e.mal_id] = { en: e.title ?? null, jp: e.title_japanese ?? null };
+              if (e.title || e.title_japanese) titledEpNums.add(e.mal_id);
+            }
+          }
+          startJikanPage = 2;
+          hasMoreJikanPages = Boolean(jd?.pagination?.has_next_page);
+        }
+      } catch (err) {
+        console.warn("Initial Jikan episode count probe timed out or failed", err);
+      }
+    }
+
+    const finalCatalogTotal = Math.max(
+      resolvedEpCount,
+      prefetchedMaxEp,
+      existingCatalogCount,
+      season.episode_count ?? 0,
+      1,
+    );
+    const finalEpCount = Math.min(finalCatalogTotal, MAX_EPISODES);
+
+    const missingEps: Array<{
+      season_id: string;
+      episode_number: number;
+      title_en: string | null;
+      title_jp: string | null;
+    }> = [];
+    for (let num = 1; num <= finalEpCount; num++) {
+      if (existingEpNums.has(num)) continue;
+      missingEps.push({
+        season_id: season.id,
+        episode_number: num,
+        title_en: prefetchedTitles[num]?.en ?? null,
+        title_jp: prefetchedTitles[num]?.jp ?? null,
+      });
+    }
+
+    for (let i = 0; i < missingEps.length; i += EPISODE_UPSERT_BATCH) {
+      const chunk = missingEps.slice(i, i + EPISODE_UPSERT_BATCH);
+      const { error: epInsErr } = await admin
+        .from("episodes")
+        .upsert(chunk, { onConflict: "season_id,episode_number", ignoreDuplicates: true });
+      if (epInsErr) {
+        return jsonResponse({ error: epInsErr.message }, 500);
+      }
+    }
+
+    const catalogUpdates: PromiseLike<unknown>[] = [];
+    if (existingCatalogCount < finalCatalogTotal) {
+      catalogUpdates.push(admin.from("anime").update({ episode_count: finalCatalogTotal }).eq("id", animeId));
+    }
+    if ((season.episode_count ?? 0) < finalCatalogTotal) {
+      catalogUpdates.push(admin.from("seasons").update({ episode_count: finalCatalogTotal }).eq("id", season.id));
+    }
+    if (catalogUpdates.length > 0) {
+      await Promise.all(catalogUpdates);
+    }
+
+    // Link to user library immediately so UI never waits on slow Jikan pagination
     const { data: link, error: linkErr } = await admin
       .from("user_anime")
       .upsert(
@@ -283,7 +332,111 @@ Deno.serve(async (req) => {
       }
     }
 
-    return jsonResponse({ anime_id: animeId, link_id: link?.id ?? null });
+    // Enrich missing episode titles (and any newly discovered Jikan episodes) asynchronously in background
+    const needsTitleEnrichment =
+      Boolean(effectiveMalId) &&
+      hasMoreJikanPages &&
+      (titledEpNums.size < finalEpCount || startJikanPage === 2);
+
+    if (needsTitleEnrichment && effectiveMalId && edgeRuntime?.waitUntil) {
+      const seasonId = season.id;
+      const malId = effectiveMalId;
+      const bgTask = (async () => {
+        try {
+          let targetMaxEp = finalEpCount;
+          let maxPages = Math.max(startJikanPage, Math.min(MAX_JIKAN_PAGES, Math.ceil(targetMaxEp / 100)));
+          for (let p = startJikanPage; p <= maxPages; p++) {
+            const jr = await fetch(`https://api.jikan.moe/v4/anime/${malId}/episodes?page=${p}`, {
+              headers: { "User-Agent": "Tatani/2.0", Accept: "application/json" },
+              signal: AbortSignal.timeout(JIKAN_TIMEOUT_MS),
+            });
+            if (!jr.ok) break;
+            const jd = (await jr.json()) as JikanEpisodesPayload;
+            const totalItems = Number(jd?.pagination?.items?.total) || 0;
+            if (totalItems > targetMaxEp) {
+              targetMaxEp = Math.min(totalItems, MAX_EPISODES);
+              maxPages = Math.min(MAX_JIKAN_PAGES, Math.ceil(targetMaxEp / 100));
+            }
+
+            const titleUpdates: Array<{
+              season_id: string;
+              episode_number: number;
+              title_en: string | null;
+              title_jp: string | null;
+            }> = [];
+
+            for (const e of jd?.data ?? []) {
+              if (typeof e?.mal_id !== "number" || e.mal_id <= 0 || e.mal_id > MAX_EPISODES) continue;
+              if (e.mal_id > targetMaxEp) {
+                targetMaxEp = e.mal_id;
+              }
+              const enTitle = e.title?.trim() || null;
+              const jpTitle = e.title_japanese?.trim() || null;
+              if ((enTitle || jpTitle) && !titledEpNums.has(e.mal_id)) {
+                titledEpNums.add(e.mal_id);
+                titleUpdates.push({
+                  season_id: seasonId,
+                  episode_number: e.mal_id,
+                  title_en: enTitle,
+                  title_jp: jpTitle,
+                });
+              }
+            }
+
+            if (titleUpdates.length > 0) {
+              await admin
+                .from("episodes")
+                .upsert(titleUpdates, { onConflict: "season_id,episode_number" });
+            }
+
+            if (!jd?.pagination?.has_next_page) break;
+            if (p < maxPages) {
+              await new Promise((res) => setTimeout(res, 450));
+            }
+          }
+
+          if (targetMaxEp > finalEpCount) {
+            const extraEps: Array<{
+              season_id: string;
+              episode_number: number;
+              title_en: string | null;
+              title_jp: string | null;
+            }> = [];
+            for (let num = finalEpCount + 1; num <= targetMaxEp; num++) {
+              if (!titledEpNums.has(num) && !existingEpNums.has(num)) {
+                extraEps.push({
+                  season_id: seasonId,
+                  episode_number: num,
+                  title_en: null,
+                  title_jp: null,
+                });
+              }
+            }
+            for (let i = 0; i < extraEps.length; i += EPISODE_UPSERT_BATCH) {
+              await admin
+                .from("episodes")
+                .upsert(extraEps.slice(i, i + EPISODE_UPSERT_BATCH), {
+                  onConflict: "season_id,episode_number",
+                  ignoreDuplicates: true,
+                });
+            }
+            await Promise.all([
+              admin.from("anime").update({ episode_count: targetMaxEp }).eq("id", animeId),
+              admin.from("seasons").update({ episode_count: targetMaxEp }).eq("id", seasonId),
+            ]);
+          }
+        } catch (err) {
+          console.warn("Background Jikan episode title enrichment failed", err);
+        }
+      })();
+      edgeRuntime.waitUntil(bgTask);
+    }
+
+    return jsonResponse({
+      anime_id: animeId,
+      link_id: link?.id ?? null,
+      episode_count: finalEpCount,
+    });
   } catch (e) {
     console.error(e);
     return jsonResponse({ error: e instanceof Error ? e.message : "unknown" }, 500);

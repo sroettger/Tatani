@@ -43,6 +43,13 @@ data class BatchProcessState(
     val failedCount: Int = 0,
 )
 
+data class AddingAnimeState(
+    val anilistId: Int,
+    val title: String,
+    val coverUrl: String?,
+    val episodeCount: Int,
+)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class TataniViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as TataniApp
@@ -71,6 +78,12 @@ class TataniViewModel(application: Application) : AndroidViewModel(application) 
     private val _batchProcessState = MutableStateFlow<BatchProcessState?>(null)
     val batchProcessState: StateFlow<BatchProcessState?> = _batchProcessState.asStateFlow()
     private var batchProcessJob: Job? = null
+
+    private val _addingAnime = MutableStateFlow<AddingAnimeState?>(null)
+    val addingAnime: StateFlow<AddingAnimeState?> = _addingAnime.asStateFlow()
+
+    private val _addAnimeError = MutableStateFlow<String?>(null)
+    val addAnimeError: StateFlow<String?> = _addAnimeError.asStateFlow()
 
     private val foregroundRefreshTick = MutableStateFlow(0L)
     private val minuteTicker = flow {
@@ -285,6 +298,36 @@ class TataniViewModel(application: Application) : AndroidViewModel(application) 
 
     suspend fun addAnime(anime: AnimeSearchResultDto): Result<Unit> =
         repository.addAnimeAndSync(anime)
+
+    fun clearAddAnimeError() {
+        _addAnimeError.value = null
+    }
+
+    /**
+     * Adds [anime] inside [viewModelScope] so dismissing the Add Anime dialog never cancels
+     * the server call or catalog sync, while surfacing live progress in both the modal and Library.
+     */
+    fun enqueueAddAnime(anime: AnimeSearchResultDto, onSuccess: () -> Unit = {}) {
+        if (_addingAnime.value != null) return
+        viewModelScope.launch {
+            _addAnimeError.value = null
+            _addingAnime.value = AddingAnimeState(
+                anilistId = anime.anilistId,
+                title = anime.titleEn?.takeIf { it.isNotBlank() } ?: anime.titleRomaji,
+                coverUrl = anime.coverUrl,
+                episodeCount = anime.episodeCount,
+            )
+            try {
+                repository.addAnimeAndSync(anime)
+                    .onSuccess { onSuccess() }
+                    .onFailure { err ->
+                        _addAnimeError.value = err.message ?: "Couldn't add anime"
+                    }
+            } finally {
+                _addingAnime.value = null
+            }
+        }
+    }
 
     suspend fun removeAnime(animeId: String): Result<Unit> =
         repository.removeAnimeAndSync(animeId)
