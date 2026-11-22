@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import {
   Check,
+  Flame,
   Headphones,
   Library,
   RotateCcw,
@@ -19,6 +21,8 @@ import { useI18n } from "@/i18n";
 import { formatLevel } from "@/lib/languages";
 import { useSrsDeck } from "@/lib/srs-store";
 import {
+  computeDailyStreak,
+  extractKanjiCharacters,
   LEARN_BATCH_SIZE,
   nextIntervalDaysForGrade,
   pickContextualSentence,
@@ -43,6 +47,7 @@ interface UndoSnapshot {
   prevQueue: SrsDeckCard[];
   wasCorrect: boolean;
   prevLapsedWords: string[];
+  prevCombo: number;
 }
 
 export default function Sprint() {
@@ -69,6 +74,7 @@ export default function Sprint() {
   const [listeningMode, setListeningMode] = useState(false);
   const [autoAudio, setAutoAudio] = useState(false);
   const [reviewedCount, setReviewedCount] = useState(0);
+  const [sessionCombo, setSessionCombo] = useState(0);
   const [undoStack, setUndoStack] = useState<UndoSnapshot[]>([]);
   const sessionStartRef = useRef<number>(Date.now());
   const initializedForLangRef = useRef<string>("");
@@ -90,6 +96,7 @@ export default function Sprint() {
       setRevealed(false);
       setReadingPeeked(false);
       setReviewedCount(0);
+      setSessionCombo(0);
       setUndoStack([]);
       sessionStartRef.current = Date.now();
       return;
@@ -190,9 +197,11 @@ export default function Sprint() {
           prevQueue: snapshotQueue,
           wasCorrect: remembered,
           prevLapsedWords,
+          prevCombo: sessionCombo,
         },
       ]);
       setReviewedCount((c) => c + 1);
+      setSessionCombo((c) => (remembered ? c + 1 : 0));
       setRevealed(false);
       setReadingPeeked(false);
 
@@ -209,7 +218,7 @@ export default function Sprint() {
         return next;
       });
     },
-    [current, queue, gradeCard],
+    [current, queue, gradeCard, sessionCombo],
   );
 
   const onUndo = useCallback(() => {
@@ -219,6 +228,7 @@ export default function Sprint() {
     setUndoStack((stack) => stack.slice(0, -1));
     restoreRecord(last.card, last.prevRecord);
     setQueue(last.prevQueue);
+    setSessionCombo(last.prevCombo);
     setRevealed(false);
     setReadingPeeked(false);
     setReviewedCount((c) => Math.max(0, c - 1));
@@ -285,80 +295,106 @@ export default function Sprint() {
     return Math.min(99, Math.round(reviewedCount / elapsedMin));
   }, [reviewedCount]);
 
+  const dailyStreak = useMemo(() => {
+    const ts: Array<string | null | undefined> = [];
+    for (const c of Object.values(cards)) {
+      if (c.last_reviewed_at) ts.push(c.last_reviewed_at);
+      if (c.known_source === "learned" && c.marked_known_at) ts.push(c.marked_known_at);
+    }
+    const computed = computeDailyStreak(ts);
+    return computed > 0 ? computed : (progress?.study_streak ?? 0);
+  }, [cards, progress?.study_streak]);
+
   const nextKnowDays = useMemo(
     () => (current ? nextIntervalDaysForGrade(current, true, Date.now()) : 1),
     [current],
   );
 
   const batchCount = nextEpisode ? Math.min(LEARN_BATCH_SIZE, nextEpisode.unlearnedCount) : 0;
+  const sessionTotal = reviewedCount + queue.length;
+  const sessionProgressPct = sessionTotal > 0 ? Math.max(3, Math.round((reviewedCount / sessionTotal) * 100)) : 0;
 
   return (
     <div className="min-h-[100dvh] flex flex-col bg-background text-foreground select-none">
-      {/* Minimal Top Bar — Zero Distraction */}
-      <header className="w-full max-w-xl mx-auto px-4 pt-3 pb-2 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <div
-            id="sprint-due-pill"
-            className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-3 py-1 text-xs font-semibold tracking-tight"
-          >
-            <Zap className="h-3.5 w-3.5 text-primary" />
-            <span>{t("sprint.dueBadge", { n: queue.length })}</span>
-          </div>
-          {cardsPerMin > 0 && (
-            <span className="text-xs text-muted-foreground tabular-nums hidden sm:inline">
-              {t("sprint.rate", { n: cardsPerMin })}
-            </span>
-          )}
-          {pendingSyncCount > 0 && (
-            <span className="text-[11px] text-muted-foreground">· {t("sprint.syncing")}</span>
-          )}
-          {undoStack.length > 0 && (
-            <Button
-              id="sprint-undo-button"
-              variant="ghost"
-              size="sm"
-              onClick={onUndo}
-              title={t("sprint.undo")}
-              className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
+      {/* Minimal Top Bar + Goal-Gradient Session Progress */}
+      <header className="w-full max-w-xl mx-auto px-4 pt-3 pb-2 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <div
+              id="sprint-due-pill"
+              className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-3 py-1 text-xs font-semibold tracking-tight"
             >
-              <RotateCcw className="h-3.5 w-3.5" />
-              <span className="sr-only">{t("sprint.undo")}</span>
-            </Button>
-          )}
-        </div>
+              <Zap className="h-3.5 w-3.5 text-primary" />
+              <span>{t("sprint.dueBadge", { n: queue.length })}</span>
+            </div>
+            {sessionCombo >= 3 ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-success/15 text-success px-2.5 py-0.5 text-xs font-semibold tabular-nums">
+                ⚡ {t("sprint.combo", { n: sessionCombo })}
+              </span>
+            ) : dailyStreak > 0 ? (
+              <span className="inline-flex items-center gap-1 text-xs font-semibold text-warning tabular-nums">
+                <Flame className="h-3.5 w-3.5" />
+                {t("sprint.streakBadge", { n: dailyStreak })}
+              </span>
+            ) : cardsPerMin > 0 ? (
+              <span className="text-xs text-muted-foreground tabular-nums hidden sm:inline">
+                {t("sprint.rate", { n: cardsPerMin })}
+              </span>
+            ) : null}
+            {pendingSyncCount > 0 && (
+              <span className="text-[11px] text-muted-foreground">· {t("sprint.syncing")}</span>
+            )}
+            {undoStack.length > 0 && (
+              <Button
+                id="sprint-undo-button"
+                variant="ghost"
+                size="sm"
+                onClick={onUndo}
+                title={t("sprint.undo")}
+                className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span className="sr-only">{t("sprint.undo")}</span>
+              </Button>
+            )}
+          </div>
 
-        <div className="flex items-center gap-1">
-          <Button
-            id="sprint-mode-toggle"
-            variant={listeningMode ? "secondary" : "ghost"}
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => setListeningMode((v) => !v)}
-            title={listeningMode ? t("sprint.listeningMode") : t("sprint.readingMode")}
-          >
-            {listeningMode ? <Headphones className="h-4 w-4 text-primary" /> : <Type className="h-4 w-4" />}
-          </Button>
-          <Button
-            id="sprint-audio-toggle"
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => setAutoAudio((v) => !v)}
-            title={t("sprint.autoAudio")}
-          >
-            {autoAudio ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4 text-muted-foreground" />}
-          </Button>
-          <Button
-            id="sprint-open-library"
-            variant="outline"
-            size="sm"
-            onClick={() => navigate("/library")}
-            className="h-8 gap-1.5 px-3 text-xs font-medium border-border/80 bg-card/60"
-          >
-            <Library className="h-3.5 w-3.5" />
-            <span>{t("sprint.library")}</span>
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              id="sprint-mode-toggle"
+              variant={listeningMode ? "secondary" : "ghost"}
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setListeningMode((v) => !v)}
+              title={listeningMode ? t("sprint.listeningMode") : t("sprint.readingMode")}
+            >
+              {listeningMode ? <Headphones className="h-4 w-4 text-primary" /> : <Type className="h-4 w-4" />}
+            </Button>
+            <Button
+              id="sprint-audio-toggle"
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setAutoAudio((v) => !v)}
+              title={t("sprint.autoAudio")}
+            >
+              {autoAudio ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4 text-muted-foreground" />}
+            </Button>
+            <Button
+              id="sprint-open-library"
+              variant="outline"
+              size="sm"
+              onClick={() => navigate("/library")}
+              className="h-8 gap-1.5 px-3 text-xs font-medium border-border/80 bg-card/60"
+            >
+              <Library className="h-3.5 w-3.5" />
+              <span>{t("sprint.library")}</span>
+            </Button>
+          </div>
         </div>
+        {current && sessionTotal > 0 && (
+          <Progress value={sessionProgressPct} className="h-1" />
+        )}
       </header>
 
       {/* Main Stage */}
@@ -471,13 +507,29 @@ export default function Sprint() {
 
               {/* Meaning Reveal */}
               {revealed && (
-                <div className="pt-2 space-y-1 animate-in fade-in duration-100">
-                  <div className="text-2xl sm:text-3xl font-semibold text-foreground break-words">
-                    {current.meaning}
+                <div className="pt-2 space-y-2 animate-in fade-in duration-100">
+                  <div className="space-y-1">
+                    <div className="text-2xl sm:text-3xl font-semibold text-foreground break-words">
+                      {current.meaning}
+                    </div>
+                    {current.part_of_speech && (
+                      <div className="text-xs text-muted-foreground">{current.part_of_speech}</div>
+                    )}
                   </div>
-                  {current.part_of_speech && (
-                    <div className="text-xs text-muted-foreground">{current.part_of_speech}</div>
-                  )}
+                  {learningLanguageInfo.hasRuby &&
+                    current.state === "learning" &&
+                    extractKanjiCharacters(current.word).length > 1 && (
+                      <div className="flex items-center justify-center gap-1.5 flex-wrap pt-1">
+                        {extractKanjiCharacters(current.word).map((ch) => (
+                          <span
+                            key={ch}
+                            className="font-jp text-xs px-2 py-0.5 rounded-md bg-secondary border border-border/70 font-medium"
+                          >
+                            {ch}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                 </div>
               )}
             </div>

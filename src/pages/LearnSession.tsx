@@ -11,6 +11,7 @@ import {
   Library,
   Loader2,
   Sparkles,
+  Tv,
   Volume2,
   X,
   Zap,
@@ -20,12 +21,15 @@ import { useAuth } from "@/context/AuthContext";
 import { useI18n } from "@/i18n";
 import { formatLevel, levelRank } from "@/lib/languages";
 import {
+  buildMeaningChoices,
+  computeComprehensionPercent,
   extractKanjiCharacters,
   isUnlearnedCandidate,
   LEARN_BATCH_SIZE,
   LEARN_GRADUATION_RECALLS,
   pickContextualSentence,
   SrsDeckCard,
+  WATCH_READY_COVERAGE_PCT,
 } from "@/lib/srs";
 import { useSrsDeck } from "@/lib/srs-store";
 import { ContextSentence } from "@/components/ContextSentence";
@@ -74,6 +78,7 @@ export default function LearnSession() {
   const [drillQueue, setDrillQueue] = useState<SrsDeckCard[]>([]);
   const [drillRevealed, setDrillRevealed] = useState(false);
   const [drillReadingPeeked, setDrillReadingPeeked] = useState(false);
+  const [wrongBlitzPick, setWrongBlitzPick] = useState<string | null>(null);
   const [drillHits, setDrillHits] = useState<Record<string, number>>({});
   const [graduatedCount, setGraduatedCount] = useState(0);
 
@@ -237,6 +242,7 @@ export default function LearnSession() {
     setDrillHits({});
     setDrillRevealed(false);
     setDrillReadingPeeked(false);
+    setWrongBlitzPick(null);
     setGraduatedCount(0);
   }, []);
 
@@ -281,6 +287,7 @@ export default function LearnSession() {
       setDrillHits((h) => ({ ...h, [drillCard.word]: nextHits }));
       setDrillRevealed(false);
       setDrillReadingPeeked(false);
+      setWrongBlitzPick(null);
 
       const [head, ...rest] = drillQueue;
       if (!head) return;
@@ -325,11 +332,24 @@ export default function LearnSession() {
     setDrillHits({});
     setDrillRevealed(false);
     setDrillReadingPeeked(false);
+    setWrongBlitzPick(null);
     setGraduatedCount(0);
     setPhase("encode");
   };
 
+  const distractorPool = useMemo(() => {
+    const epSource = episodePool ?? nextEpisode?.words ?? [];
+    if (epSource.length >= 8) return epSource;
+    return Object.values(cards);
+  }, [episodePool, nextEpisode, cards]);
+
   const currentDrillHits = drillCard ? (drillHits[drillCard.word] ?? 0) : 0;
+  const blitzChoices = useMemo(() => {
+    if (!drillCard || currentDrillHits > 0) return [];
+    return buildMeaningChoices(drillCard, distractorPool, drillQueue.length + graduatedCount);
+  }, [drillCard, currentDrillHits, distractorPool, drillQueue.length, graduatedCount]);
+  const isBlitzMode = currentDrillHits === 0 && blitzChoices.length === 4;
+
   const hasDistinctDrillReading = Boolean(
     drillCard &&
       learningLanguageInfo.hasRuby &&
@@ -338,6 +358,19 @@ export default function LearnSession() {
   );
   const showDrillReading = Boolean(
     hasDistinctDrillReading && (drillRevealed || drillReadingPeeked || currentDrillHits === 0),
+  );
+
+  const onSelectBlitzChoice = useCallback(
+    (meaning: string, isCorrect: boolean) => {
+      if (wrongBlitzPick !== null) return;
+      if (isCorrect) {
+        onGradeDrill(true);
+      } else {
+        setWrongBlitzPick(meaning);
+        setDrillRevealed(true);
+      }
+    },
+    [wrongBlitzPick, onGradeDrill],
   );
 
   // Keyboard shortcuts for blazingly fast desktop/hardware-keyboard flow
@@ -353,7 +386,19 @@ export default function LearnSession() {
           onAlreadyKnow();
         }
       } else if (phase === "drill" && drillCard) {
-        if (!drillRevealed) {
+        if (isBlitzMode) {
+          if (wrongBlitzPick !== null && (e.key === " " || e.key === "Enter")) {
+            e.preventDefault();
+            onGradeDrill(false);
+          } else if (wrongBlitzPick === null && ["1", "2", "3", "4"].includes(e.key)) {
+            const idx = Number(e.key) - 1;
+            const picked = blitzChoices[idx];
+            if (picked) {
+              e.preventDefault();
+              onSelectBlitzChoice(picked.meaning, picked.isCorrect);
+            }
+          }
+        } else if (!drillRevealed) {
           if ((e.key === "r" || e.key === "R") && !e.metaKey && !e.ctrlKey && !e.altKey && hasDistinctDrillReading) {
             e.preventDefault();
             setDrillReadingPeeked(true);
@@ -374,7 +419,27 @@ export default function LearnSession() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [phase, encodeCard, drillCard, drillRevealed, hasDistinctDrillReading, onGotItEncode, onAlreadyKnow, onRevealDrill, onGradeDrill]);
+  }, [
+    phase,
+    encodeCard,
+    drillCard,
+    drillRevealed,
+    isBlitzMode,
+    wrongBlitzPick,
+    blitzChoices,
+    hasDistinctDrillReading,
+    onGotItEncode,
+    onAlreadyKnow,
+    onRevealDrill,
+    onGradeDrill,
+    onSelectBlitzChoice,
+  ]);
+
+  const episodeSourceList = episodePool ?? nextEpisode?.words ?? [];
+  const epTotalCount = episodeSourceList.length;
+  const epKnownCount = Math.max(0, epTotalCount - availableUnlearned.length);
+  const epComprehensionPct = computeComprehensionPercent(epKnownCount, epTotalCount);
+  const isWatchReady = epTotalCount > 0 && epComprehensionPct >= WATCH_READY_COVERAGE_PCT;
 
   if (loadingEpisode || (syncing && batch.length === 0 && availableUnlearned.length === 0)) {
     return (
@@ -419,7 +484,30 @@ export default function LearnSession() {
               {t("learn.graduatedBody", { n: graduatedCount })}
             </p>
           </div>
-          <div className="grid gap-2.5 pt-2">
+
+          {epTotalCount > 0 && (
+            <div
+              className={cn(
+                "rounded-xl border p-4 text-left space-y-2 bg-background/60",
+                isWatchReady ? "border-success/50" : "border-border/60",
+              )}
+            >
+              <div className="flex items-center justify-between text-xs font-semibold">
+                <span className={cn(isWatchReady ? "text-success" : "text-foreground")}>
+                  {isWatchReady ? t("learn.watchReadyTitle") : t("learn.comprehensionTitle")}
+                </span>
+                <span className={cn("tabular-nums", isWatchReady ? "text-success" : "text-primary")}>
+                  {epComprehensionPct}% ({epKnownCount}/{epTotalCount})
+                </span>
+              </div>
+              <Progress value={epComprehensionPct} className="h-2" />
+              <p className="text-xs text-muted-foreground">
+                {isWatchReady ? t("learn.watchReadySub") : t("learn.comprehensionSub")}
+              </p>
+            </div>
+          )}
+
+          <div className="grid gap-2.5 pt-1">
             {remainingNext > 0 && (
               <Button
                 id="learn-next-batch-button"
@@ -428,6 +516,16 @@ export default function LearnSession() {
               >
                 <Sparkles className="h-4 w-4" />
                 {t("learn.nextBatch", { n: remainingNext })}
+              </Button>
+            )}
+            {targetEpisodeId && isWatchReady && (
+              <Button
+                variant="outline"
+                onClick={() => navigate(`/episode/${targetEpisodeId}/watch`)}
+                className="h-11 rounded-xl font-semibold border-success/40"
+              >
+                <Tv className="h-4 w-4 text-success" />
+                {t("episode.watchModeBingo")}
               </Button>
             )}
             <Button
@@ -606,14 +704,14 @@ export default function LearnSession() {
       {phase === "drill" && drillCard && (
         <main className="flex-1 w-full max-w-xl mx-auto px-4 pb-6 pt-1 flex flex-col justify-between gap-4">
           <section
-            onClick={() => { if (!drillRevealed) onRevealDrill(); }}
+            onClick={() => { if (!isBlitzMode && !drillRevealed) onRevealDrill(); }}
             className={cn(
               "flex-1 rounded-2xl gradient-card border border-border/70 shadow-card px-6 py-7 flex flex-col justify-between",
-              !drillRevealed && "cursor-pointer active:bg-secondary/40",
+              !isBlitzMode && !drillRevealed && "cursor-pointer active:bg-secondary/40",
             )}
           >
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>{t("learn.drillPrompt")}</span>
+              <span>{isBlitzMode ? t("learn.blitzPrompt") : t("learn.finalRecallPrompt")}</span>
               <button
                 type="button"
                 onClick={(e) => {
@@ -677,22 +775,69 @@ export default function LearnSession() {
                 </div>
               )}
 
-              {drillRevealed && (
-                <div className="pt-2 space-y-1 animate-in fade-in duration-100">
-                  <div className="text-2xl font-semibold">{drillCard.meaning}</div>
-                  {drillCard.part_of_speech && (
-                    <div className="text-xs text-muted-foreground">{drillCard.part_of_speech}</div>
-                  )}
+              {isBlitzMode ? (
+                <div className="max-w-md mx-auto grid gap-2 text-left pt-1">
+                  {blitzChoices.map((choice, idx) => {
+                    const isWrongSelected = wrongBlitzPick === choice.meaning;
+                    const showFeedback = wrongBlitzPick !== null;
+                    return (
+                      <button
+                        key={choice.meaning}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectBlitzChoice(choice.meaning, choice.isCorrect);
+                        }}
+                        disabled={showFeedback}
+                        className={cn(
+                          "w-full rounded-xl border px-4 py-3 text-sm font-medium flex items-center justify-between gap-2 transition-colors",
+                          showFeedback && choice.isCorrect
+                            ? "border-success bg-success/15 text-foreground"
+                            : isWrongSelected
+                              ? "border-destructive bg-destructive/15 text-foreground"
+                              : "border-border/70 bg-secondary/60 hover:bg-secondary text-foreground",
+                        )}
+                      >
+                        <span>{choice.meaning}</span>
+                        <span className="text-[11px] text-muted-foreground tabular-nums">{idx + 1}</span>
+                      </button>
+                    );
+                  })}
                 </div>
+              ) : (
+                drillRevealed && (
+                  <div className="pt-2 space-y-1 animate-in fade-in duration-100">
+                    <div className="text-2xl font-semibold">{drillCard.meaning}</div>
+                    {drillCard.part_of_speech && (
+                      <div className="text-xs text-muted-foreground">{drillCard.part_of_speech}</div>
+                    )}
+                  </div>
+                )
               )}
             </div>
 
             <div className="h-4 text-center text-[11px] text-muted-foreground/70">
-              {!drillRevealed ? t("sprint.tapToReveal") : ""}
+              {isBlitzMode
+                ? wrongBlitzPick === null
+                  ? t("learn.blitzHint")
+                  : ""
+                : !drillRevealed
+                  ? t("sprint.tapToReveal")
+                  : ""}
             </div>
           </section>
 
-          {!drillRevealed ? (
+          {isBlitzMode ? (
+            wrongBlitzPick !== null ? (
+              <Button
+                id="learn-blitz-continue"
+                onClick={() => onGradeDrill(false)}
+                className="w-full h-14 rounded-xl gradient-primary text-primary-foreground font-semibold"
+              >
+                {t("learn.blitzReviewWrong")}
+              </Button>
+            ) : null
+          ) : !drillRevealed ? (
             <Button
               id="learn-drill-reveal"
               onClick={onRevealDrill}

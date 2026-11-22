@@ -10,7 +10,9 @@ import app.tatani.android.data.local.WordCardEntity
 import app.tatani.android.data.remote.AnimeSearchResultDto
 import app.tatani.android.data.remote.AuthSession
 import app.tatani.android.domain.SrsEngine
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -23,6 +25,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 data class NextLearnTarget(
@@ -30,6 +33,14 @@ data class NextLearnTarget(
     val animeTitle: String,
     val episodeNumber: Int,
     val unlearnedWords: List<WordCardEntity>,
+)
+
+data class BatchProcessState(
+    val animeId: String,
+    val done: Int,
+    val total: Int,
+    val currentEpisodeNumber: Int,
+    val failedCount: Int = 0,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -57,6 +68,10 @@ class TataniViewModel(application: Application) : AndroidViewModel(application) 
     private val _episodeProcessErrors = MutableStateFlow<Map<String, String>>(emptyMap())
     val episodeProcessErrors: StateFlow<Map<String, String>> = _episodeProcessErrors.asStateFlow()
 
+    private val _batchProcessState = MutableStateFlow<BatchProcessState?>(null)
+    val batchProcessState: StateFlow<BatchProcessState?> = _batchProcessState.asStateFlow()
+    private var batchProcessJob: Job? = null
+
     private val foregroundRefreshTick = MutableStateFlow(0L)
     private val minuteTicker = flow {
         while (true) {
@@ -71,6 +86,21 @@ class TataniViewModel(application: Application) : AndroidViewModel(application) 
             else repository.observeDeckCards(s.learningLanguage)
         }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val dailyStreak: StateFlow<Int> = combine(
+        deckCards,
+        minuteTicker,
+        foregroundRefreshTick,
+    ) { list, _, _ ->
+        val timestamps = ArrayList<String?>(list.size * 2)
+        for (c in list) {
+            if (!c.lastReviewedAtIso.isNullOrBlank()) timestamps += c.lastReviewedAtIso
+            if (c.knownSource == "learned" && !c.markedKnownAtIso.isNullOrBlank()) {
+                timestamps += c.markedKnownAtIso
+            }
+        }
+        SrsEngine.computeDailyStreak(timestamps)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, 0)
 
     val dueCards: StateFlow<List<WordCardEntity>> = combine(
         deckCards,
@@ -278,6 +308,84 @@ class TataniViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /**
+     * Sequentially processes all unprocessed episodes for [animeId] in watch order
+     * (Season 1 Ep 1 -> Ep 2 -> ...), syncing Room after every episode so Episode 1 is
+     * study-ready within seconds while later episodes finish in the background without
+     * exceeding AI rate limits.
+     */
+    fun processAllEpisodes(animeId: String) {
+        if (batchProcessJob?.isActive == true) return
+        val targets = libraryEpisodes.value
+            .filter {
+                it.animeId == animeId &&
+                    !it.episodeId.startsWith("placeholder:") &&
+                    it.processingStatus != "ready"
+            }
+            .sortedWith(compareBy<LibraryEpisodeEntity>({ it.seasonNumber }, { it.episodeNumber }))
+        if (targets.isEmpty()) return
+
+        batchProcessJob = viewModelScope.launch {
+            var done = 0
+            var failed = 0
+            try {
+                for ((idx, ep) in targets.withIndex()) {
+                    if (!isActive) break
+                    _batchProcessState.value = BatchProcessState(
+                        animeId = animeId,
+                        done = done,
+                        total = targets.size,
+                        currentEpisodeNumber = ep.episodeNumber,
+                        failedCount = failed,
+                    )
+                    if (ep.episodeId in _processingEpisodeIds.value) {
+                        done++
+                        continue
+                    }
+                    _processingEpisodeIds.update { it + ep.episodeId }
+                    _episodeProcessErrors.update { it - ep.episodeId }
+                    var wasCached = false
+                    try {
+                        val res = repository.processEpisodeDetailedAndSync(ep.episodeId)
+                        res.onSuccess { cached ->
+                            wasCached = cached
+                        }.onFailure { err ->
+                            failed++
+                            _episodeProcessErrors.update {
+                                it + (ep.episodeId to (err.message ?: "Episode processing failed"))
+                            }
+                        }
+                    } finally {
+                        _processingEpisodeIds.update { it - ep.episodeId }
+                    }
+                    done++
+                    _batchProcessState.value = BatchProcessState(
+                        animeId = animeId,
+                        done = done,
+                        total = targets.size,
+                        currentEpisodeNumber = ep.episodeNumber,
+                        failedCount = failed,
+                    )
+                    // Pace uncached AI calls smoothly below Free Tier 15 RPM while allowing instant cache sweeps
+                    if (!wasCached && idx + 1 < targets.size && isActive) {
+                        delay(1_250L)
+                    }
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } finally {
+                _batchProcessState.value = null
+                batchProcessJob = null
+            }
+        }
+    }
+
+    fun cancelProcessAll() {
+        batchProcessJob?.cancel()
+        batchProcessJob = null
+        _batchProcessState.value = null
+    }
+
     fun processEpisodeManual(
         episodeId: String,
         subtitleText: String,
@@ -306,6 +414,7 @@ class TataniViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun signOut() {
+        cancelProcessAll()
         viewModelScope.launch {
             repository.signOut()
         }

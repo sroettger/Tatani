@@ -1,14 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ChevronLeft, Play } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
+import { ChevronLeft, Loader2, Play, Sparkles, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { useI18n } from "@/i18n";
 import type { StringKey } from "@/i18n/strings";
 import { fetchAllPages, fetchBatchedPages } from "@/lib/supabase-pagination";
+import { invalidateLocalSrsCache } from "@/lib/srs-store";
+import { toast } from "sonner";
 
 type Anime = {
   id: string;
@@ -32,11 +35,23 @@ type Episode = {
 export default function AnimeDetail() {
   const { animeId } = useParams();
   const navigate = useNavigate();
-  const { learningLanguage, learningLanguageInfo } = useAuth();
+  const { user, learningLanguage, learningLanguageInfo } = useAuth();
   const { t } = useI18n();
   const [anime, setAnime] = useState<Anime | null>(null);
   const [seasons, setSeasons] = useState<Season[]>([]);
   const [episodesBySeason, setEpisodesBySeason] = useState<Record<string, Episode[]>>({});
+  const [batchProgress, setBatchProgress] = useState<{
+    done: number;
+    total: number;
+    epNumber: number;
+  } | null>(null);
+  const cancelBatchRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      cancelBatchRef.current = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!animeId) return;
@@ -112,6 +127,95 @@ export default function AnimeDetail() {
     };
   }, [animeId, learningLanguage]);
 
+  const orderedUnprocessed = useMemo(() => {
+    const list: Episode[] = [];
+    for (const season of seasons) {
+      for (const ep of episodesBySeason[season.id] ?? []) {
+        if (ep.processing_status !== "ready") {
+          list.push(ep);
+        }
+      }
+    }
+    return list;
+  }, [seasons, episodesBySeason]);
+
+  const setEpisodeStatusLocal = (epId: string, seasonId: string, status: string) => {
+    setEpisodesBySeason((prev) => {
+      const seasonEps = prev[seasonId] ?? [];
+      return {
+        ...prev,
+        [seasonId]: seasonEps.map((e) => (e.id === epId ? { ...e, processing_status: status } : e)),
+      };
+    });
+  };
+
+  const handleProcessAll = async () => {
+    if (batchProgress || orderedUnprocessed.length === 0) return;
+    cancelBatchRef.current = false;
+    const targets = [...orderedUnprocessed];
+    let okCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < targets.length; i++) {
+      if (cancelBatchRef.current) break;
+      const ep = targets[i];
+      setBatchProgress({ done: i, total: targets.length, epNumber: ep.episode_number });
+      setEpisodeStatusLocal(ep.id, ep.season_id, "processing");
+
+      // Fast path: check if another user or background job already populated episode_vocab_cache
+      const { data: cacheHit } = await supabase
+        .from("episode_vocab_cache")
+        .select("episode_id")
+        .eq("episode_id", ep.id)
+        .eq("language", learningLanguage)
+        .maybeSingle();
+
+      if (cacheHit) {
+        setEpisodeStatusLocal(ep.id, ep.season_id, "ready");
+        okCount++;
+        invalidateLocalSrsCache(user?.id, learningLanguage);
+        continue;
+      }
+
+      const { data: subData, error: subErr } = await supabase.functions.invoke("fetch-subtitles", {
+        body: { episode_id: ep.id },
+      });
+      const subPayload = subData as { found?: boolean; content?: string } | null;
+      if (subErr || !subPayload?.found || !subPayload.content) {
+        setEpisodeStatusLocal(ep.id, ep.season_id, "failed");
+        failCount++;
+        continue;
+      }
+
+      if (cancelBatchRef.current) break;
+
+      const { data: procData, error: procErr } = await supabase.functions.invoke("process-episode", {
+        body: { episode_id: ep.id, subtitle_text: subPayload.content, wait: true },
+      });
+      const procPayload = procData as { error?: string; cached?: boolean } | null;
+      if (procErr || procPayload?.error) {
+        setEpisodeStatusLocal(ep.id, ep.season_id, "failed");
+        failCount++;
+      } else {
+        setEpisodeStatusLocal(ep.id, ep.season_id, "ready");
+        okCount++;
+        invalidateLocalSrsCache(user?.id, learningLanguage);
+        if (!procPayload?.cached && i + 1 < targets.length && !cancelBatchRef.current) {
+          await new Promise((r) => setTimeout(r, 1250));
+        }
+      }
+    }
+
+    setBatchProgress(null);
+    if (okCount > 0 || failCount > 0) {
+      if (failCount === 0) {
+        toast.success(t("anime.processAllDone", { ok: okCount }));
+      } else {
+        toast.message(t("anime.processAllPartial", { ok: okCount, failed: failCount }));
+      }
+    }
+  };
+
   return (
     <div className="max-w-2xl mx-auto pb-10">
       <div className="relative">
@@ -127,7 +231,7 @@ export default function AnimeDetail() {
       </div>
 
       <div className="px-5 -mt-16 relative">
-        <div className="flex gap-4 mb-6">
+        <div className="flex gap-4 mb-5">
           <div className="w-24 h-36 rounded-xl overflow-hidden bg-muted shadow-card flex-shrink-0">
             {anime?.cover_url && <img src={anime.cover_url} alt={anime.title_romaji} className="w-full h-full object-cover" />}
           </div>
@@ -139,7 +243,50 @@ export default function AnimeDetail() {
         </div>
 
         {anime?.synopsis && (
-          <p className="text-sm text-muted-foreground mb-6 line-clamp-4">{anime.synopsis}</p>
+          <p className="text-sm text-muted-foreground mb-5 line-clamp-4">{anime.synopsis}</p>
+        )}
+
+        {batchProgress ? (
+          <Card className="p-3.5 mb-6 gradient-card border-primary/40 space-y-2.5">
+            <div className="flex items-center justify-between gap-2 text-xs font-medium">
+              <span className="inline-flex items-center gap-2">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                {t("anime.processingProgress", {
+                  ep: batchProgress.epNumber,
+                  done: batchProgress.done,
+                  total: batchProgress.total,
+                })}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                onClick={() => {
+                  cancelBatchRef.current = true;
+                }}
+              >
+                <X className="h-3.5 w-3.5" />
+                {t("anime.stopProcessAll")}
+              </Button>
+            </div>
+            <Progress
+              value={Math.round((batchProgress.done / Math.max(1, batchProgress.total)) * 100)}
+              className="h-1.5"
+            />
+          </Card>
+        ) : (
+          orderedUnprocessed.length > 0 && (
+            <div className="mb-6">
+              <Button
+                id="anime-process-all-button"
+                onClick={() => void handleProcessAll()}
+                className="w-full h-11 rounded-xl gradient-primary text-primary-foreground font-semibold shadow-elegant"
+              >
+                <Sparkles className="h-4 w-4" />
+                {t("anime.processAll", { n: orderedUnprocessed.length })}
+              </Button>
+            </div>
+          )
         )}
 
         {seasons.map((season) => (

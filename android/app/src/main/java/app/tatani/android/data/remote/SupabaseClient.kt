@@ -813,6 +813,12 @@ class SupabaseClient(
         }
 
     suspend fun processEpisodeWithSubtitleText(episodeId: String, subtitleText: String): Result<Unit> =
+        processEpisodeWithSubtitleTextDetailed(episodeId, subtitleText).map { }
+
+    suspend fun processEpisodeWithSubtitleTextDetailed(
+        episodeId: String,
+        subtitleText: String,
+    ): Result<Boolean> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val trimmed = subtitleText.trimStart('\uFEFF').trim()
@@ -830,19 +836,58 @@ class SupabaseClient(
                         .build()
                 }.use { resp ->
                     val raw = resp.body?.string().orEmpty()
+                    val parsed = runCatching {
+                        json.decodeFromString<ProcessEpisodeResponseDto>(raw)
+                    }.getOrNull()
                     if (!resp.isSuccessful) {
-                        val parsedErr = runCatching {
-                            json.decodeFromString<ProcessEpisodeResponseDto>(raw).error
-                        }.getOrNull()
-                        error(parsedErr ?: "Episode processing failed (${resp.code})")
+                        error(parsed?.error ?: "Episode processing failed (${resp.code})")
                     }
+                    parsed?.cached == true
                 }
             }
         }
 
-    suspend fun autoFetchAndProcessEpisode(episodeId: String): Result<Unit> =
+    private suspend fun isEpisodeCachedForLanguage(episodeId: String, lang: String): Boolean =
         withContext(Dispatchers.IO) {
             runCatching {
+                val url = "$baseUrl/rest/v1/episode_vocab_cache".toHttpUrl().newBuilder()
+                    .addQueryParameter("episode_id", "eq.$episodeId")
+                    .addQueryParameter("language", "eq.$lang")
+                    .addQueryParameter("select", "episode_id")
+                    .addQueryParameter("limit", "1")
+                    .build()
+                executeAuthenticated { token ->
+                    Request.Builder()
+                        .url(url)
+                        .header("apikey", anonKey)
+                        .header("Authorization", "Bearer $token")
+                        .get()
+                        .build()
+                }.use { resp ->
+                    if (!resp.isSuccessful) return@use false
+                    val raw = resp.body?.string().orEmpty()
+                    json.decodeFromString<List<EpisodeCacheExistsDto>>(raw).isNotEmpty()
+                }
+            }.getOrDefault(false)
+        }
+
+    suspend fun autoFetchAndProcessEpisode(episodeId: String): Result<Unit> =
+        autoFetchAndProcessEpisodeDetailed(episodeId).map { }
+
+    /**
+     * Auto-fetches subtitles and processes vocabulary for [episodeId].
+     * Returns `Result.success(true)` when served immediately from `episode_vocab_cache`
+     * (zero external subtitle scraping or AI batch usage), or `Result.success(false)` when
+     * newly extracted via AI.
+     */
+    suspend fun autoFetchAndProcessEpisodeDetailed(episodeId: String): Result<Boolean> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val lang = sessionStore.session.value?.learningLanguage ?: "ja"
+                if (isEpisodeCachedForLanguage(episodeId, lang)) {
+                    return@runCatching true
+                }
+
                 val fetchPayload = buildJsonObject { put("episode_id", episodeId) }.toString()
                 val subtitleContent = executeAuthenticated { token ->
                     Request.Builder()
@@ -860,7 +905,7 @@ class SupabaseClient(
                     parsed.content
                 }
 
-                processEpisodeWithSubtitleText(episodeId, subtitleContent).getOrThrow()
+                processEpisodeWithSubtitleTextDetailed(episodeId, subtitleContent).getOrThrow()
             }
         }
 

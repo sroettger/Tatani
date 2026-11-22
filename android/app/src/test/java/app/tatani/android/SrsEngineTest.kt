@@ -289,4 +289,33 @@ class SrsEngineTest {
             )
         )
     }
+
+    @Test
+    fun buildsSamePosMeaningChoicesAndDispersesLongIntervals() {
+        val pool = listOf(
+            SrsEngine.DistractorCandidate("探知", "detection", "名詞"),
+            SrsEngine.DistractorCandidate("結界", "barrier", "名詞"),
+            SrsEngine.DistractorCandidate("魔力", "mana", "名詞"),
+            SrsEngine.DistractorCandidate("約束", "promise", "名詞"),
+            SrsEngine.DistractorCandidate("走る", "to run", "動詞"),
+        )
+        val choices = SrsEngine.buildMeaningChoices(
+            targetWord = "探知",
+            targetMeaning = "detection",
+            targetPos = "名詞",
+            pool = pool,
+            seed = 2,
+        )
+        assertEquals(4, choices.size)
+        assertEquals(1, choices.count { it.isCorrect && it.meaning == "detection" })
+        // Prefers matching 名詞 nouns over 動詞 verbs when 3+ noun distractors exist
+        assertFalse(choices.any { it.meaning == "to run" })
+
+        // Short intervals (0..2 = 1d, 3d, 7d) stay exact; long intervals (3+ = 14d+) stay within ±5%
+        assertEquals(7L * dayMs, SrsEngine.fuzzedIntervalMs("探知", 2))
+        val fuzzed14d = SrsEngine.fuzzedIntervalMs("探知", 3)
+        assertTrue(fuzzed14d in (14L * dayMs * 95 / 100)..(14L * dayMs * 105 / 100))
+
+        assertEquals(85, SrsEngine.computeComprehensionPercent(17, 20))
+    }
 }

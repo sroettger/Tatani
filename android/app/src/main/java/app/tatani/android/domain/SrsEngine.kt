@@ -2,13 +2,27 @@ package app.tatani.android.domain
 
 import kotlinx.serialization.Serializable
 import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 
 object SrsEngine {
     val SRS_INTERVALS_DAYS = intArrayOf(1, 3, 7, 14, 30, 60, 120, 240, 480)
     const val LEARN_BATCH_SIZE = 6
     const val LEARN_GRADUATION_RECALLS = 2
     const val SPRINT_LAPSE_REINSERT_GAP = 4
+    const val WATCH_READY_COVERAGE_PCT = 85
     private const val DAY_MS = 24L * 60L * 60L * 1000L
+
+    data class MeaningChoice(
+        val meaning: String,
+        val isCorrect: Boolean,
+    )
+
+    data class DistractorCandidate(
+        val word: String,
+        val meaning: String,
+        val partOfSpeech: String = "",
+    )
 
     @Serializable
     data class EpisodeContext(
@@ -49,6 +63,17 @@ object SrsEngine {
             prev.state == "known" -> (prevLevel + 1).coerceAtMost(maxIdx)
             else -> 0
         }
+    }
+
+    /**
+     * Disperses long-term batch reviews (14d+) across ±5% of the interval so a full
+     * batch of words learned together does not pile onto the exact same future day.
+     */
+    fun fuzzedIntervalMs(word: String, nextLevel: Int): Long {
+        val baseMs = SRS_INTERVALS_DAYS[nextLevel.coerceIn(0, SRS_INTERVALS_DAYS.lastIndex)] * DAY_MS
+        if (nextLevel < 3 || word.isEmpty()) return baseMs
+        val pctOffset = ((word.hashCode() and 0x7fffffff) % 11) - 5 // -5% .. +5%
+        return baseMs + (baseMs * pctOffset) / 100L
     }
 
     fun nextIntervalDays(
@@ -97,7 +122,7 @@ object SrsEngine {
 
         if (remembered) {
             val nextLevel = computeNextRememberedLevel(prev, nowMs)
-            val dueMs = nowMs + SRS_INTERVALS_DAYS[nextLevel] * DAY_MS
+            val dueMs = nowMs + fuzzedIntervalMs(word, nextLevel)
             return SrsSnapshot(
                 word = word,
                 reading = reading ?: prev?.reading,
@@ -274,6 +299,95 @@ object SrsEngine {
 
     fun extractKanjiCharacters(word: String): List<String> =
         word.filter { isKanji(it) }.map { it.toString() }.distinct()
+
+    fun computeComprehensionPercent(knownCount: Int, totalCount: Int): Int {
+        if (totalCount <= 0) return 0
+        return ((knownCount.coerceAtLeast(0) * 100) / totalCount).coerceIn(0, 100)
+    }
+
+    /**
+     * Builds a 4-option meaning recognition blitz (1 correct + 3 episode/deck distractors,
+     * preferring matching part-of-speech) for Hit 1 of the Learn micro-drill before
+     * graduating via unassisted Kanji-first active recall on Hit 2 (Kang et al., 2007).
+     * Returns emptyList() if fewer than 3 distinct distractors are available.
+     */
+    fun buildMeaningChoices(
+        targetWord: String,
+        targetMeaning: String,
+        targetPos: String,
+        pool: List<DistractorCandidate>,
+        seed: Int = 0,
+    ): List<MeaningChoice> {
+        val cleanTarget = targetMeaning.trim()
+        if (cleanTarget.isEmpty()) return emptyList()
+        val seenLower = hashSetOf(cleanTarget.lowercase())
+
+        val samePos = mutableListOf<String>()
+        val otherPos = mutableListOf<String>()
+        val normPos = targetPos.trim().lowercase()
+
+        for (c in pool) {
+            if (c.word == targetWord) continue
+            val m = c.meaning.trim()
+            if (m.isEmpty()) continue
+            if (!seenLower.add(m.lowercase())) continue
+            if (normPos.isNotEmpty() && c.partOfSpeech.trim().lowercase() == normPos) {
+                samePos += m
+            } else {
+                otherPos += m
+            }
+        }
+
+        if (samePos.size + otherPos.size < 3) return emptyList()
+
+        fun <T> deterministicPick(items: List<T>, salt: Int): List<T> {
+            if (items.size <= 1) return items
+            return items.sortedBy { item ->
+                ((item.hashCode() * 31 + salt * 997 + targetWord.hashCode()) and 0x7fffffff)
+            }
+        }
+
+        val orderedDistractors = deterministicPick(samePos, seed) + deterministicPick(otherPos, seed + 17)
+        val picked = orderedDistractors.take(3)
+        val correctSlot = ((targetWord.hashCode() xor (seed * 131)) and 0x7fffffff) % 4
+
+        val choices = ArrayList<MeaningChoice>(4)
+        var dIdx = 0
+        for (slot in 0 until 4) {
+            if (slot == correctSlot) {
+                choices += MeaningChoice(cleanTarget, isCorrect = true)
+            } else {
+                choices += MeaningChoice(picked[dIdx++], isCorrect = false)
+            }
+        }
+        return choices
+    }
+
+    fun computeDailyStreak(
+        timestampsIso: Collection<String?>,
+        zoneId: ZoneId = ZoneId.systemDefault(),
+        nowMs: Long = System.currentTimeMillis(),
+    ): Int {
+        val activeDays = HashSet<LocalDate>()
+        for (iso in timestampsIso) {
+            if (iso.isNullOrBlank()) continue
+            val day = runCatching { Instant.parse(iso).atZone(zoneId).toLocalDate() }.getOrNull()
+            if (day != null) activeDays += day
+        }
+        if (activeDays.isEmpty()) return 0
+
+        var cursor = Instant.ofEpochMilli(nowMs).atZone(zoneId).toLocalDate()
+        if (cursor !in activeDays) {
+            cursor = cursor.minusDays(1)
+            if (cursor !in activeDays) return 0
+        }
+        var streak = 0
+        while (cursor in activeDays) {
+            streak++
+            cursor = cursor.minusDays(1)
+        }
+        return streak
+    }
 
     fun jlptRank(level: String?): Int = when (level?.uppercase()) {
         "N5", "A1" -> 1

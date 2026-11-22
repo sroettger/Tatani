@@ -140,15 +140,21 @@ export default function WatchEpisode() {
 
       if (cancelled) return;
 
-      const eligible = epVocab.filter((v) => {
-        if (!studiedWordsSet.has(v.word)) return false;
+      const activeLearning: VocabItem[] = [];
+      const masteredLearned: VocabItem[] = [];
+      const fallbackTop: VocabItem[] = [];
+      for (const v of epVocab) {
         const s = stateMap.get(v.word);
-        if (!s) return false;
-        if (s.preference === "skip") return false;
-        if (s.state === "learning") return true;
-        if (s.state === "known" && (s.correct_streak ?? 0) < 3) return true;
-        return false;
-      });
+        if (s?.preference === "skip") continue;
+        if (studiedWordsSet.has(v.word) && (!s || s.state === "learning" || (s.correct_streak ?? 0) < 3)) {
+          activeLearning.push(v);
+        } else if (studiedWordsSet.has(v.word) || s?.state === "known") {
+          masteredLearned.push(v);
+        } else {
+          fallbackTop.push(v);
+        }
+      }
+      const eligible = [...activeLearning, ...masteredLearned, ...fallbackTop.slice(0, 25)];
       setPool(eligible);
       setLoading(false);
     })();

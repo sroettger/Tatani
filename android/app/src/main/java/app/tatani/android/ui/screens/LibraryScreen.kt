@@ -25,7 +25,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
@@ -39,6 +41,7 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -63,6 +66,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.tatani.android.data.local.LibraryEpisodeEntity
 import app.tatani.android.data.remote.AnimeSearchResultDto
+import app.tatani.android.domain.SrsEngine
 import app.tatani.android.ui.TataniViewModel
 import app.tatani.android.ui.theme.AmberAccent
 import app.tatani.android.ui.theme.CrimsonAgain
@@ -87,7 +91,9 @@ fun LibraryScreen(
     val syncing by viewModel.syncing.collectAsState()
     val syncError by viewModel.syncError.collectAsState()
     val dueCards by viewModel.dueCards.collectAsState()
+    val dailyStreak by viewModel.dailyStreak.collectAsState()
     val processingIds by viewModel.processingEpisodeIds.collectAsState()
+    val batchProcessState by viewModel.batchProcessState.collectAsState()
 
     val groupedByAnime = remember(episodes) {
         episodes.groupBy { it.animeId }.values.toList()
@@ -108,21 +114,41 @@ fun LibraryScreen(
             .systemBarsPadding()
             .padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
-        // Top Header with 1-Tap Switch Back to Sprint
+        // Top Header with 1-Tap Switch Back to Sprint + Daily Streak
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Button(
-                onClick = onBackToSprint,
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = VermilionPrimary),
-                modifier = Modifier.height(38.dp),
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Icon(Icons.Outlined.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(5.dp))
-                Text("Sprint (${dueCards.size})")
+                Button(
+                    onClick = onBackToSprint,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = VermilionPrimary),
+                    modifier = Modifier.height(38.dp),
+                ) {
+                    Icon(Icons.Outlined.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("Sprint (${dueCards.size})")
+                }
+                if (dailyStreak > 0) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = SumiElevated,
+                        border = BorderStroke(1.dp, SumiBorder),
+                    ) {
+                        Text(
+                            text = "🔥 ${dailyStreak}d",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = AmberAccent,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        )
+                    }
+                }
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -149,7 +175,7 @@ fun LibraryScreen(
         Spacer(Modifier.height(12.dp))
         Text("Anime Library", style = MaterialTheme.typography.headlineMedium)
         Text(
-            "Select an episode to fetch subtitles, triage vocabulary, or learn new words in context.",
+            "Process an entire anime in one tap or pick an episode to unlock Watch-Ready comprehension.",
             style = MaterialTheme.typography.bodyMedium,
             color = WashiMuted,
         )
@@ -201,6 +227,9 @@ fun LibraryScreen(
                     val head = animeEps.first()
                     val realEps = animeEps.filterNot { it.episodeId.startsWith("placeholder:") }
                     val readyCount = realEps.count { it.processingStatus == "ready" }
+                    val unprocessedEps = realEps.filter { it.processingStatus != "ready" }
+                    val activeBatch = batchProcessState?.takeIf { it.animeId == head.animeId }
+                    val anotherBatchRunning = batchProcessState != null && activeBatch == null
                     val isExpanded = expandedAnimeId == head.animeId
                     val seasonsMap = remember(realEps) { realEps.groupBy { it.seasonNumber } }
                     val showSeasonHeaders = seasonsMap.size > 1 || (seasonsMap.keys.firstOrNull() ?: 1) > 1
@@ -270,6 +299,77 @@ fun LibraryScreen(
                                         contentDescription = "Remove anime",
                                         tint = WashiMuted,
                                         modifier = Modifier.size(19.dp),
+                                    )
+                                }
+                            }
+
+                            if (activeBatch != null) {
+                                Spacer(Modifier.height(10.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = SumiElevated,
+                                    border = BorderStroke(1.dp, VermilionPrimary.copy(alpha = 0.45f)),
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Text(
+                                                text = "Processing Ep ${activeBatch.currentEpisodeNumber} · ${activeBatch.done}/${activeBatch.total}",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = WashiForeground,
+                                                fontWeight = FontWeight.SemiBold,
+                                            )
+                                            TextButton(
+                                                onClick = { viewModel.cancelProcessAll() },
+                                                modifier = Modifier.height(30.dp),
+                                            ) {
+                                                Icon(
+                                                    Icons.Outlined.Close,
+                                                    contentDescription = "Stop",
+                                                    modifier = Modifier.size(14.dp),
+                                                    tint = CrimsonAgain,
+                                                )
+                                                Spacer(Modifier.width(4.dp))
+                                                Text("Stop", style = MaterialTheme.typography.labelMedium, color = CrimsonAgain)
+                                            }
+                                        }
+                                        LinearProgressIndicator(
+                                            progress = {
+                                                (activeBatch.done.toFloat() / activeBatch.total.coerceAtLeast(1)).coerceIn(0f, 1f)
+                                            },
+                                            color = VermilionPrimary,
+                                            trackColor = SumiSurface,
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
+                                    }
+                                }
+                            } else if (isExpanded && unprocessedEps.isNotEmpty()) {
+                                Spacer(Modifier.height(10.dp))
+                                OutlinedButton(
+                                    onClick = { viewModel.processAllEpisodes(head.animeId) },
+                                    enabled = !anotherBatchRunning,
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = BorderStroke(1.dp, VermilionPrimary.copy(alpha = 0.65f)),
+                                    modifier = Modifier.fillMaxWidth().height(42.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.PlayArrow,
+                                        contentDescription = null,
+                                        tint = VermilionPrimary,
+                                        modifier = Modifier.size(17.dp),
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = "Process all (${unprocessedEps.size} episodes)",
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = WashiForeground,
                                     )
                                 }
                             }
@@ -618,9 +718,13 @@ private fun EpisodeRowItem(
     val epTitle = ep.episodeTitleEn?.takeIf { it.isNotBlank() }
         ?: ep.episodeTitleJp?.takeIf { it.isNotBlank() }
 
+    val coverage = SrsEngine.computeComprehensionPercent(ep.knownWords, ep.totalWords)
+    val isWatchReady = ep.processingStatus == "ready" && ep.totalWords > 0 && coverage >= SrsEngine.WATCH_READY_COVERAGE_PCT
+
     val (badgeText, badgeBg, badgeFg) = when {
         effectiveProcessing -> Triple("Processing…", AmberAccent.copy(alpha = 0.18f), AmberAccent)
-        ep.processingStatus == "ready" -> Triple("Ready", JadeSuccess.copy(alpha = 0.18f), JadeSuccess)
+        isWatchReady -> Triple("🎬 Watch-Ready", JadeSuccess.copy(alpha = 0.22f), JadeSuccess)
+        ep.processingStatus == "ready" -> Triple("Ready", JadeSuccess.copy(alpha = 0.14f), JadeSuccess)
         isFailed -> Triple("Retry", CrimsonAgain.copy(alpha = 0.18f), CrimsonAgain)
         else -> Triple("Process", SumiSurface, WashiMuted)
     }
@@ -632,50 +736,59 @@ private fun EpisodeRowItem(
         border = BorderStroke(1.dp, SumiBorder),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                Text(
-                    text = when {
-                        isPlaceholder -> "Syncing episode catalog…"
-                        epTitle != null -> "Episode ${ep.episodeNumber} · $epTitle"
-                        else -> "Episode ${ep.episodeNumber}"
-                    },
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                val subtitle = when {
-                    isPlaceholder -> "Tap to refresh episodes from server"
-                    effectiveProcessing -> "Extracting vocabulary in background…"
-                    ep.processingStatus == "ready" -> {
-                        val coverage = if (ep.totalWords > 0) {
-                            ((ep.knownWords * 100) / ep.totalWords)
-                        } else 0
-                        "${ep.unlearnedWords} to learn · $coverage% known"
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                    Text(
+                        text = when {
+                            isPlaceholder -> "Syncing episode catalog…"
+                            epTitle != null -> "Episode ${ep.episodeNumber} · $epTitle"
+                            else -> "Episode ${ep.episodeNumber}"
+                        },
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    val subtitle = when {
+                        isPlaceholder -> "Tap to refresh episodes from server"
+                        effectiveProcessing -> "Extracting vocabulary in background…"
+                        ep.processingStatus == "ready" ->
+                            if (ep.unlearnedWords == 0) "100% mastered · Ready to watch"
+                            else "${ep.unlearnedWords} to learn · $coverage% comprehension"
+                        isFailed -> "Extraction failed · Tap to retry or import subtitles"
+                        else -> "Tap to fetch or import subtitles"
                     }
-                    isFailed -> "Extraction failed · Tap to retry or import subtitles"
-                    else -> "Tap to fetch or import subtitles"
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = WashiMuted,
+                    )
                 }
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = WashiMuted,
-                )
+
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = badgeBg,
+                ) {
+                    Text(
+                        text = badgeText,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = badgeFg,
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                    )
+                }
             }
 
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = badgeBg,
-            ) {
-                Text(
-                    text = badgeText,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = badgeFg,
-                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+            if (ep.processingStatus == "ready" && ep.totalWords > 0) {
+                Spacer(Modifier.height(6.dp))
+                LinearProgressIndicator(
+                    progress = { (coverage / 100f).coerceIn(0f, 1f) },
+                    color = if (isWatchReady) JadeSuccess else VermilionPrimary,
+                    trackColor = SumiSurface,
+                    modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(4.dp)),
                 )
             }
         }

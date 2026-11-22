@@ -145,5 +145,11 @@ data class FetchSubtitlesResponseDto(
 
 @Serializable
 data class ProcessEpisodeResponseDto(
+    val cached: Boolean = false,
     val error: String? = null,
+)
+
+@Serializable
+data class EpisodeCacheExistsDto(
+    @SerialName("episode_id") val episodeId: String,
 )

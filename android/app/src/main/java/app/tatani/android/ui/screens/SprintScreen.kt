@@ -35,6 +35,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -52,6 +53,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -66,6 +68,7 @@ import app.tatani.android.data.local.WordCardEntity
 import app.tatani.android.domain.SrsEngine
 import app.tatani.android.ui.TataniViewModel
 import app.tatani.android.ui.components.HighlightedSentenceText
+import app.tatani.android.ui.theme.AmberAccent
 import app.tatani.android.ui.theme.CrimsonAgain
 import app.tatani.android.ui.theme.JadeSuccess
 import app.tatani.android.ui.theme.SumiBackground
@@ -83,6 +86,7 @@ private data class SprintUndoEntry(
     val prevSnapshot: SrsEngine.SrsSnapshot,
     val prevQueue: List<WordCardEntity>,
     val prevCramMode: Boolean,
+    val prevCombo: Int,
 )
 
 @Composable
@@ -99,6 +103,7 @@ fun SprintScreen(
     val dueCards by viewModel.dueCards.collectAsState()
     val graduatedCards by viewModel.graduatedCards.collectAsState()
     val deckCards by viewModel.deckCards.collectAsState()
+    val dailyStreak by viewModel.dailyStreak.collectAsState()
     val nextLearnTarget by viewModel.nextLearnTarget.collectAsState()
     val syncing by viewModel.syncing.collectAsState()
     val outboxCount by viewModel.outboxCount.collectAsState()
@@ -112,6 +117,7 @@ fun SprintScreen(
     var listeningMode by remember { mutableStateOf(false) }
     var autoAudio by remember { mutableStateOf(false) }
     var reviewedCount by remember { mutableIntStateOf(0) }
+    var sessionCombo by remember { mutableIntStateOf(0) }
     val sessionStartMs = remember { System.currentTimeMillis() }
     var dragOffsetX by remember { mutableFloatStateOf(0f) }
 
@@ -175,13 +181,14 @@ fun SprintScreen(
         val prevSnap = card.toSrsSnapshot()
 
         if (undoStack.size >= 20) undoStack.removeAt(0)
-        undoStack.add(SprintUndoEntry(card, prevSnap, snapshotQueue, snapshotCram))
+        undoStack.add(SprintUndoEntry(card, prevSnap, snapshotQueue, snapshotCram, sessionCombo))
 
         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
         revealed = false
         readingPeeked = false
         dragOffsetX = 0f
         reviewedCount++
+        sessionCombo = if (remembered) sessionCombo + 1 else 0
 
         if (queue.isNotEmpty()) {
             val head = queue.removeAt(0)
@@ -202,6 +209,7 @@ fun SprintScreen(
         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         viewModel.restoreSnapshot(last.card, last.prevSnapshot)
         cramMode = last.prevCramMode
+        sessionCombo = last.prevCombo
         queue.clear()
         queue.addAll(last.prevQueue)
         revealed = false
@@ -225,108 +233,144 @@ fun SprintScreen(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        // Minimal Distraction-Free Top Bar
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        // Minimal Distraction-Free Top Bar + Session Goal-Gradient Progress Bar
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Surface(
-                    shape = CircleShape,
-                    color = SumiElevated,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    Surface(
+                        shape = CircleShape,
+                        color = SumiElevated,
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Bolt,
-                            contentDescription = null,
-                            tint = VermilionPrimary,
-                            modifier = Modifier.size(15.dp),
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Bolt,
+                                contentDescription = null,
+                                tint = VermilionPrimary,
+                                modifier = Modifier.size(15.dp),
+                            )
+                            Text(
+                                text = if (cramMode) "${queue.size} ahead" else "${queue.size} due",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = WashiForeground,
+                            )
+                        }
+                    }
+
+                    if (sessionCombo >= 3) {
+                        Surface(
+                            shape = CircleShape,
+                            color = JadeSuccess.copy(alpha = 0.18f),
+                        ) {
+                            Text(
+                                text = "⚡ ${sessionCombo}x",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = JadeSuccess,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                            )
+                        }
+                    } else if (dailyStreak > 0) {
                         Text(
-                            text = if (cramMode) "${queue.size} ahead" else "${queue.size} due",
+                            text = "🔥 ${dailyStreak}d",
                             style = MaterialTheme.typography.labelMedium,
-                            color = WashiForeground,
+                            color = AmberAccent,
+                            fontWeight = FontWeight.SemiBold,
                         )
+                    } else if (cardsPerMin > 0) {
+                        Text(
+                            text = "$cardsPerMin/min",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = WashiMuted,
+                        )
+                    } else if (outboxCount > 0) {
+                        Text(
+                            text = "Syncing…",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = WashiMuted,
+                        )
+                    }
+
+                    if (undoStack.isNotEmpty()) {
+                        IconButton(
+                            onClick = ::undoLast,
+                            modifier = Modifier.size(34.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Outlined.Undo,
+                                contentDescription = "Undo",
+                                tint = WashiMuted,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
                     }
                 }
 
-                if (cardsPerMin > 0) {
-                    Text(
-                        text = "$cardsPerMin/min",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = WashiMuted,
-                    )
-                } else if (outboxCount > 0) {
-                    Text(
-                        text = "Syncing…",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = WashiMuted,
-                    )
-                }
-
-                if (undoStack.isNotEmpty()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     IconButton(
-                        onClick = ::undoLast,
-                        modifier = Modifier.size(34.dp),
+                        onClick = { listeningMode = !listeningMode },
+                        modifier = Modifier.size(36.dp),
                     ) {
                         Icon(
-                            imageVector = Icons.AutoMirrored.Outlined.Undo,
-                            contentDescription = "Undo",
-                            tint = WashiMuted,
-                            modifier = Modifier.size(18.dp),
+                            imageVector = if (listeningMode) Icons.Outlined.Headphones else Icons.Outlined.Title,
+                            contentDescription = "Toggle listening mode",
+                            tint = if (listeningMode) VermilionPrimary else WashiForeground,
+                            modifier = Modifier.size(19.dp),
                         )
+                    }
+                    IconButton(
+                        onClick = { autoAudio = !autoAudio },
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            imageVector = if (autoAudio) Icons.AutoMirrored.Outlined.VolumeUp else Icons.AutoMirrored.Outlined.VolumeOff,
+                            contentDescription = "Toggle auto audio",
+                            tint = if (autoAudio) WashiForeground else WashiMuted,
+                            modifier = Modifier.size(19.dp),
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = onOpenLibrary,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, SumiBorder),
+                        modifier = Modifier.height(36.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.VideoLibrary,
+                            contentDescription = null,
+                            modifier = Modifier.size(15.dp),
+                        )
+                        Spacer(Modifier.size(6.dp))
+                        Text("Library", style = MaterialTheme.typography.labelMedium)
                     }
                 }
             }
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                IconButton(
-                    onClick = { listeningMode = !listeningMode },
-                    modifier = Modifier.size(36.dp),
-                ) {
-                    Icon(
-                        imageVector = if (listeningMode) Icons.Outlined.Headphones else Icons.Outlined.Title,
-                        contentDescription = "Toggle listening mode",
-                        tint = if (listeningMode) VermilionPrimary else WashiForeground,
-                        modifier = Modifier.size(19.dp),
-                    )
-                }
-                IconButton(
-                    onClick = { autoAudio = !autoAudio },
-                    modifier = Modifier.size(36.dp),
-                ) {
-                    Icon(
-                        imageVector = if (autoAudio) Icons.AutoMirrored.Outlined.VolumeUp else Icons.AutoMirrored.Outlined.VolumeOff,
-                        contentDescription = "Toggle auto audio",
-                        tint = if (autoAudio) WashiForeground else WashiMuted,
-                        modifier = Modifier.size(19.dp),
-                    )
-                }
-                OutlinedButton(
-                    onClick = onOpenLibrary,
-                    shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, SumiBorder),
-                    modifier = Modifier.height(36.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.VideoLibrary,
-                        contentDescription = null,
-                        modifier = Modifier.size(15.dp),
-                    )
-                    Spacer(Modifier.size(6.dp))
-                    Text("Library", style = MaterialTheme.typography.labelMedium)
-                }
+            if (current != null && (reviewedCount + queue.size) > 0) {
+                val sessionPct = (reviewedCount.toFloat() / (reviewedCount + queue.size).coerceAtLeast(1))
+                    .coerceIn(0.03f, 1f)
+                LinearProgressIndicator(
+                    progress = { sessionPct },
+                    color = if (sessionCombo >= 3) JadeSuccess else VermilionPrimary,
+                    trackColor = SumiElevated,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(4.dp)),
+                )
             }
         }
 
@@ -557,9 +601,13 @@ fun SprintScreen(
                         }
 
                         if (revealed) {
+                            val lapseKanji = remember(current.word, current.state) {
+                                if (current.state == "learning") SrsEngine.extractKanjiCharacters(current.word)
+                                else emptyList()
+                            }
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
                                 Text(
                                     text = current.meaning,
@@ -572,6 +620,26 @@ fun SprintScreen(
                                         style = MaterialTheme.typography.labelMedium,
                                         color = WashiMuted,
                                     )
+                                }
+                                if (lapseKanji.size > 1) {
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        for (ch in lapseKanji) {
+                                            Surface(
+                                                shape = RoundedCornerShape(8.dp),
+                                                color = SumiElevated,
+                                                border = BorderStroke(1.dp, SumiBorder),
+                                            ) {
+                                                Text(
+                                                    text = ch,
+                                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+                                                    fontWeight = FontWeight.SemiBold,
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -705,10 +773,30 @@ fun SprintScreen(
                         verticalArrangement = Arrangement.spacedBy(18.dp),
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(
-                                text = if (syncing) "Syncing deck…" else "All caught up",
-                                style = MaterialTheme.typography.headlineMedium,
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = if (syncing) "Syncing deck…" else "All caught up",
+                                    style = MaterialTheme.typography.headlineMedium,
+                                )
+                                if (dailyStreak > 0) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = AmberAccent.copy(alpha = 0.16f),
+                                    ) {
+                                        Text(
+                                            text = "🔥 ${dailyStreak}d streak",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = AmberAccent,
+                                            fontWeight = FontWeight.SemiBold,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                        )
+                                    }
+                                }
+                            }
                             Text(
                                 text = "Zero SRS reviews due right now. Encode a small batch of new anime words in context or open your library.",
                                 style = MaterialTheme.typography.bodyMedium,

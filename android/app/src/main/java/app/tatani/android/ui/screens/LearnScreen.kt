@@ -111,6 +111,19 @@ fun LearnScreen(
         }
     }
 
+    val episodeDeckWords = remember(deckCards, targetEpId) {
+        if (targetEpId == null) emptyList()
+        else deckCards.filter { c ->
+            c.primaryEpisodeId == targetEpId ||
+                viewModel.repository.decodeContexts(c).any { it.episodeId == targetEpId }
+        }
+    }
+
+    val distractorPool = remember(episodeDeckWords, deckCards) {
+        val source = if (episodeDeckWords.size >= 8) episodeDeckWords else deckCards
+        source.map { SrsEngine.DistractorCandidate(it.word, it.meaning, it.partOfSpeech) }
+    }
+
     var phase by remember { mutableStateOf(LearnPhase.ENCODE) }
     val batch = remember { mutableStateListOf<WordCardEntity>() }
     var encodeIdx by remember { mutableIntStateOf(0) }
@@ -118,6 +131,7 @@ fun LearnScreen(
     val drillHits = remember { mutableStateMapOf<String, Int>() }
     var drillRevealed by remember { mutableStateOf(false) }
     var drillReadingPeeked by remember { mutableStateOf(false) }
+    var wrongBlitzPick by remember { mutableStateOf<String?>(null) }
     var graduatedCount by remember { mutableIntStateOf(0) }
     var confirmExitDrill by remember { mutableStateOf(false) }
 
@@ -160,6 +174,7 @@ fun LearnScreen(
         drillHits.clear()
         drillRevealed = false
         drillReadingPeeked = false
+        wrongBlitzPick = null
         graduatedCount = 0
     }
 
@@ -194,6 +209,7 @@ fun LearnScreen(
         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
         drillRevealed = false
         drillReadingPeeked = false
+        wrongBlitzPick = null
         val nextHits = if (recalled) (drillHits[head.word] ?: 0) + 1 else 0
         drillHits[head.word] = nextHits
 
@@ -306,6 +322,24 @@ fun LearnScreen(
 
             phase == LearnPhase.DONE -> {
                 val nextCount = availableUnlearned.size.coerceAtMost(SrsEngine.LEARN_BATCH_SIZE)
+                val userRank = SrsEngine.jlptRank(session?.userLevel)
+                val epTotal = episodeDeckWords.size
+                val epKnown = remember(episodeDeckWords, userRank) {
+                    episodeDeckWords.count { c ->
+                        val below = userRank in 1..50 && SrsEngine.jlptRank(c.level) < userRank
+                        !SrsEngine.isUnlearnedCandidate(
+                            hasExistingState = c.hasServerState,
+                            state = c.state,
+                            preference = c.preference,
+                            knownSource = c.knownSource,
+                            srsDueAtEpochMs = c.srsDueAtEpochMs,
+                            isBelowUserLevel = below,
+                        )
+                    }
+                }
+                val epCoverage = SrsEngine.computeComprehensionPercent(epKnown, epTotal)
+                val isWatchReady = epTotal > 0 && epCoverage >= SrsEngine.WATCH_READY_COVERAGE_PCT
+
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(22.dp),
@@ -332,6 +366,58 @@ fun LearnScreen(
                             color = WashiMuted,
                             textAlign = TextAlign.Center,
                         )
+
+                        if (epTotal > 0) {
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = SumiElevated,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (isWatchReady) JadeSuccess.copy(alpha = 0.55f) else SumiBorder,
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = if (isWatchReady) "🎬 Watch-Ready Unlocked!" else "Episode Comprehension",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (isWatchReady) JadeSuccess else WashiForeground,
+                                        )
+                                        Text(
+                                            text = "$epCoverage% ($epKnown/$epTotal)",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isWatchReady) JadeSuccess else VermilionPrimary,
+                                        )
+                                    }
+                                    LinearProgressIndicator(
+                                        progress = { (epCoverage / 100f).coerceIn(0f, 1f) },
+                                        color = if (isWatchReady) JadeSuccess else VermilionPrimary,
+                                        trackColor = SumiSurface,
+                                        modifier = Modifier.fillMaxWidth().height(6.dp),
+                                    )
+                                    Text(
+                                        text = if (isWatchReady) {
+                                            "85%+ coverage reached — watch the episode now or play Watch Bingo!"
+                                        } else {
+                                            "Reach ${SrsEngine.WATCH_READY_COVERAGE_PCT}% vocabulary coverage for smooth episode comprehension."
+                                        },
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = WashiMuted,
+                                    )
+                                }
+                            }
+                        }
+
                         if (nextCount > 0) {
                             Button(
                                 onClick = {
@@ -554,14 +640,29 @@ fun LearnScreen(
 
             phase == LearnPhase.DRILL && drillCard != null -> {
                 val hits = drillHits[drillCard.word] ?: 0
+                val blitzChoices = remember(drillCard.word, hits, distractorPool, drillQueue.size, graduatedCount) {
+                    if (hits == 0) {
+                        SrsEngine.buildMeaningChoices(
+                            targetWord = drillCard.word,
+                            targetMeaning = drillCard.meaning,
+                            targetPos = drillCard.partOfSpeech,
+                            pool = distractorPool,
+                            seed = drillQueue.size + graduatedCount,
+                        )
+                    } else {
+                        emptyList()
+                    }
+                }
+                val isBlitzMode = hits == 0 && blitzChoices.size == 4
                 val hasDistinctReading = !drillCard.reading.isNullOrBlank() && drillCard.reading != drillCard.word
                 val showDrillReading = hasDistinctReading && (drillRevealed || drillReadingPeeked || hits == 0)
+
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
                         .padding(vertical = 12.dp)
-                        .clickable(enabled = !drillRevealed) {
+                        .clickable(enabled = !isBlitzMode && !drillRevealed) {
                             drillRevealed = true
                             haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         },
@@ -582,7 +683,11 @@ fun LearnScreen(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                text = "Recall English meaning",
+                                text = if (isBlitzMode) {
+                                    "Speed Blitz · Pick meaning (1/2)"
+                                } else {
+                                    "Final Recall · Kanji → Meaning (2/2)"
+                                },
                                 style = MaterialTheme.typography.labelMedium,
                                 color = WashiMuted,
                             )
@@ -618,7 +723,7 @@ fun LearnScreen(
                                 .padding(vertical = 8.dp)
                                 .verticalScroll(rememberScrollState()),
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+                            verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 if (showDrillReading) {
@@ -681,7 +786,51 @@ fun LearnScreen(
                                 }
                             }
 
-                            if (drillRevealed) {
+                            if (isBlitzMode) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    for (choice in blitzChoices) {
+                                        val isWrongSelected = wrongBlitzPick == choice.meaning
+                                        val showAnswerColors = wrongBlitzPick != null
+                                        val borderColor = when {
+                                            showAnswerColors && choice.isCorrect -> JadeSuccess
+                                            isWrongSelected -> CrimsonAgain
+                                            else -> SumiBorder
+                                        }
+                                        val bgColor = when {
+                                            showAnswerColors && choice.isCorrect -> JadeSuccess.copy(alpha = 0.18f)
+                                            isWrongSelected -> CrimsonAgain.copy(alpha = 0.16f)
+                                            else -> SumiElevated
+                                        }
+                                        Surface(
+                                            onClick = {
+                                                if (wrongBlitzPick != null) return@Surface
+                                                if (choice.isCorrect) {
+                                                    onDrillGrade(true)
+                                                } else {
+                                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                    wrongBlitzPick = choice.meaning
+                                                    drillRevealed = true
+                                                }
+                                            },
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = bgColor,
+                                            border = BorderStroke(1.dp, borderColor),
+                                            modifier = Modifier.fillMaxWidth(),
+                                        ) {
+                                            Text(
+                                                text = choice.meaning,
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                fontWeight = FontWeight.Medium,
+                                                color = WashiForeground,
+                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                            } else if (drillRevealed) {
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                     verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -709,14 +858,30 @@ fun LearnScreen(
                         }
 
                         Text(
-                            text = if (!drillRevealed) "Recall English meaning · Tap card to reveal" else "",
+                            text = when {
+                                isBlitzMode && wrongBlitzPick == null -> "Tap the matching English meaning"
+                                isBlitzMode -> "Review the correct meaning in green, then continue"
+                                !drillRevealed -> "Recall English meaning · Tap card to reveal"
+                                else -> ""
+                            },
                             style = MaterialTheme.typography.labelMedium,
                             color = WashiMuted,
                         )
                     }
                 }
 
-                if (!drillRevealed) {
+                if (isBlitzMode) {
+                    if (wrongBlitzPick != null) {
+                        Button(
+                            onClick = { onDrillGrade(false) },
+                            shape = RoundedCornerShape(16.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = VermilionPrimary),
+                            modifier = Modifier.fillMaxWidth().height(60.dp),
+                        ) {
+                            Text("Got it — Re-queue", fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                } else if (!drillRevealed) {
                     Button(
                         onClick = {
                             drillRevealed = true
@@ -756,7 +921,7 @@ fun LearnScreen(
                             Icon(Icons.Outlined.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.size(4.dp))
                             Text(
-                                "Recalled (${hits + 1}/${SrsEngine.LEARN_GRADUATION_RECALLS})",
+                                "Graduate (${hits + 1}/${SrsEngine.LEARN_GRADUATION_RECALLS})",
                                 fontWeight = FontWeight.SemiBold,
                             )
                         }

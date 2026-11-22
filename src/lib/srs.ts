@@ -2,6 +2,12 @@ export const SRS_INTERVALS_DAYS = [1, 3, 7, 14, 30, 60, 120, 240, 480] as const;
 export const LEARN_BATCH_SIZE = 6;
 export const LEARN_GRADUATION_RECALLS = 2;
 export const SPRINT_LAPSE_REINSERT_GAP = 4;
+export const WATCH_READY_COVERAGE_PCT = 85;
+
+export interface MeaningChoice {
+  meaning: string;
+  isCorrect: boolean;
+}
 
 export type WordStateKind = "unknown" | "learning" | "known";
 export type WordPreferenceKind = "study" | "kanji_only" | "skip";
@@ -38,6 +44,26 @@ export interface SrsDeckCard extends WordSrsRecord {
 
 export function dueAtFromDays(days: number, nowMs = Date.now()): string {
   return new Date(nowMs + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function stableWordHash(word: string): number {
+  let h = 0;
+  for (let i = 0; i < word.length; i++) {
+    h = (Math.imul(31, h) + word.charCodeAt(i)) | 0;
+  }
+  return h & 0x7fffffff;
+}
+
+/**
+ * Disperses long-term batch reviews (14d+, srs_level >= 3) across ±5% of the interval
+ * so words learned in the same sitting do not pile onto a single future review day.
+ */
+export function fuzzedIntervalMs(word: string, nextLevel: number): number {
+  const clamped = Math.max(0, Math.min(nextLevel, SRS_INTERVALS_DAYS.length - 1));
+  const baseMs = SRS_INTERVALS_DAYS[clamped] * 24 * 60 * 60 * 1000;
+  if (clamped < 3 || !word) return baseMs;
+  const pctOffset = (stableWordHash(word) % 11) - 5; // -5% .. +5%
+  return Math.round(baseMs + (baseMs * pctOffset) / 100);
 }
 
 function computeNextSrsLevel(
@@ -79,7 +105,6 @@ export function computeNextSrsState(
 
   if (remembered) {
     const nextLevel = computeNextSrsLevel(prev, true, nowMs);
-    const days = SRS_INTERVALS_DAYS[nextLevel];
     return {
       word: meta.word,
       reading: meta.reading ?? prev?.reading ?? null,
@@ -89,7 +114,7 @@ export function computeNextSrsState(
       known_source: "learned",
       correct_streak: prevStreak + 1,
       srs_level: nextLevel,
-      srs_due_at: dueAtFromDays(days, nowMs),
+      srs_due_at: new Date(nowMs + fuzzedIntervalMs(meta.word, nextLevel)).toISOString(),
       last_reviewed_at: nowIso,
       marked_known_at: prev?.marked_known_at ?? nowIso,
     };
@@ -275,4 +300,66 @@ export function computeDailyStreak(
     cursor.setDate(cursor.getDate() - 1);
   }
   return streak;
+}
+
+export function computeComprehensionPercent(knownCount: number, totalCount: number): number {
+  if (totalCount <= 0) return 0;
+  return Math.max(0, Math.min(100, Math.round((Math.max(0, knownCount) * 100) / totalCount)));
+}
+
+/**
+ * Builds a 4-option meaning recognition blitz (1 correct + 3 episode/deck distractors,
+ * preferring matching part-of-speech) for Hit 1 of the Learn micro-drill before
+ * graduating via unassisted Kanji-first active recall on Hit 2 (Kang et al., 2007).
+ * Returns [] if fewer than 3 distinct distractors exist.
+ */
+export function buildMeaningChoices(
+  target: { word: string; meaning: string; part_of_speech?: string },
+  pool: ReadonlyArray<{ word: string; meaning: string; part_of_speech?: string }>,
+  seed = 0,
+): MeaningChoice[] {
+  const cleanTarget = target.meaning.trim();
+  if (!cleanTarget) return [];
+  const seenLower = new Set<string>([cleanTarget.toLowerCase()]);
+
+  const samePos: string[] = [];
+  const otherPos: string[] = [];
+  const normPos = (target.part_of_speech ?? "").trim().toLowerCase();
+
+  for (const c of pool) {
+    if (c.word === target.word) continue;
+    const m = (c.meaning ?? "").trim();
+    if (!m) continue;
+    const lower = m.toLowerCase();
+    if (seenLower.has(lower)) continue;
+    seenLower.add(lower);
+    if (normPos && (c.part_of_speech ?? "").trim().toLowerCase() === normPos) {
+      samePos.push(m);
+    } else {
+      otherPos.push(m);
+    }
+  }
+
+  if (samePos.length + otherPos.length < 3) return [];
+
+  const deterministicSort = (arr: string[], salt: number) =>
+    [...arr].sort(
+      (a, b) =>
+        ((stableWordHash(`${a}:${salt}:${target.word}`) % 99991) -
+          (stableWordHash(`${b}:${salt}:${target.word}`) % 99991)),
+    );
+
+  const picked = [...deterministicSort(samePos, seed), ...deterministicSort(otherPos, seed + 17)].slice(0, 3);
+  const correctSlot = (stableWordHash(`${target.word}:${seed}`) >>> 0) % 4;
+
+  const choices: MeaningChoice[] = [];
+  let dIdx = 0;
+  for (let slot = 0; slot < 4; slot++) {
+    if (slot === correctSlot) {
+      choices.push({ meaning: cleanTarget, isCorrect: true });
+    } else {
+      choices.push({ meaning: picked[dIdx++], isCorrect: false });
+    }
+  }
+  return choices;
 }

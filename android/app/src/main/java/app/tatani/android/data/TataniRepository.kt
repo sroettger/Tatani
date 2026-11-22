@@ -384,8 +384,8 @@ class TataniRepository(
                 val episodes = supabase.fetchEpisodesForAnimeIds(animeMetaById.keys.toList())
                 if (!isSessionStillValid()) return@withLock
 
-                val readyEpisodeIds = episodes.filter { it.processingStatus == "ready" }.map { it.id }
-                val cachesByEpisode = supabase.fetchEpisodeVocabCaches(readyEpisodeIds, lang)
+                val allEpisodeIds = episodes.map { it.id }
+                val cachesByEpisode = supabase.fetchEpisodeVocabCaches(allEpisodeIds, lang)
                     .associateBy { it.episodeId }
                 if (!isSessionStillValid()) return@withLock
 
@@ -407,6 +407,11 @@ class TataniRepository(
                     val animeTitle = meta.second
                     val catalog = meta.third
                     val vocabList = cachesByEpisode[ep.id]?.vocab.orEmpty()
+                    val effectiveStatus = when {
+                        vocabList.isNotEmpty() -> "ready"
+                        ep.processingStatus == "processing" || ep.processingStatus == "failed" -> ep.processingStatus
+                        else -> "not_processed"
+                    }
 
                     var knownCount = 0
                     var unlearnedCount = 0
@@ -470,8 +475,8 @@ class TataniRepository(
                         animePosition = animePos,
                         seasonNumber = ep.seasons.seasonNumber,
                         episodeNumber = ep.episodeNumber,
-                        processingStatus = ep.processingStatus,
-                        totalWords = vocabList.size,
+                        processingStatus = effectiveStatus,
+                        totalWords = knownCount + unlearnedCount,
                         knownWords = knownCount,
                         unlearnedWords = unlearnedCount,
                         episodeTitleEn = ep.titleEn,
@@ -622,8 +627,11 @@ class TataniRepository(
         return res
     }
 
-    suspend fun processEpisodeAndSync(episodeId: String): Result<Unit> {
-        val res = supabase.autoFetchAndProcessEpisode(episodeId)
+    suspend fun processEpisodeAndSync(episodeId: String): Result<Unit> =
+        processEpisodeDetailedAndSync(episodeId).map { }
+
+    suspend fun processEpisodeDetailedAndSync(episodeId: String): Result<Boolean> {
+        val res = supabase.autoFetchAndProcessEpisodeDetailed(episodeId)
         if (res.isSuccess) {
             syncAllFromServer()
         }

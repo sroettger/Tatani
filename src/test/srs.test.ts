@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import {
+  buildMeaningChoices,
+  computeComprehensionPercent,
   computeNextSrsState,
   computePriorKnownState,
   extractKanjiCharacters,
+  fuzzedIntervalMs,
   isDueForSprint,
   isGraduatedForSrs,
   isUnlearnedCandidate,
@@ -222,5 +225,27 @@ describe("SRS Learn vs Repeat split and contextual helpers", () => {
         correct_streak: 0,
       }),
     ).toBe(false);
+  });
+
+  it("builds same-POS Speed Blitz meaning choices and disperses 14d+ intervals by ±5%", () => {
+    const pool = [
+      { word: "探知", meaning: "detection", part_of_speech: "名詞" },
+      { word: "結界", meaning: "barrier", part_of_speech: "名詞" },
+      { word: "魔力", meaning: "mana", part_of_speech: "名詞" },
+      { word: "約束", meaning: "promise", part_of_speech: "名詞" },
+      { word: "走る", meaning: "to run", part_of_speech: "動詞" },
+    ];
+    const choices = buildMeaningChoices(pool[0], pool, 2);
+    expect(choices).toHaveLength(4);
+    expect(choices.filter((c) => c.isCorrect && c.meaning === "detection")).toHaveLength(1);
+    expect(choices.some((c) => c.meaning === "to run")).toBe(false);
+
+    const dayMs = 24 * 60 * 60 * 1000;
+    expect(fuzzedIntervalMs("探知", 2)).toBe(7 * dayMs);
+    const fuzzed14d = fuzzedIntervalMs("探知", 3);
+    expect(fuzzed14d).toBeGreaterThanOrEqual(Math.round(14 * dayMs * 0.95));
+    expect(fuzzed14d).toBeLessThanOrEqual(Math.round(14 * dayMs * 1.05));
+
+    expect(computeComprehensionPercent(17, 20)).toBe(85);
   });
 });
