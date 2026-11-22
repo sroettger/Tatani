@@ -257,8 +257,19 @@ class SupabaseClient(
     suspend fun signUpWithEmail(email: String, password: String): Result<Boolean> =
         withContext(Dispatchers.IO) {
             runCatching {
+                val cleanedEmail = email.trim()
+                val domain = cleanedEmail.substringAfterLast('@', "").lowercase()
+                if (!domain.contains('.') ||
+                    domain in setOf("example.com", "example.org", "example.net", "test.com", "localhost", "invalid") ||
+                    domain.endsWith(".invalid") ||
+                    domain.endsWith(".test") ||
+                    domain.endsWith(".example")
+                ) {
+                    error("Please enter a valid personal email address.")
+                }
+
                 val payload = buildJsonObject {
-                    put("email", email.trim())
+                    put("email", cleanedEmail)
                     put("password", password)
                 }.toString()
 

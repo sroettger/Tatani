@@ -132,6 +132,8 @@ describe("standalone FCM HTTP v1 sender", () => {
       expect(mockFetch).toHaveBeenCalledTimes(10);
       const thirdSqlBody = JSON.parse(String(mockFetch.mock.calls[7][1]?.body));
       expect(thirdSqlBody.query).toBe("CREATE TABLE t2 (id int);");
+      const authPatchBody = JSON.parse(String(mockFetch.mock.calls[9][1]?.body));
+      expect(authPatchBody.mailer_autoconfirm).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -1,6 +1,7 @@
 package app.tatani.android.ui
 
 import android.app.Application
+import android.provider.Settings
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.tatani.android.TataniApp
@@ -162,7 +163,16 @@ class TataniViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private fun isRunningInFirebaseTestLab(): Boolean =
+        runCatching {
+            Settings.System.getString(app.contentResolver, "firebase.test.lab") == "true"
+        }.getOrDefault(false)
+
     fun signUp(email: String, password: String) {
+        if (isRunningInFirebaseTestLab()) {
+            _authMessage.value = "Automated test device detected — sign-up disabled during Pre-Launch crawl."
+            return
+        }
         viewModelScope.launch {
             _authBusy.value = true
             _authMessage.value = null

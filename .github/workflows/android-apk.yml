@@ -151,7 +151,7 @@ jobs:
           packageName: com.tsuro.tatani
           releaseFiles: tatani-android-release.aab
           mappingFile: tatani-r8-mapping.txt
-          track: ${{ inputs.play_track || 'internal' }}
+          tracks: ${{ inputs.play_track || 'internal' }}
           inAppUpdatePriority: 3
           status: completed
 
@@ -167,7 +167,7 @@ jobs:
           packageName: com.tsuro.tatani
           releaseFiles: tatani-android-release.aab
           mappingFile: tatani-r8-mapping.txt
-          track: ${{ inputs.play_track || 'internal' }}
+          tracks: ${{ inputs.play_track || 'internal' }}
           inAppUpdatePriority: 3
           status: draft
 

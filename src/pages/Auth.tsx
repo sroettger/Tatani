@@ -11,6 +11,30 @@ import { toast } from "sonner";
 import { Sparkles, Eye, EyeOff, Mail } from "lucide-react";
 import { useI18n } from "@/i18n";
 
+const BLOCKED_EMAIL_DOMAINS = new Set([
+  "example.com",
+  "example.org",
+  "example.net",
+  "test.com",
+  "localhost",
+  "invalid",
+  "mailinator.com",
+  "tempmail.com",
+]);
+
+function isBlockedEmailAddress(rawEmail: string): boolean {
+  const trimmed = rawEmail.trim().toLowerCase();
+  const atIdx = trimmed.lastIndexOf("@");
+  if (atIdx <= 0 || atIdx === trimmed.length - 1) return true;
+  const domain = trimmed.slice(atIdx + 1);
+  if (!domain.includes(".")) return true;
+  if (BLOCKED_EMAIL_DOMAINS.has(domain)) return true;
+  if (domain.endsWith(".invalid") || domain.endsWith(".test") || domain.endsWith(".example") || domain.endsWith(".localhost")) {
+    return true;
+  }
+  return false;
+}
+
 function appBaseUrl(): string {
   return new URL(import.meta.env.BASE_URL || "/", window.location.origin).toString();
 }
@@ -55,19 +79,25 @@ export default function Auth() {
 
   const handleEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSignUp && isBlockedEmailAddress(email)) {
+      toast.error(t("auth.signUpFailed"), { description: "Please enter a valid personal email address." });
+      return;
+    }
     setBusy(true);
     try {
       if (isSignUp) {
-        const { error } = await supabase.auth.signUp({
-          email,
+        const { data, error } = await supabase.auth.signUp({
+          email: email.trim(),
           password,
           options: { emailRedirectTo: appBaseUrl() },
         });
         if (error) throw error;
-        setConfirmSent(true);
-        toast.success(t("auth.checkEmail"), { description: t("auth.checkEmailBody") });
+        if (!data.session) {
+          setConfirmSent(true);
+          toast.success(t("auth.checkEmail"), { description: t("auth.checkEmailBody") });
+        }
       } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
         if (error) throw error;
       }
     } catch (e: unknown) {
@@ -84,8 +114,12 @@ export default function Auth() {
       toast.error(t("auth.enterEmailFirst"));
       return;
     }
+    if (isBlockedEmailAddress(email)) {
+      toast.error(t("auth.resetFailedTitle"), { description: "Please enter a valid email address." });
+      return;
+    }
     setBusy(true);
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
       redirectTo: new URL("reset-password", appBaseUrl()).toString(),
     });
     setBusy(false);

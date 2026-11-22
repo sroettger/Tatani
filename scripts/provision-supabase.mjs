@@ -151,7 +151,7 @@ export async function applyMigrationsViaApi({
     );
   }
 
-  // Best-effort Auth redirect URL setup for GitHub Pages + Android custom scheme
+  // Configure Auth redirect URLs + auto-confirm signups so bot/Robo signups never bounce default SMTP
   try {
     await apiRequest(
       `/projects/${projectId}/config/auth`,
@@ -161,11 +161,12 @@ export async function applyMigrationsViaApi({
         body: JSON.stringify({
           site_url: siteUrl,
           uri_allow_list: redirectUrls,
+          mailer_autoconfirm: true,
         }),
       },
       fetchImpl,
     );
-    console.log("Configured Supabase Auth Site URL and Redirect URLs.");
+    console.log("Configured Supabase Auth Site URL, Redirect URLs, and mailer_autoconfirm=true.");
   } catch (err) {
     console.warn("Note: skipped automatic Auth URL patch:", err instanceof Error ? err.message : err);
   }
