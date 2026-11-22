@@ -6,7 +6,7 @@ import {
   type Token,
 } from "./tokenize-jp.ts";
 import { extractVocabLatin } from "./tokenize-latin.ts";
-import { rankVocabBySeasonAndUtility } from "./season-corpus.ts";
+import { isNonStandaloneMeaning, rankVocabBySeasonAndUtility } from "./season-corpus.ts";
 import {
   callAiChatCompletions,
   DEFAULT_AI_MODEL,
@@ -252,4 +252,53 @@ Deno.test("resolveAiModel upgrades deprecated gemini-2.5-flash to gemini-3.5-fla
   );
   assertEquals(badKeyResp.status, 400);
   assertEquals(invalidTries, ["gemini-3.5-flash-lite"]);
+});
+
+Deno.test("reunites split Katakana compounds (イン + プラント -> インプラント), drops 2-char non-JLPT prefixes/names, and blocks affix glosses like 'im- (prefix)'", () => {
+  const lineMap: Record<string, Token[]> = {
+    "最新のインプラントを入れた": [
+      { surface_form: "最新", basic_form: "最新", reading: "サイシン", pos: "名詞", pos_detail_1: "一般" },
+      { surface_form: "の", basic_form: "の", pos: "助詞" },
+      // IPADIC splitting an unknown compound Katakana loanword into prefix + root:
+      { surface_form: "イン", basic_form: "イン", reading: "イン", pos: "名詞", pos_detail_1: "一般" },
+      { surface_form: "プラント", basic_form: "プラント", reading: "プラント", pos: "名詞", pos_detail_1: "一般" },
+      { surface_form: "を", basic_form: "を", pos: "助詞" },
+      { surface_form: "入れ", basic_form: "入れる", reading: "イレ", pos: "動詞", pos_detail_1: "自立" },
+      { surface_form: "た", basic_form: "た", pos: "助動詞" },
+    ],
+    "レオがキーとバスを探す": [
+      // 2-char non-JLPT Katakana name レオ -> dropped; 2-char valid nouns キー & バス -> kept
+      { surface_form: "レオ", basic_form: "レオ", reading: "レオ", pos: "名詞", pos_detail_1: "一般" },
+      { surface_form: "が", basic_form: "が", pos: "助詞" },
+      { surface_form: "キー", basic_form: "キー", reading: "キー", pos: "名詞", pos_detail_1: "一般" },
+      { surface_form: "と", basic_form: "と", pos: "助詞" },
+      { surface_form: "バス", basic_form: "バス", reading: "バス", pos: "名詞", pos_detail_1: "一般" },
+      { surface_form: "を", basic_form: "を", pos: "助詞" },
+      { surface_form: "探す", basic_form: "探す", reading: "サガス", pos: "動詞", pos_detail_1: "自立" },
+    ],
+  };
+
+  const mockTokenizer: JapaneseTokenizer = {
+    tokenize: (line: string) => lineMap[line] ?? [],
+  };
+
+  const extracted = extractVocabWithTokenizer(mockTokenizer, Object.keys(lineMap).join("\n"));
+  const byWord = new Map(extracted.map((e) => [e.word, e]));
+
+  assert(!byWord.has("イン"), "broken prefix fragment イン must never be emitted");
+  assert(!byWord.has("プラント"), "split half プラント must be merged into インプラント");
+  assert(byWord.has("インプラント"), "merged compound インプラント should be emitted");
+  assertEquals(byWord.get("インプラント")?.reading, "いんぷらんと");
+
+  assert(!byWord.has("レオ"), "unlisted 2-char Katakana name レオ should be filtered");
+  assert(byWord.has("キー"));
+  assert(byWord.has("バス"));
+
+  // Deterministic post-AI meaning guard
+  assertEquals(isNonStandaloneMeaning("im- (prefix)"), true);
+  assertEquals(isNonStandaloneMeaning("-tion (suffix)"), true);
+  assertEquals(isNonStandaloneMeaning("character name"), true);
+  assertEquals(isNonStandaloneMeaning("fictional corporation in Night City"), true);
+  assertEquals(isNonStandaloneMeaning("implant; cybernetic implant"), false);
+  assertEquals(isNonStandaloneMeaning("important; essential"), false);
 });

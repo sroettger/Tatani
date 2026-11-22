@@ -62,13 +62,14 @@ export function getTokenizer(): Promise<JapaneseTokenizer> {
 // POS classes worth surfacing as vocabulary. Filter out particles, aux verbs, interjections (感動詞), symbols, etc.
 const STUDY_POS = new Set(["名詞", "動詞", "形容詞", "副詞", "形容動詞", "連体詞"]);
 
-// Skip proper nouns (固有名詞: person names, surnames, places, orgs), numbers, pronouns, dependent forms, suffixes, ASCII, etc.
+// Skip proper nouns (固有名詞: person names, surnames, places, orgs), numbers, pronouns, dependent forms, affixes, ASCII, etc.
 const SKIP_POS_DETAIL = new Set([
   "固有名詞",
   "数",
   "代名詞",
   "非自立",
   "接尾",
+  "接頭",
   "接続助詞",
   "アルファベット",
   "間投",
@@ -87,6 +88,19 @@ const ALLOWED_SHORT_HIRAGANA = new Set([
   "まず",
   "ほぼ",
   "もし",
+]);
+
+// Everyday modern 2-char Katakana nouns not in older JLPT lists (all other valid 2-char Katakana like ドア/パン/バス are in JLPT).
+// Restricting 2-char Katakana to JLPT + this set blocks 2-char prefixes (イン, アン, サブ, ノン) and 2-char foreign names (レオ, カイ, レン).
+const EXTRA_VALID_TWO_CHAR_KATAKANA = new Set([
+  "キー",
+  "ログ",
+  "バグ",
+  "タグ",
+  "ボス",
+  "ギア",
+  "ケア",
+  "レア",
 ]);
 
 // Vocalizations, fillers, and interjections that kuromoji sometimes tags as 副詞 or 名詞.
@@ -123,11 +137,12 @@ const NOISE_WORDS = new Set([
 
 // Honorific suffixes that strongly indicate the preceding unlisted noun is a character's name.
 const PERSON_HONORIFIC_RE = /^(さん|ちゃん|くん|君|様|さま|殿|氏|嬢)$/;
+const KATAKANA_PERSON_HONORIFIC_RE = /^(サン|チャン|クン|サマ|ドノ)$/;
 // Role/title endings that can take -さん/-様 without being personal names (e.g. 社長さん, お嬢様, 神様).
 const ROLE_NOUN_RE = /(?:[長師士官員生姫王主神仏様客方人者屋店]|^(?:お|ご|御))/;
 
-// 2-char Katakana loanwords (e.g. パン, ドア, バス, キー).
 const TWO_CHAR_KATAKANA_RE = /^[ァ-ヴー]{2}$/;
+const CONTIGUOUS_KATAKANA_SEGMENT_RE = /^[ァ-ヴー]+$/;
 const PURE_KATAKANA_RE = /^[ァ-ヴー・＝]{2,}$/;
 
 export function katakanaToHiragana(s: string): string {
@@ -180,22 +195,96 @@ function canonicalWord(t: Token): string {
   return t.basic_form && t.basic_form !== "*" ? t.basic_form : t.surface_form;
 }
 
+/**
+ * Reunite contiguous Katakana runs that IPADIC's 2007 lexicon splits into bogus fragments
+ * (e.g. インプラント -> イン + プラント, インターフェース -> インター + フェース, パーティー -> パー + ティー).
+ * Preserves Katakana person-honorific suffixes (サン/チャン/クン/サマ) and Katakana particles in robot speech.
+ */
+export function mergeAdjacentKatakanaTokens(tokens: Token[]): Token[] {
+  if (tokens.length <= 1) return tokens;
+
+  const isMergeable = (t: Token, hasPrecedingKatakana: boolean): boolean => {
+    if (!CONTIGUOUS_KATAKANA_SEGMENT_RE.test(t.surface_form)) return false;
+    if (t.pos === "助詞" || t.pos === "助動詞") return false;
+    if (hasPrecedingKatakana) {
+      if (t.pos_detail_1 === "接尾" && t.pos_detail_2 === "人名") return false;
+      if (KATAKANA_PERSON_HONORIFIC_RE.test(t.surface_form)) return false;
+    }
+    return true;
+  };
+
+  const merged: Token[] = [];
+  let i = 0;
+  while (i < tokens.length) {
+    if (!isMergeable(tokens[i], false)) {
+      merged.push(tokens[i]);
+      i++;
+      continue;
+    }
+
+    let j = i + 1;
+    while (j < tokens.length && isMergeable(tokens[j], true)) {
+      j++;
+    }
+
+    if (j === i + 1) {
+      merged.push(tokens[i]);
+      i++;
+      continue;
+    }
+
+    const run = tokens.slice(i, j);
+    const combinedSurface = run.map((r) => r.surface_form).join("");
+    const allProper = run.every(
+      (r) =>
+        r.pos_detail_1 === "固有名詞" ||
+        r.pos_detail_2 === "人名" ||
+        r.pos_detail_2 === "地域" ||
+        r.pos_detail_2 === "組織",
+    );
+
+    merged.push({
+      surface_form: combinedSurface,
+      basic_form: combinedSurface,
+      reading: combinedSurface,
+      pos: "名詞",
+      pos_detail_1: allProper ? "固有名詞" : "一般",
+      pos_detail_2: allProper ? run[0].pos_detail_2 : undefined,
+      word_type: "KNOWN",
+    });
+    i = j;
+  }
+
+  return merged;
+}
+
 function isEligibleBaseToken(t: Token, word: string): boolean {
   if (!STUDY_POS.has(t.pos)) return false;
   if (t.pos_detail_1 && SKIP_POS_DETAIL.has(t.pos_detail_1)) return false;
-  if (t.pos_detail_2 === "人名" || t.pos_detail_2 === "地域" || t.pos_detail_2 === "組織") return false;
+  if (
+    t.pos_detail_2 === "人名" ||
+    t.pos_detail_2 === "地域" ||
+    t.pos_detail_2 === "組織" ||
+    t.pos_detail_2 === "接頭" ||
+    t.pos_detail_2 === "接尾"
+  ) {
+    return false;
+  }
   if (t.word_type === "UNKNOWN") return false;
   if (!word || word.length < 1) return false;
   if (NOISE_WORDS.has(word)) return false;
   if (!/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]/.test(word)) return false;
-  if (/^[、。！？…・「」『』（）()\s]+$/.test(word)) return false;
+  if (/^[、。！？…・「」『』（）()\sー]+$/.test(word)) return false;
 
   // Foreign multi-part names with nakaguro/equals (e.g. ロイド・フォージャー, ジャン＝ピエール).
   if (/[・＝]/.test(word) && !getOfficialJlptLevel(word)) return false;
 
   const isAllKana = /^[\u3040-\u309F\u30A0-\u30FFー]+$/.test(word);
   if (isAllKana && word.length <= 2) {
-    const allowedKatakana = TWO_CHAR_KATAKANA_RE.test(word) && word !== "ーー";
+    const allowedKatakana =
+      TWO_CHAR_KATAKANA_RE.test(word) &&
+      word !== "ーー" &&
+      (Boolean(getOfficialJlptLevel(word)) || EXTRA_VALID_TWO_CHAR_KATAKANA.has(word));
     if (!allowedKatakana && !ALLOWED_SHORT_HIRAGANA.has(word)) return false;
   }
   return true;
@@ -226,7 +315,8 @@ export function detectCoinedCharacterNames(tokenizedLines: Token[][]): Set<strin
       if (
         next &&
         ((next.pos_detail_1 === "接尾" && next.pos_detail_2 === "人名") ||
-          PERSON_HONORIFIC_RE.test(next.surface_form))
+          PERSON_HONORIFIC_RE.test(next.surface_form) ||
+          KATAKANA_PERSON_HONORIFIC_RE.test(next.surface_form))
       ) {
         if (PURE_KATAKANA_RE.test(word) || !ROLE_NOUN_RE.test(word)) {
           names.add(word);
@@ -283,7 +373,7 @@ export function extractVocabWithTokenizer(
 
   for (const line of lines) {
     try {
-      tokenizedLines.push(tokenizer.tokenize(line));
+      tokenizedLines.push(mergeAdjacentKatakanaTokens(tokenizer.tokenize(line)));
       validLines.push(line);
     } catch {
       // Skip malformed line

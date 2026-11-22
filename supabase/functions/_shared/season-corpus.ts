@@ -80,6 +80,28 @@ export function rankVocabBySeasonAndUtility(
   return ranked;
 }
 
+const NON_STANDALONE_GLOSS_TAG_RE =
+  /\(\s*(?:prefix|suffix|affix|bound morpheme|combining form|word fragment|interjection|onomatopoeia|sfx|sound effect|proper noun|character(?:'s)? name|person(?:'s)? name|place name|surname|given name)\s*\)/i;
+
+const HYPHEN_AFFIX_GLOSS_RE =
+  /^(?:[\p{L}]{1,5}-\s*(?:\(|,|;|$)|-[\p{L}]{1,6}\s*(?:\(|,|;|$))/iu;
+
+const EXPLICIT_NON_VOCAB_GLOSS_RE =
+  /^(?:character(?:'s)? name|person(?:'s)? name|male name|female name|given name|family name|surname|place name|city name|company name|organization name|fictional\s+(?:city|company|corporation|gang|organization|character|place|brand)|proper noun|prefix\b|suffix\b|sound effect\b|interjection\b)/i;
+
+/**
+ * Deterministic post-AI safeguard catching bound affixes ("im- (prefix)", "-tion (suffix)"),
+ * broken word fragments, sound effects, and proper-noun glosses even if the LLM omits the flag.
+ */
+export function isNonStandaloneMeaning(rawMeaning: string): boolean {
+  const m = rawMeaning.trim();
+  if (!m) return true;
+  if (NON_STANDALONE_GLOSS_TAG_RE.test(m)) return true;
+  if (HYPHEN_AFFIX_GLOSS_RE.test(m)) return true;
+  if (EXPLICIT_NON_VOCAB_GLOSS_RE.test(m)) return true;
+  return false;
+}
+
 /* ---------- Lightweight Kitsunekko Sibling Episode Sampling (0 AI) --------- */
 
 const UA = "Tatani v2.0";

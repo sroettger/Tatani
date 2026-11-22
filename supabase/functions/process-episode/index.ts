@@ -15,6 +15,7 @@ import {
 } from "../_shared/ai.ts";
 import { getOfficialJlptLevel } from "../_shared/jlpt-lookup.ts";
 import {
+  isNonStandaloneMeaning,
   rankVocabBySeasonAndUtility,
   sampleKitsunekkoSiblingDialogues,
   type SeasonRankedVocab,
@@ -55,7 +56,7 @@ type TranslatedWord = {
   meaning: string;
   example_en: string;
   level: string;
-  is_proper_noun: boolean;
+  exclude_from_flashcards: boolean;
 };
 
 type TaggedVocab = SeasonRankedVocab;
@@ -165,13 +166,13 @@ function buildTranslateTool(levels: string[]) {
                   enum: [...levels, "none"],
                   description: "Difficulty level of this word on the requested scale",
                 },
-                is_proper_noun: {
+                exclude_from_flashcards: {
                   type: "boolean",
                   description:
-                    "true if this item is a character/person name, surname, nickname, place/country/city name, organization/brand name, fictional proper noun, vocal interjection/SFX, or broken non-word fragment; false for genuine learnable vocabulary",
+                    "true if this item is NOT a standalone learnable vocabulary word — including: (1) proper nouns (character/person names, surnames, nicknames, places, companies/gangs, fictional proper nouns), (2) prefixes, suffixes, affixes, or broken tokenizer fragments split out of a longer word in example_sentence_jp (e.g. 'im- (prefix)'), or (3) vocalizations/SFX/interjections; false ONLY for complete, reusable standalone words",
                 },
               },
-              required: ["word", "meaning", "example_sentence_en", "level", "is_proper_noun"],
+              required: ["word", "meaning", "example_sentence_en", "level", "exclude_from_flashcards"],
               additionalProperties: false,
             },
           },
@@ -211,7 +212,7 @@ async function detectUnusualKanaSpellings(
 
 Only report words where:
 - The kana surface form ACTUALLY appears as a contiguous substring in the text below
-- The word is a meaningful general-language content word (NOT a character name, nickname, proper noun, particle, interjection, or onomatopoeia)
+- The word is a meaningful general-language content word (NOT a character name, nickname, proper noun, prefix/suffix, particle, interjection, or onomatopoeia)
 - A learner would benefit from knowing the canonical kanji form
 
 Do NOT report character names, place names, or words already in standard kanji form. Return at most 25 entries.
@@ -405,7 +406,10 @@ Deno.serve(async (req) => {
         : `Also assign each word a CEFR difficulty level (${learning.levels.join(", ")}) based on how common/advanced it is in ${learning.name}.`;
       const userMessage = `Anime context: "${animeContextTitle}" (Season ${seasonNumber}, Episode ${episodeNumber}).
 Translate each ${learning.name} word below into ${explainLang} using its example sentence as context. ${levelInstruction}
-IMPORTANT: Set is_proper_noun=true for ANY character name, surname, nickname, place/city/country name, organization/company name, fictional proper noun specific only to "${animeContextTitle}", vocal interjection/sound effect, or broken non-word fragment so learners only study genuine reusable ${learning.name} vocabulary.
+IMPORTANT: Set exclude_from_flashcards=true for ANY item that is NOT a standalone reusable vocabulary word — including:
+1. Proper nouns (character/person names, surnames, nicknames, places, organizations/companies/gangs, or fictional proper nouns specific only to "${animeContextTitle}"),
+2. Prefixes, suffixes, bound affixes, or broken tokenizer fragments split out of a longer compound word in example_sentence_jp (never output prefix/suffix cards like "im- (prefix)"),
+3. Vocalizations, sound effects, laughs, screams, or filler interjections.
 Also extract meaningful grammar points used in these sentences (particles/conjugations/common patterns), each tagged with a difficulty level from: ${learning.levels.join(", ")}.
 
 WORDS:
@@ -421,7 +425,7 @@ ${JSON.stringify(wordsPayload, null, 2)}`;
                 messages: [
                   {
                     role: "system",
-                    content: `You are a ${learning.name}-to-${explainLang} translator helping language learners study reusable vocabulary from "${animeContextTitle}". Flag all character names, surnames, place/org names, fictional proper nouns, and vocal SFX with is_proper_noun=true. For real vocabulary words, provide a concise ${explainLang} meaning that fits the example sentence context, plus a natural ${explainLang} translation of that example sentence. Then extract grammar points actually used in the supplied sentences, explained in ${explainLang}. You MUST call the translate_vocab_and_extract_grammar function.`,
+                    content: `You are a ${learning.name}-to-${explainLang} translator helping language learners study standalone reusable vocabulary from "${animeContextTitle}". Set exclude_from_flashcards=true on all character/place/org proper nouns, fictional proper nouns, prefixes/suffixes/broken word fragments, and vocal SFX. For genuine standalone vocabulary words, provide a concise ${explainLang} meaning that fits the example sentence context, plus a natural ${explainLang} translation of that example sentence. Then extract grammar points actually used in the supplied sentences, explained in ${explainLang}. You MUST call the translate_vocab_and_extract_grammar function.`,
                   },
                   { role: "user", content: userMessage },
                 ],
@@ -455,7 +459,7 @@ ${JSON.stringify(wordsPayload, null, 2)}`;
                 meaning?: string;
                 example_sentence_en?: string;
                 level?: string;
-                is_proper_noun?: boolean;
+                exclude_from_flashcards?: boolean;
               }>;
               grammar?: Array<{
                 pattern?: string;
@@ -473,7 +477,7 @@ ${JSON.stringify(wordsPayload, null, 2)}`;
                   meaning: v.meaning ?? "",
                   example_en: v.example_sentence_en ?? "",
                   level: v.level ?? "none",
-                  is_proper_noun: Boolean(v.is_proper_noun),
+                  exclude_from_flashcards: Boolean(v.exclude_from_flashcards),
                 });
               }
             }
@@ -578,22 +582,23 @@ ${JSON.stringify(wordsPayload, null, 2)}`;
         .map((v) => {
           const m = allMeanings.get(v.word);
           const level = isJapanese ? v.level : (m?.level ?? "none");
+          const meaning = (m?.meaning ?? "").trim();
           return {
             word: v.word,
             reading: isJapanese ? v.reading : "",
             part_of_speech: v.part_of_speech,
             jlpt_level: level,
             level,
-            meaning: (m?.meaning ?? "").trim(),
+            meaning,
             example_sentence_jp: v.example_sentence_jp,
             example_sentence_en: (m?.example_en ?? "").trim(),
             frequency: v.frequency,
             episode_frequency: v.episodeFrequency,
-            _skipProper: Boolean(m?.is_proper_noun),
+            _skipCard: Boolean(m?.exclude_from_flashcards) || isNonStandaloneMeaning(meaning),
           };
         })
-        .filter((v) => v.meaning.length > 0 && !v._skipProper)
-        .map(({ _skipProper: _dropped, ...cleanItem }) => cleanItem);
+        .filter((v) => v.meaning.length > 0 && !v._skipCard)
+        .map(({ _skipCard: _dropped, ...cleanItem }) => cleanItem);
 
       return { vocab, grammarMap, okBatches, totalBatches: batches.length, firstError };
     };
