@@ -46,6 +46,15 @@
                 android:resource="@xml/shortcuts" />
         </activity>
 
+        <activity
+            android:name=".notifications.BoosterOverlayActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Tatani.Overlay"
+            android:launchMode="singleInstance"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:noHistory="true" />
+
         <receiver
             android:name=".notifications.BoosterActionReceiver"
             android:exported="false" />

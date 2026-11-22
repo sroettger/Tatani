@@ -122,14 +122,14 @@ class BoosterActionReceiver : BroadcastReceiver() {
                                 append("\n").append(sentenceJp)
                             }
                         }
-                        val feedbackBuilder = NotificationCompat.Builder(context, INTERACTIVE_CHANNEL_ID)
+                        val feedbackBuilder = NotificationCompat.Builder(context, PROMPT_CHANNEL_ID)
                             .setSmallIcon(R.drawable.ic_stat_tatani)
                             .setContentTitle(titleLine)
                             .setContentText(secondLine)
                             .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
                             .setContentIntent(buildOpenSprintIntent(context, word.hashCode()))
+                            .setOnlyAlertOnce(true)
                             .setAutoCancel(true)
-                            .setTimeoutAfter(FEEDBACK_TIMEOUT_MS)
                             .setPriority(NotificationCompat.PRIORITY_HIGH)
 
                         if (remembered) {
@@ -200,17 +200,14 @@ class BoosterActionReceiver : BroadcastReceiver() {
                         }
                     }
 
-                    // Post on INTERACTIVE_CHANNEL_ID (IMPORTANCE_HIGH with null sound & WITHOUT setSilent(true))
-                    // under a fresh notification ID before cancelling the prompt ID so Android keeps/pops the
-                    // revealed meaning right at the top of the screen instead of hiding it in the silent shade!
-                    val feedbackBuilder = NotificationCompat.Builder(context, INTERACTIVE_CHANNEL_ID)
+                    val feedbackBuilder = NotificationCompat.Builder(context, PROMPT_CHANNEL_ID)
                         .setSmallIcon(R.drawable.ic_stat_tatani)
                         .setContentTitle(titleLine)
                         .setContentText(secondLine)
                         .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
                         .setContentIntent(buildOpenSprintIntent(context, word.hashCode()))
+                        .setOnlyAlertOnce(true)
                         .setAutoCancel(true)
-                        .setTimeoutAfter(FEEDBACK_TIMEOUT_MS)
                         .setPriority(NotificationCompat.PRIORITY_HIGH)
 
                     if (remembered) {
@@ -270,6 +267,7 @@ class BoosterActionReceiver : BroadcastReceiver() {
         private const val MAX_NOTIFICATION_ID = 4199
         private const val FEEDBACK_TIMEOUT_MS = 25_000L
 
+        const val ACTION_OPEN_PROMPT = "app.tatani.android.ACTION_BOOSTER_OPEN_PROMPT"
         const val ACTION_GRADE_KNOW = "app.tatani.android.ACTION_BOOSTER_KNOW"
         const val ACTION_GRADE_AGAIN = "app.tatani.android.ACTION_BOOSTER_AGAIN"
         const val ACTION_PEEK_READING = "app.tatani.android.ACTION_BOOSTER_PEEK"
@@ -307,19 +305,8 @@ class BoosterActionReceiver : BroadcastReceiver() {
                     description = "Contextual self-check flashcards for graduated SRS words"
                 }
 
-                // IMPORTANCE_HIGH with silent audio so answer reveals & reading peeks pop visually
-                // on screen (Heads-Up + top Alerting shade) without chiming or vibrating on every tap!
-                val interactiveChannel = NotificationChannel(
-                    INTERACTIVE_CHANNEL_ID,
-                    "SRS Answer Reveal & Chained Cards",
-                    NotificationManager.IMPORTANCE_HIGH
-                ).apply {
-                    description = "Instant visual answer feedback and reading peek after tapping a flashcard notification"
-                    setSound(null, null)
-                    enableVibration(false)
-                }
-
-                nm.createNotificationChannels(listOf(promptChannel, interactiveChannel))
+                nm.createNotificationChannel(promptChannel)
+                runCatching { nm.deleteNotificationChannel(INTERACTIVE_CHANNEL_ID) }
             }
         }
 
@@ -335,8 +322,6 @@ class BoosterActionReceiver : BroadcastReceiver() {
             prefs.edit().putInt(KEY_ACTIVE_ID, nextId).apply()
 
             val nm = NotificationManagerCompat.from(context)
-            // Post nextId BEFORE cancelling prevId so active count never drops to 0 (preventing
-            // SystemUI from auto-closing an open shade) while a fresh key triggers visual Heads-Up!
             nm.notify(nextId, notification)
             if (prevId != nextId) {
                 nm.cancel(prevId)
@@ -350,6 +335,7 @@ class BoosterActionReceiver : BroadcastReceiver() {
             val nm = NotificationManagerCompat.from(context)
             nm.cancel(prevId)
             nm.cancel(BASE_NOTIFICATION_ID)
+            nm.cancelAll()
         }
 
         private fun buildDismissPending(context: Context): PendingIntent {
@@ -408,15 +394,18 @@ class BoosterActionReceiver : BroadcastReceiver() {
 
             val ctx = SrsEngine.pickContextualSentence(contexts, card.srsLevel)
             val promptBody = when {
-                ctx == null -> "Due in SRS · Tap to open Sprint"
+                ctx == null -> "Due in SRS · Tap to review"
                 ctx.animeTitle.isNotBlank() && ctx.episodeNumber > 0 ->
                     "${ctx.jp}\n${ctx.animeTitle} · Ep ${ctx.episodeNumber}"
                 else -> ctx.jp
             }
 
-            fun actionPending(action: String, remembered: Boolean?, reqCode: Int): PendingIntent {
-                val i = Intent(context, BoosterActionReceiver::class.java).apply {
+            fun overlayPending(action: String, remembered: Boolean?, reqCode: Int): PendingIntent {
+                val i = Intent(context, BoosterOverlayActivity::class.java).apply {
                     this.action = action
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_NO_ANIMATION
                     putExtra(EXTRA_WORD, card.word)
                     putExtra(EXTRA_LANG, card.learningLanguage)
                     putExtra(EXTRA_IS_DEMO, false)
@@ -424,7 +413,7 @@ class BoosterActionReceiver : BroadcastReceiver() {
                         putExtra(EXTRA_REMEMBERED, remembered)
                     }
                 }
-                return PendingIntent.getBroadcast(
+                return PendingIntent.getActivity(
                     context,
                     reqCode,
                     i,
@@ -432,20 +421,20 @@ class BoosterActionReceiver : BroadcastReceiver() {
                 )
             }
 
-            val channelId = if (silentAudioAlert) INTERACTIVE_CHANNEL_ID else PROMPT_CHANNEL_ID
-            val builder = NotificationCompat.Builder(context, channelId)
+            val builder = NotificationCompat.Builder(context, PROMPT_CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_stat_tatani)
                 .setContentTitle(promptTitle)
                 .setContentText(ctx?.jp ?: promptBody)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(promptBody))
-                .setContentIntent(buildOpenSprintIntent(context, 100))
+                .setContentIntent(overlayPending(ACTION_OPEN_PROMPT, null, 301))
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setOnlyAlertOnce(silentAudioAlert)
                 .setAutoCancel(true)
-                .addAction(0, "I know", actionPending(ACTION_GRADE_KNOW, true, 201))
-                .addAction(0, "I don't know", actionPending(ACTION_GRADE_AGAIN, false, 202))
+                .addAction(0, "I know", overlayPending(ACTION_GRADE_KNOW, true, 302))
+                .addAction(0, "I don't know", overlayPending(ACTION_GRADE_AGAIN, false, 303))
 
             if (!showReading && hasDistinctReading) {
-                builder.addAction(0, "かな Peek", actionPending(ACTION_PEEK_READING, null, 203))
+                builder.addAction(0, "かな Peek", overlayPending(ACTION_PEEK_READING, null, 304))
             }
 
             replaceActiveNotification(context, builder.build())
@@ -474,9 +463,12 @@ class BoosterActionReceiver : BroadcastReceiver() {
             }
             val promptBody = "$sentenceJp\nSample SRS preview · Tap I know / I don't know"
 
-            fun demoPending(action: String, remembered: Boolean?, reqCode: Int): PendingIntent {
-                val i = Intent(context, BoosterActionReceiver::class.java).apply {
+            fun demoOverlayPending(action: String, remembered: Boolean?, reqCode: Int): PendingIntent {
+                val i = Intent(context, BoosterOverlayActivity::class.java).apply {
                     this.action = action
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_NO_ANIMATION
                     putExtra(EXTRA_WORD, word)
                     putExtra(EXTRA_LANG, lang)
                     putExtra(EXTRA_IS_DEMO, true)
@@ -488,7 +480,7 @@ class BoosterActionReceiver : BroadcastReceiver() {
                         putExtra(EXTRA_REMEMBERED, remembered)
                     }
                 }
-                return PendingIntent.getBroadcast(
+                return PendingIntent.getActivity(
                     context,
                     reqCode,
                     i,
@@ -496,20 +488,20 @@ class BoosterActionReceiver : BroadcastReceiver() {
                 )
             }
 
-            val channelId = if (silentAudioAlert) INTERACTIVE_CHANNEL_ID else PROMPT_CHANNEL_ID
-            val builder = NotificationCompat.Builder(context, channelId)
+            val builder = NotificationCompat.Builder(context, PROMPT_CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_stat_tatani)
                 .setContentTitle(promptTitle)
                 .setContentText(sentenceJp)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(promptBody))
-                .setContentIntent(buildOpenSprintIntent(context, 101))
+                .setContentIntent(demoOverlayPending(ACTION_OPEN_PROMPT, null, 311))
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setOnlyAlertOnce(silentAudioAlert)
                 .setAutoCancel(true)
-                .addAction(0, "I know", demoPending(ACTION_GRADE_KNOW, true, 201))
-                .addAction(0, "I don't know", demoPending(ACTION_GRADE_AGAIN, false, 202))
+                .addAction(0, "I know", demoOverlayPending(ACTION_GRADE_KNOW, true, 312))
+                .addAction(0, "I don't know", demoOverlayPending(ACTION_GRADE_AGAIN, false, 313))
 
             if (!forcePeekReading && hasDistinctReading) {
-                builder.addAction(0, "かな Peek", demoPending(ACTION_PEEK_READING, null, 203))
+                builder.addAction(0, "かな Peek", demoOverlayPending(ACTION_PEEK_READING, null, 314))
             }
 
             replaceActiveNotification(context, builder.build())

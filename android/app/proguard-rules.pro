@@ -28,6 +28,7 @@
     public <init>(android.content.Context, androidx.work.WorkerParameters);
 }
 -keep class app.tatani.android.notifications.BoosterActionReceiver { *; }
+-keep class app.tatani.android.notifications.BoosterOverlayActivity { *; }
 
 # OkHttp / Okio platform warnings
 -dontwarn okhttp3.internal.platform.**
