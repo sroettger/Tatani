@@ -190,6 +190,28 @@ object SrsEngine {
         return true
     }
 
+    /**
+     * Guidance-fading phonological scaffold (Renkl & Atkinson, 2003; Share, 1995):
+     * - Returns true when a card has a distinct kana reading and is ungraduated or
+     *   recovering from a lapse (state != "known" || (srsLevel == 0 && correctStreak == 0)),
+     *   re-anchoring phonology + orthography -> meaning after errors.
+     * - Returns false once graduated (state == "known", correctStreak >= 1) or when
+     *   preference == "kanji_only", fading to Kanji-first with zero-penalty 1-tap reading peek
+     *   so permanent furigana does not block orthographic Kanji acquisition.
+     */
+    fun shouldShowReadingUpfront(
+        word: String,
+        reading: String?,
+        state: String,
+        srsLevel: Int,
+        correctStreak: Int,
+        preference: String = "study",
+    ): Boolean {
+        if (reading.isNullOrBlank() || reading == word) return false
+        if (preference == "kanji_only") return false
+        return state != "known" || (srsLevel == 0 && correctStreak == 0)
+    }
+
     fun pickContextualSentence(
         contexts: List<EpisodeContext>,
         seed: Int = 0,

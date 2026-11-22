@@ -117,6 +117,7 @@ fun LearnScreen(
     val drillQueue = remember { mutableStateListOf<WordCardEntity>() }
     val drillHits = remember { mutableStateMapOf<String, Int>() }
     var drillRevealed by remember { mutableStateOf(false) }
+    var drillReadingPeeked by remember { mutableStateOf(false) }
     var graduatedCount by remember { mutableIntStateOf(0) }
     var confirmExitDrill by remember { mutableStateOf(false) }
 
@@ -148,15 +149,6 @@ fun LearnScreen(
         }
     }
 
-    LaunchedEffect(phase, encodeCard?.word) {
-        if (phase == LearnPhase.ENCODE && encodeCard != null) {
-            viewModel.tts.speak(
-                encodeCard.reading ?: encodeCard.word,
-                session?.learningLanguage ?: "ja"
-            )
-        }
-    }
-
     fun startDrillPhase() {
         if (batch.isEmpty()) {
             phase = LearnPhase.DONE
@@ -167,6 +159,7 @@ fun LearnScreen(
         drillQueue.addAll(batch)
         drillHits.clear()
         drillRevealed = false
+        drillReadingPeeked = false
         graduatedCount = 0
     }
 
@@ -200,6 +193,7 @@ fun LearnScreen(
         val head = drillQueue.removeFirstOrNull() ?: return
         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
         drillRevealed = false
+        drillReadingPeeked = false
         val nextHits = if (recalled) (drillHits[head.word] ?: 0) + 1 else 0
         drillHits[head.word] = nextHits
 
@@ -560,6 +554,8 @@ fun LearnScreen(
 
             phase == LearnPhase.DRILL && drillCard != null -> {
                 val hits = drillHits[drillCard.word] ?: 0
+                val hasDistinctReading = !drillCard.reading.isNullOrBlank() && drillCard.reading != drillCard.word
+                val showDrillReading = hasDistinctReading && (drillRevealed || drillReadingPeeked || hits == 0)
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -568,10 +564,6 @@ fun LearnScreen(
                         .clickable(enabled = !drillRevealed) {
                             drillRevealed = true
                             haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            viewModel.tts.speak(
-                                drillCard.reading ?: drillCard.word,
-                                session?.learningLanguage ?: "ja"
-                            )
                         },
                     shape = RoundedCornerShape(22.dp),
                     colors = CardDefaults.cardColors(containerColor = SumiSurface),
@@ -590,7 +582,7 @@ fun LearnScreen(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                text = "Recall reading & meaning",
+                                text = "Recall English meaning",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = WashiMuted,
                             )
@@ -629,13 +621,32 @@ fun LearnScreen(
                             verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                if (drillRevealed && !drillCard.reading.isNullOrBlank() && drillCard.reading != drillCard.word) {
+                                if (showDrillReading) {
                                     Text(
-                                        text = drillCard.reading,
+                                        text = drillCard.reading!!,
                                         fontSize = 20.sp,
                                         fontWeight = FontWeight.Medium,
                                         color = VermilionPrimary,
                                     )
+                                    Spacer(Modifier.height(4.dp))
+                                } else if (!drillRevealed && hasDistinctReading) {
+                                    Surface(
+                                        onClick = {
+                                            drillReadingPeeked = true
+                                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        },
+                                        shape = RoundedCornerShape(50),
+                                        color = SumiElevated,
+                                        border = BorderStroke(1.dp, SumiBorder),
+                                    ) {
+                                        Text(
+                                            text = "かな · Peek reading",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = WashiMuted,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                                        )
+                                    }
+                                    Spacer(Modifier.height(8.dp))
                                 }
                                 Text(
                                     text = drillCard.word,
@@ -698,7 +709,7 @@ fun LearnScreen(
                         }
 
                         Text(
-                            text = if (!drillRevealed) "Tap anywhere to reveal" else "",
+                            text = if (!drillRevealed) "Recall English meaning · Tap card to reveal" else "",
                             style = MaterialTheme.typography.labelMedium,
                             color = WashiMuted,
                         )
@@ -710,10 +721,6 @@ fun LearnScreen(
                         onClick = {
                             drillRevealed = true
                             haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            viewModel.tts.speak(
-                                drillCard.reading ?: drillCard.word,
-                                session?.learningLanguage ?: "ja"
-                            )
                         },
                         shape = RoundedCornerShape(16.dp),
                         colors = ButtonDefaults.buttonColors(

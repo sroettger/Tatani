@@ -9,6 +9,7 @@ import {
   isUnlearnedCandidate,
   nextIntervalDaysForGrade,
   pickContextualSentence,
+  shouldShowReadingUpfront,
   splitSentenceWithHighlight,
 } from "@/lib/srs";
 import { srsDeckStorageKey, useSrsDeck } from "@/lib/srs-store";
@@ -178,5 +179,48 @@ describe("SRS Learn vs Repeat split and contextual helpers", () => {
     expect(conjugated.some((s) => s.highlighted && s.text.startsWith("食"))).toBe(true);
 
     expect(extractKanjiCharacters("探知する")).toEqual(["探", "知"]);
+  });
+
+  it("fades kana reading scaffold once graduated and re-scaffolds on lapse", () => {
+    expect(
+      shouldShowReadingUpfront({
+        word: "約束",
+        reading: "やくそく",
+        state: "learning",
+        srs_level: 0,
+        correct_streak: 0,
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldShowReadingUpfront({
+        word: "約束",
+        reading: "やくそく",
+        state: "known",
+        srs_level: 0,
+        correct_streak: 1,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldShowReadingUpfront({
+        word: "約束",
+        reading: "やくそく",
+        state: "learning",
+        srs_level: 0,
+        correct_streak: 0,
+        preference: "kanji_only",
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldShowReadingUpfront({
+        word: "すごい",
+        reading: "すごい",
+        state: "learning",
+        srs_level: 0,
+        correct_streak: 0,
+      }),
+    ).toBe(false);
   });
 });

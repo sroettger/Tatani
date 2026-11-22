@@ -84,9 +84,23 @@ class DueBoosterWorker(
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val showReadingInPrompt = SrsEngine.shouldShowReadingUpfront(
+            word = card.word,
+            reading = card.reading,
+            state = card.state,
+            srsLevel = card.srsLevel,
+            correctStreak = card.correctStreak,
+            preference = card.preference,
+        )
+        val promptTitle = if (showReadingInPrompt) {
+            "${card.word}（${card.reading}）"
+        } else {
+            card.word
+        }
+
         val builder = NotificationCompat.Builder(applicationContext, BoosterActionReceiver.CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_tatani)
-            .setContentTitle(card.word)
+            .setContentTitle(promptTitle)
             .setContentText(promptBody)
             .setStyle(NotificationCompat.BigTextStyle().bigText(promptBody))
             .setContentIntent(tapIntent)

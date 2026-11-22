@@ -108,8 +108,9 @@ fun SprintScreen(
     val undoStack = remember { mutableStateListOf<SprintUndoEntry>() }
     var cramMode by remember { mutableStateOf(false) }
     var revealed by remember { mutableStateOf(false) }
+    var readingPeeked by remember { mutableStateOf(false) }
     var listeningMode by remember { mutableStateOf(false) }
-    var autoAudio by remember { mutableStateOf(true) }
+    var autoAudio by remember { mutableStateOf(false) }
     var reviewedCount by remember { mutableIntStateOf(0) }
     val sessionStartMs = remember { System.currentTimeMillis() }
     var dragOffsetX by remember { mutableFloatStateOf(0f) }
@@ -136,6 +137,10 @@ fun SprintScreen(
     val deckMap = remember(deckCards) { deckCards.associateBy { it.word } }
     val current = queue.firstOrNull()?.let { deckMap[it.word] ?: it }
 
+    LaunchedEffect(current?.word, reviewedCount) {
+        readingPeeked = false
+    }
+
     val contexts = remember(current?.word, current?.contextsJson) {
         if (current == null) emptyList() else viewModel.repository.decodeContexts(current)
     }
@@ -147,8 +152,8 @@ fun SprintScreen(
         )
     }
 
-    LaunchedEffect(current?.word, revealed, listeningMode, autoAudio) {
-        if (current != null && !revealed && listeningMode && autoAudio) {
+    LaunchedEffect(current?.word, revealed, listeningMode) {
+        if (current != null && !revealed && listeningMode) {
             viewModel.tts.speak(current.reading ?: current.word, session?.learningLanguage ?: "ja")
         }
     }
@@ -174,6 +179,7 @@ fun SprintScreen(
 
         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
         revealed = false
+        readingPeeked = false
         dragOffsetX = 0f
         reviewedCount++
 
@@ -199,6 +205,7 @@ fun SprintScreen(
         queue.clear()
         queue.addAll(last.prevQueue)
         revealed = false
+        readingPeeked = false
         dragOffsetX = 0f
         reviewedCount = (reviewedCount - 1).coerceAtLeast(0)
     }
@@ -474,15 +481,46 @@ fun SprintScreen(
                                 color = WashiMuted,
                             )
                         } else {
+                            val hasDistinctReading = !current.reading.isNullOrBlank() && current.reading != current.word
+                            val showReadingNow = hasDistinctReading && (
+                                revealed ||
+                                    readingPeeked ||
+                                    SrsEngine.shouldShowReadingUpfront(
+                                        word = current.word,
+                                        reading = current.reading,
+                                        state = current.state,
+                                        srsLevel = current.srsLevel,
+                                        correctStreak = current.correctStreak,
+                                        preference = current.preference,
+                                    )
+                            )
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                if (revealed && !current.reading.isNullOrBlank() && current.reading != current.word) {
+                                if (showReadingNow) {
                                     Text(
-                                        text = current.reading,
+                                        text = current.reading!!,
                                         fontSize = 20.sp,
                                         fontWeight = FontWeight.Medium,
                                         color = VermilionPrimary,
                                     )
                                     Spacer(Modifier.height(4.dp))
+                                } else if (!revealed && hasDistinctReading) {
+                                    Surface(
+                                        onClick = {
+                                            readingPeeked = true
+                                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        },
+                                        shape = CircleShape,
+                                        color = SumiElevated,
+                                        border = BorderStroke(1.dp, SumiBorder),
+                                    ) {
+                                        Text(
+                                            text = "かな · Peek reading",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = WashiMuted,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                                        )
+                                    }
+                                    Spacer(Modifier.height(8.dp))
                                 }
                                 Text(
                                     text = current.word,
@@ -540,7 +578,7 @@ fun SprintScreen(
                     }
 
                     val footerHint = when {
-                        !revealed -> "Tap anywhere to reveal"
+                        !revealed -> "Recall English meaning · Tap card to reveal"
                         swipeProgress >= 0.35f -> "Release right · Know (+${nextDays}d)"
                         swipeProgress <= -0.35f -> "Release left · Again (1d)"
                         else -> "Swipe left/right or tap below"
@@ -739,6 +777,7 @@ fun SprintScreen(
                                     queue.clear()
                                     queue.addAll(graduatedCards.sortedBy { it.srsDueAtEpochMs ?: 0L }.take(25))
                                     revealed = false
+                                    readingPeeked = false
                                 },
                                 shape = RoundedCornerShape(14.dp),
                                 border = BorderStroke(1.dp, SumiBorder),

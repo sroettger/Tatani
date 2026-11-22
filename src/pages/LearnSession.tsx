@@ -73,6 +73,7 @@ export default function LearnSession() {
   const [encodeIdx, setEncodeIdx] = useState(0);
   const [drillQueue, setDrillQueue] = useState<SrsDeckCard[]>([]);
   const [drillRevealed, setDrillRevealed] = useState(false);
+  const [drillReadingPeeked, setDrillReadingPeeked] = useState(false);
   const [drillHits, setDrillHits] = useState<Record<string, number>>({});
   const [graduatedCount, setGraduatedCount] = useState(0);
 
@@ -226,16 +227,6 @@ export default function LearnSession() {
     [activeCard],
   );
 
-  const encodeWord = encodeCard?.word ?? null;
-  const encodeSpoken = encodeCard ? (encodeCard.reading || encodeCard.word) : "";
-
-  // Auto-play pronunciation on each Encoding card so phonology + orthography + context bind immediately
-  useEffect(() => {
-    if (phase === "encode" && encodeWord && encodeSpoken) {
-      speak(encodeSpoken);
-    }
-  }, [phase, encodeWord, encodeSpoken, speak]);
-
   const beginDrill = useCallback((encodedBatch: SrsDeckCard[]) => {
     if (encodedBatch.length === 0) {
       setPhase("done");
@@ -245,6 +236,7 @@ export default function LearnSession() {
     setDrillQueue([...encodedBatch]);
     setDrillHits({});
     setDrillRevealed(false);
+    setDrillReadingPeeked(false);
     setGraduatedCount(0);
   }, []);
 
@@ -279,8 +271,7 @@ export default function LearnSession() {
   const onRevealDrill = useCallback(() => {
     if (!drillCard || drillRevealed) return;
     setDrillRevealed(true);
-    speak(drillCard.reading || drillCard.word);
-  }, [drillCard, drillRevealed, speak]);
+  }, [drillCard, drillRevealed]);
 
   const onGradeDrill = useCallback(
     (recalled: boolean) => {
@@ -289,6 +280,7 @@ export default function LearnSession() {
       const nextHits = recalled ? prevHits + 1 : 0;
       setDrillHits((h) => ({ ...h, [drillCard.word]: nextHits }));
       setDrillRevealed(false);
+      setDrillReadingPeeked(false);
 
       const [head, ...rest] = drillQueue;
       if (!head) return;
@@ -331,9 +323,22 @@ export default function LearnSession() {
     setEncodeIdx(0);
     setDrillQueue([]);
     setDrillHits({});
+    setDrillRevealed(false);
+    setDrillReadingPeeked(false);
     setGraduatedCount(0);
     setPhase("encode");
   };
+
+  const currentDrillHits = drillCard ? (drillHits[drillCard.word] ?? 0) : 0;
+  const hasDistinctDrillReading = Boolean(
+    drillCard &&
+      learningLanguageInfo.hasRuby &&
+      drillCard.reading &&
+      drillCard.reading !== drillCard.word,
+  );
+  const showDrillReading = Boolean(
+    hasDistinctDrillReading && (drillRevealed || drillReadingPeeked || currentDrillHits === 0),
+  );
 
   // Keyboard shortcuts for blazingly fast desktop/hardware-keyboard flow
   useEffect(() => {
@@ -348,9 +353,14 @@ export default function LearnSession() {
           onAlreadyKnow();
         }
       } else if (phase === "drill" && drillCard) {
-        if (!drillRevealed && (e.key === " " || e.key === "Enter")) {
-          e.preventDefault();
-          onRevealDrill();
+        if (!drillRevealed) {
+          if ((e.key === "r" || e.key === "R") && !e.metaKey && !e.ctrlKey && !e.altKey && hasDistinctDrillReading) {
+            e.preventDefault();
+            setDrillReadingPeeked(true);
+          } else if (e.key === " " || e.key === "Enter") {
+            e.preventDefault();
+            onRevealDrill();
+          }
         } else if (drillRevealed) {
           if (e.key === "1" || e.key === "ArrowLeft") {
             e.preventDefault();
@@ -364,7 +374,7 @@ export default function LearnSession() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [phase, encodeCard, drillCard, drillRevealed, onGotItEncode, onAlreadyKnow, onRevealDrill, onGradeDrill]);
+  }, [phase, encodeCard, drillCard, drillRevealed, hasDistinctDrillReading, onGotItEncode, onAlreadyKnow, onRevealDrill, onGradeDrill]);
 
   if (loadingEpisode || (syncing && batch.length === 0 && availableUnlearned.length === 0)) {
     return (
@@ -619,14 +629,29 @@ export default function LearnSession() {
 
             <div className="my-auto py-4 text-center space-y-5">
               <div className="space-y-1.5">
-                {drillRevealed &&
-                  learningLanguageInfo.hasRuby &&
-                  drillCard.reading &&
-                  drillCard.reading !== drillCard.word && (
-                    <div className="font-jp text-lg text-primary font-medium">
-                      {drillCard.reading}
+                {showDrillReading ? (
+                  <div className="font-jp text-lg text-primary font-medium">
+                    {drillCard.reading}
+                  </div>
+                ) : (
+                  !drillRevealed &&
+                  hasDistinctDrillReading && (
+                    <div className="pb-1">
+                      <button
+                        type="button"
+                        id="learn-drill-peek-reading"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDrillReadingPeeked(true);
+                        }}
+                        title={t("sprint.peekReadingHint")}
+                        className="inline-flex items-center gap-1 rounded-full bg-secondary/80 hover:bg-secondary border border-border/70 px-3 py-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <span className="font-jp">{t("sprint.peekReading")}</span>
+                      </button>
                     </div>
-                  )}
+                  )
+                )}
                 <div
                   className={cn(
                     "text-5xl font-bold tracking-tight",
@@ -642,7 +667,7 @@ export default function LearnSession() {
                   <ContextSentence
                     sentence={activeContext.jp}
                     targetWord={drillCard.word}
-                    showFurigana={drillRevealed}
+                    showFurigana={drillRevealed || showDrillReading}
                     hasRuby={learningLanguageInfo.hasRuby}
                     className="text-base sm:text-lg"
                   />

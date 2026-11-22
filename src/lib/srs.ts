@@ -161,6 +161,24 @@ export function isUnlearnedCandidate(
 }
 
 /**
+ * Guidance-fading phonological scaffold (Renkl & Atkinson, 2003; Share, 1995):
+ * - Shows kana reading upfront when a word is ungraduated or recovering from a lapse
+ *   (`state !== "known"` or `srs_level === 0 && correct_streak === 0`), repairing the
+ *   phonological-semantic link after errors.
+ * - Fades to Kanji-first + zero-penalty 1-tap reading peek once graduated (`state === "known"`,
+ *   `correct_streak >= 1`) or when `preference === "kanji_only"`, preventing permanent
+ *   furigana from overshadowing orthographic Kanji acquisition.
+ */
+export function shouldShowReadingUpfront(
+  card: Pick<WordSrsRecord, "word" | "reading" | "state" | "srs_level" | "correct_streak"> &
+    Partial<Pick<WordSrsRecord, "preference">>,
+): boolean {
+  if (!card.reading || card.reading === card.word) return false;
+  if (card.preference === "kanji_only") return false;
+  return card.state !== "known" || (card.srs_level === 0 && card.correct_streak === 0);
+}
+
+/**
  * Rotates across unlocked episode contexts so repeated reviews don't habituate
  * to a single static sentence (Bolger et al., 2008).
  */

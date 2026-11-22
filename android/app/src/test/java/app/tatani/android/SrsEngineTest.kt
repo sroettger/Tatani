@@ -225,4 +225,68 @@ class SrsEngineTest {
 
         assertEquals(listOf("探", "知"), SrsEngine.extractKanjiCharacters("探知する"))
     }
+
+    @Test
+    fun fadesReadingScaffoldOnceGraduatedAndRescaffoldsOnLapse() {
+        // Ungraduated / lapsed cards show kana reading upfront to repair phonological-semantic link
+        assertTrue(
+            SrsEngine.shouldShowReadingUpfront(
+                word = "約束",
+                reading = "やくそく",
+                state = "learning",
+                srsLevel = 0,
+                correctStreak = 0,
+            )
+        )
+
+        // Graduated cards (level >= 0, state = known, streak >= 1) fade to Kanji-first + 1-tap peek
+        assertFalse(
+            SrsEngine.shouldShowReadingUpfront(
+                word = "約束",
+                reading = "やくそく",
+                state = "known",
+                srsLevel = 0,
+                correctStreak = 1,
+            )
+        )
+        assertFalse(
+            SrsEngine.shouldShowReadingUpfront(
+                word = "約束",
+                reading = "やくそく",
+                state = "known",
+                srsLevel = 2,
+                correctStreak = 3,
+            )
+        )
+
+        // Kanji-only preference or kana-only / Latin words never show redundant ruby upfront
+        assertFalse(
+            SrsEngine.shouldShowReadingUpfront(
+                word = "約束",
+                reading = "やくそく",
+                state = "learning",
+                srsLevel = 0,
+                correctStreak = 0,
+                preference = "kanji_only",
+            )
+        )
+        assertFalse(
+            SrsEngine.shouldShowReadingUpfront(
+                word = "すごい",
+                reading = "すごい",
+                state = "learning",
+                srsLevel = 0,
+                correctStreak = 0,
+            )
+        )
+        assertFalse(
+            SrsEngine.shouldShowReadingUpfront(
+                word = "hablar",
+                reading = null,
+                state = "learning",
+                srsLevel = 0,
+                correctStreak = 0,
+            )
+        )
+    }
 }

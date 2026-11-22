@@ -49,12 +49,18 @@ describe("Sprint distraction-free boot mode", () => {
       routes: [{ path: "/library", element: <div>anime library view</div> }],
     });
 
-    // Prompt displays kanji word and episode context immediately without reading/meaning
+    // Prompt displays kanji word and episode context immediately without reading/meaning, plus 1-tap Peek Reading
     expect(screen.getByText("1 due")).toBeInTheDocument();
     expect(screen.getAllByText("探知").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("たんち")).not.toBeInTheDocument();
     expect(screen.queryByText("detection")).not.toBeInTheDocument();
 
-    // Instant 1-tap reveal
+    // 1-tap Peek Reading reveals kana reading without revealing the English meaning!
+    fireEvent.click(screen.getByRole("button", { name: /Peek reading/i }));
+    expect(screen.getByText("たんち")).toBeInTheDocument();
+    expect(screen.queryByText("detection")).not.toBeInTheDocument();
+
+    // Instant 1-tap reveal shows English meaning + context translation
     fireEvent.click(screen.getByRole("button", { name: /Tap or press Space to reveal/i }));
     expect(screen.getByText("たんち")).toBeInTheDocument();
     expect(screen.getByText("detection")).toBeInTheDocument();
@@ -64,9 +70,16 @@ describe("Sprint distraction-free boot mode", () => {
     fireEvent.click(screen.getByRole("button", { name: /Know/i }));
     expect(screen.getByRole("heading", { name: "All caught up" })).toBeInTheDocument();
 
-    // Undo restores the card immediately
+    // Undo restores the card immediately in Kanji-first state (peek reset)
     fireEvent.click(screen.getByTitle("Undo"));
     expect(screen.getByText("1 due")).toBeInTheDocument();
+    expect(screen.queryByText("たんち")).not.toBeInTheDocument();
+
+    // Grading Again lapses the card and immediately re-scaffolds reading upfront on re-drill!
+    fireEvent.click(screen.getByRole("button", { name: /Tap or press Space to reveal/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Again/i }));
+    expect(screen.getByText("たんち")).toBeInTheDocument();
+    expect(screen.queryByText("detection")).not.toBeInTheDocument();
 
     // Switch to Anime Library works in one tap
     fireEvent.click(screen.getByRole("button", { name: /Library/i }));

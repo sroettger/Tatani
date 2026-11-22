@@ -22,6 +22,7 @@ import {
   LEARN_BATCH_SIZE,
   nextIntervalDaysForGrade,
   pickContextualSentence,
+  shouldShowReadingUpfront,
   SPRINT_LAPSE_REINSERT_GAP,
   SrsDeckCard,
   WordSrsRecord,
@@ -64,8 +65,9 @@ export default function Sprint() {
   const [queue, setQueue] = useState<SrsDeckCard[]>([]);
   const [cramMode, setCramMode] = useState(false);
   const [revealed, setRevealed] = useState(false);
+  const [readingPeeked, setReadingPeeked] = useState(false);
   const [listeningMode, setListeningMode] = useState(false);
-  const [autoAudio, setAutoAudio] = useState(true);
+  const [autoAudio, setAutoAudio] = useState(false);
   const [reviewedCount, setReviewedCount] = useState(0);
   const [undoStack, setUndoStack] = useState<UndoSnapshot[]>([]);
   const sessionStartRef = useRef<number>(Date.now());
@@ -86,6 +88,7 @@ export default function Sprint() {
       setQueue(dueCards);
       setCramMode(false);
       setRevealed(false);
+      setReadingPeeked(false);
       setReviewedCount(0);
       setUndoStack([]);
       sessionStartRef.current = Date.now();
@@ -147,13 +150,17 @@ export default function Sprint() {
   const currentWord = current?.word ?? null;
   const currentSpoken = current ? (current.reading || current.word) : "";
 
-  // In listening mode, play audio on prompt presentation
+  useEffect(() => {
+    setReadingPeeked(false);
+  }, [currentWord, reviewedCount]);
+
+  // In listening mode (explicitly toggled), play audio on prompt presentation
   useEffect(() => {
     if (!currentWord || revealed) return;
-    if (listeningMode && autoAudio && currentSpoken) {
+    if (listeningMode && currentSpoken) {
       speak(currentSpoken);
     }
-  }, [currentWord, currentSpoken, revealed, listeningMode, autoAudio, speak]);
+  }, [currentWord, currentSpoken, revealed, listeningMode, speak]);
 
   const onReveal = useCallback(() => {
     if (!current || revealed) return;
@@ -187,6 +194,7 @@ export default function Sprint() {
       ]);
       setReviewedCount((c) => c + 1);
       setRevealed(false);
+      setReadingPeeked(false);
 
       setQueue((prev) => {
         const [head, ...rest] = prev;
@@ -212,6 +220,7 @@ export default function Sprint() {
     restoreRecord(last.card, last.prevRecord);
     setQueue(last.prevQueue);
     setRevealed(false);
+    setReadingPeeked(false);
     setReviewedCount((c) => Math.max(0, c - 1));
   }, [undoStack, restoreRecord]);
 
@@ -223,9 +232,22 @@ export default function Sprint() {
     setCramMode(true);
     setQueue(sorted.slice(0, 25));
     setRevealed(false);
+    setReadingPeeked(false);
   };
 
-  // Instant keyboard flow: Space/Enter reveals, then 1/ArrowLeft = Again, 2/ArrowRight/Space = Know, Z = Undo
+  const hasDistinctReading = Boolean(
+    current &&
+      learningLanguageInfo.hasRuby &&
+      current.reading &&
+      current.reading !== current.word,
+  );
+  const showReadingNow = Boolean(
+    current &&
+      hasDistinctReading &&
+      (revealed || readingPeeked || shouldShowReadingUpfront(current)),
+  );
+
+  // Instant keyboard flow: R peeks reading, Space/Enter reveals, then 1/ArrowLeft = Again, 2/ArrowRight/Space = Know, Z = Undo
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -236,7 +258,10 @@ export default function Sprint() {
       }
       if (!current) return;
       if (!revealed) {
-        if (e.key === " " || e.key === "Enter") {
+        if ((e.key === "r" || e.key === "R") && !e.metaKey && !e.ctrlKey && !e.altKey && hasDistinctReading) {
+          e.preventDefault();
+          setReadingPeeked(true);
+        } else if (e.key === " " || e.key === "Enter") {
           e.preventDefault();
           onReveal();
         }
@@ -252,7 +277,7 @@ export default function Sprint() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [current, revealed, onReveal, onGrade, onUndo]);
+  }, [current, revealed, hasDistinctReading, onReveal, onGrade, onUndo]);
 
   const cardsPerMin = useMemo(() => {
     if (reviewedCount < 2) return 0;
@@ -392,14 +417,29 @@ export default function Sprint() {
                 </div>
               ) : (
                 <div className="space-y-1.5">
-                  {revealed &&
-                    learningLanguageInfo.hasRuby &&
-                    current.reading &&
-                    current.reading !== current.word && (
-                      <div className="font-jp text-lg text-primary font-medium tracking-wide">
-                        {current.reading}
+                  {showReadingNow ? (
+                    <div className="font-jp text-lg text-primary font-medium tracking-wide">
+                      {current.reading}
+                    </div>
+                  ) : (
+                    !revealed &&
+                    hasDistinctReading && (
+                      <div className="pb-1">
+                        <button
+                          type="button"
+                          id="sprint-peek-reading"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setReadingPeeked(true);
+                          }}
+                          title={t("sprint.peekReadingHint")}
+                          className="inline-flex items-center gap-1 rounded-full bg-secondary/80 hover:bg-secondary border border-border/70 px-3 py-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          <span className="font-jp">{t("sprint.peekReading")}</span>
+                        </button>
                       </div>
-                    )}
+                    )
+                  )}
                   <div
                     className={cn(
                       "text-5xl sm:text-6xl font-bold tracking-tight break-words",
@@ -417,7 +457,7 @@ export default function Sprint() {
                   <ContextSentence
                     sentence={activeContext.jp}
                     targetWord={current.word}
-                    showFurigana={revealed}
+                    showFurigana={revealed || showReadingNow}
                     hasRuby={learningLanguageInfo.hasRuby}
                     className="text-base sm:text-lg text-foreground/95"
                   />
