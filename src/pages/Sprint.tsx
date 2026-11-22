@@ -41,6 +41,7 @@ interface UndoSnapshot {
   prevRecord: WordSrsRecord;
   prevQueue: SrsDeckCard[];
   wasCorrect: boolean;
+  prevLapsedWords: string[];
 }
 
 export default function Sprint() {
@@ -69,12 +70,19 @@ export default function Sprint() {
   const [undoStack, setUndoStack] = useState<UndoSnapshot[]>([]);
   const sessionStartRef = useRef<number>(Date.now());
   const initializedForLangRef = useRef<string>("");
+  const revealedRef = useRef<boolean>(false);
+  const lapsedInSessionRef = useRef<Set<string>>(new Set());
 
-  // Seed or top up queue as dueCards arrive without disrupting active card mid-reveal
+  useEffect(() => {
+    revealedRef.current = revealed;
+  }, [revealed]);
+
+  // Seed, top up, and prune queue as dueCards sync without disrupting active card mid-reveal
   useEffect(() => {
     const key = `${user?.id ?? ""}:${learningLanguage}`;
     if (initializedForLangRef.current !== key) {
       initializedForLangRef.current = key;
+      lapsedInSessionRef.current.clear();
       setQueue(dueCards);
       setCramMode(false);
       setRevealed(false);
@@ -84,16 +92,29 @@ export default function Sprint() {
       return;
     }
     if (!cramMode) {
+      const dueByWord = new Map(dueCards.map((c) => [c.word, c]));
       setQueue((prev) => {
-        if (prev.length === 0 && dueCards.length > 0) {
+        if (prev.length === 0) {
           return dueCards;
         }
-        const existingWords = new Set(prev.map((c) => c.word));
+        const kept = prev.filter((item, idx) => {
+          if (idx === 0 && revealedRef.current) return true;
+          if (dueByWord.has(item.word)) return true;
+          const live = cards[item.word];
+          if (lapsedInSessionRef.current.has(item.word) && live?.state === "learning") {
+            return true;
+          }
+          return false;
+        });
+        const existingWords = new Set(kept.map((c) => c.word));
         const newlyDue = dueCards.filter((c) => !existingWords.has(c.word));
-        return newlyDue.length > 0 ? [...prev, ...newlyDue] : prev;
+        if (kept.length === prev.length && newlyDue.length === 0) {
+          return prev;
+        }
+        return [...kept, ...newlyDue];
       });
     }
-  }, [dueCards, user?.id, learningLanguage, cramMode]);
+  }, [dueCards, cards, user?.id, learningLanguage, cramMode]);
 
   const currentRaw = queue[0] ?? null;
   const current = currentRaw ? (cards[currentRaw.word] ?? currentRaw) : null;
@@ -123,13 +144,16 @@ export default function Sprint() {
     [learningLanguage],
   );
 
+  const currentWord = current?.word ?? null;
+  const currentSpoken = current ? (current.reading || current.word) : "";
+
   // In listening mode, play audio on prompt presentation
   useEffect(() => {
-    if (!current || revealed) return;
-    if (listeningMode && autoAudio) {
-      speak(current.reading || current.word);
+    if (!currentWord || revealed) return;
+    if (listeningMode && autoAudio && currentSpoken) {
+      speak(currentSpoken);
     }
-  }, [current, revealed, listeningMode, autoAudio, speak]);
+  }, [currentWord, currentSpoken, revealed, listeningMode, autoAudio, speak]);
 
   const onReveal = useCallback(() => {
     if (!current || revealed) return;
@@ -143,11 +167,23 @@ export default function Sprint() {
     (remembered: boolean) => {
       if (!current) return;
       const snapshotQueue = queue;
+      const prevLapsedWords = Array.from(lapsedInSessionRef.current);
+      if (remembered) {
+        lapsedInSessionRef.current.delete(current.word);
+      } else {
+        lapsedInSessionRef.current.add(current.word);
+      }
       const prevRecord = gradeCard(current, remembered);
 
       setUndoStack((s) => [
         ...s.slice(-19),
-        { card: current, prevRecord, prevQueue: snapshotQueue, wasCorrect: remembered },
+        {
+          card: current,
+          prevRecord,
+          prevQueue: snapshotQueue,
+          wasCorrect: remembered,
+          prevLapsedWords,
+        },
       ]);
       setReviewedCount((c) => c + 1);
       setRevealed(false);
@@ -169,16 +205,15 @@ export default function Sprint() {
   );
 
   const onUndo = useCallback(() => {
-    setUndoStack((stack) => {
-      if (stack.length === 0) return stack;
-      const last = stack[stack.length - 1];
-      restoreRecord(last.card, last.prevRecord);
-      setQueue(last.prevQueue);
-      setRevealed(false);
-      setReviewedCount((c) => Math.max(0, c - 1));
-      return stack.slice(0, -1);
-    });
-  }, [restoreRecord]);
+    if (undoStack.length === 0) return;
+    const last = undoStack[undoStack.length - 1];
+    lapsedInSessionRef.current = new Set(last.prevLapsedWords);
+    setUndoStack((stack) => stack.slice(0, -1));
+    restoreRecord(last.card, last.prevRecord);
+    setQueue(last.prevQueue);
+    setRevealed(false);
+    setReviewedCount((c) => Math.max(0, c - 1));
+  }, [undoStack, restoreRecord]);
 
   const startPracticeAhead = () => {
     if (graduatedCards.length === 0) return;
@@ -226,7 +261,7 @@ export default function Sprint() {
   }, [reviewedCount]);
 
   const nextKnowDays = useMemo(
-    () => (current ? nextIntervalDaysForGrade(current, true) : 1),
+    () => (current ? nextIntervalDaysForGrade(current, true, Date.now()) : 1),
     [current],
   );
 
@@ -497,7 +532,7 @@ export default function Sprint() {
                 <Button
                   id="sprint-learn-next-cta"
                   onClick={() => navigate(`/learn/${nextEpisode.episodeId}`)}
-                  className="w-full h-13 py-3.5 gradient-primary text-primary-foreground font-semibold rounded-xl shadow-elegant"
+                  className="w-full h-14 py-3.5 gradient-primary text-primary-foreground font-semibold rounded-xl shadow-elegant"
                 >
                   <Sparkles className="h-4 w-4" />
                   <span className="truncate">

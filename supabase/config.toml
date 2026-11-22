@@ -35,3 +35,7 @@ verify_jwt = false
 
 [functions.wipe-anime-data]
 verify_jwt = false
+
+[functions.delete-account]
+verify_jwt = false
+

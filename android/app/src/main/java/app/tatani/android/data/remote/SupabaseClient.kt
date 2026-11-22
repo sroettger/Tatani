@@ -1,6 +1,5 @@
 package app.tatani.android.data.remote
 
-import android.net.Uri
 import app.tatani.android.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -15,29 +14,46 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.Dns
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.IOException
 import java.net.InetAddress
 import java.net.URL
+import java.net.URLDecoder
+import java.net.URLEncoder
 import java.net.UnknownHostException
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.security.SecureRandom
+import java.util.Base64
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.HttpsURLConnection
 
 class SupabaseClient(
     private val sessionStore: SessionStore,
+    baseUrl: String = BuildConfig.SUPABASE_URL,
+    private val anonKey: String = BuildConfig.SUPABASE_ANON_KEY,
+    httpClient: OkHttpClient? = null,
 ) {
-    private val baseUrl = BuildConfig.SUPABASE_URL.trimEnd('/')
-    private val anonKey = BuildConfig.SUPABASE_ANON_KEY
+    private val baseUrl = baseUrl.trimEnd('/')
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
     private val refreshMutex = Mutex()
+    private val secureRandom = SecureRandom()
 
     val json = Json {
         ignoreUnknownKeys = true
         coerceInputValues = true
         encodeDefaults = true
         explicitNulls = false
+    }
+
+    private val postgrestWriteJson = Json(json) {
+        explicitNulls = true
+        encodeDefaults = true
     }
 
     private val fallbackDns = object : Dns {
@@ -52,7 +68,8 @@ class SupabaseClient(
         }
 
         private fun resolveViaCloudflareDoh(hostname: String): List<InetAddress> {
-            val conn = (URL("https://1.1.1.1/dns-query?name=${Uri.encode(hostname)}&type=A")
+            val encodedHost = URLEncoder.encode(hostname, StandardCharsets.UTF_8.name())
+            val conn = (URL("https://1.1.1.1/dns-query?name=$encodedHost&type=A")
                 .openConnection() as HttpsURLConnection).apply {
                 connectTimeout = 5000
                 readTimeout = 5000
@@ -75,55 +92,129 @@ class SupabaseClient(
         }
     }
 
-    private val http = OkHttpClient.Builder()
+    private val http: OkHttpClient = httpClient ?: OkHttpClient.Builder()
         .dns(fallbackDns)
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(90, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    fun buildGoogleOAuthUrl(): Uri {
+    fun buildGoogleOAuthUrl(): String {
+        val verifierBytes = ByteArray(32)
+        secureRandom.nextBytes(verifierBytes)
+        val verifier = Base64.getUrlEncoder().withoutPadding().encodeToString(verifierBytes)
+        sessionStore.savePkceVerifier(verifier)
+
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(verifier.toByteArray(StandardCharsets.US_ASCII))
+        val challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(digest)
+
         return "$baseUrl/auth/v1/authorize".toHttpUrl().newBuilder()
             .addQueryParameter("provider", "google")
             .addQueryParameter("redirect_to", "tatani://auth-callback")
+            .addQueryParameter("code_challenge", challenge)
+            .addQueryParameter("code_challenge_method", "S256")
             .build()
             .toString()
-            .let(Uri::parse)
     }
 
-    suspend fun handleOAuthRedirect(uri: Uri): Boolean = withContext(Dispatchers.IO) {
-        val fragment = uri.fragment ?: return@withContext false
-        val params = fragment.split("&").mapNotNull { part ->
-            val idx = part.indexOf("=")
-            if (idx <= 0) null else Uri.decode(part.substring(0, idx)) to Uri.decode(part.substring(idx + 1))
-        }.toMap()
+    suspend fun handleOAuthRedirect(urlString: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val normalized = urlString.trim()
+                .replaceFirst(Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://"), "https://")
+            val parsedUrl = normalized.toHttpUrlOrNull()
+                ?: error("Invalid OAuth callback URL")
 
-        val access = params["access_token"] ?: return@withContext false
-        val refresh = params["refresh_token"] ?: ""
-        val expiresIn = params["expires_in"]?.toLongOrNull() ?: 3600L
+            val fragmentParams = parseFormParams(parsedUrl.encodedFragment)
+            val errDesc = parsedUrl.queryParameter("error_description")
+                ?: fragmentParams["error_description"]
+            val errCode = parsedUrl.queryParameter("error")
+                ?: fragmentParams["error"]
+            if (!errDesc.isNullOrBlank() || !errCode.isNullOrBlank()) {
+                sessionStore.consumePkceVerifier()
+                error(errDesc ?: errCode ?: "OAuth sign-in failed")
+            }
 
-        val userReq = Request.Builder()
-            .url("$baseUrl/auth/v1/user")
-            .header("apikey", anonKey)
-            .header("Authorization", "Bearer $access")
-            .get()
-            .build()
+            val code = parsedUrl.queryParameter("code")
+            if (!code.isNullOrBlank()) {
+                val verifier = sessionStore.consumePkceVerifier()
+                    ?: error("Missing OAuth PKCE verifier. Please try signing in again.")
+                val payload = buildJsonObject {
+                    put("auth_code", code)
+                    put("code_verifier", verifier)
+                }.toString()
+                val req = Request.Builder()
+                    .url("$baseUrl/auth/v1/token?grant_type=pkce")
+                    .header("apikey", anonKey)
+                    .post(payload.toRequestBody(jsonMedia))
+                    .build()
+                http.newCall(req).execute().use { resp ->
+                    val raw = resp.body?.string().orEmpty()
+                    val parsed = runCatching { json.decodeFromString<AuthTokenResponseDto>(raw) }.getOrNull()
+                    if (!resp.isSuccessful || parsed?.accessToken == null || parsed.user == null) {
+                        error(
+                            parsed?.errorDescription
+                                ?: parsed?.msg
+                                ?: parsed?.error
+                                ?: "OAuth token exchange failed (${resp.code})"
+                        )
+                    }
+                    sessionStore.saveSession(
+                        AuthSession(
+                            userId = parsed.user.id,
+                            email = parsed.user.email,
+                            accessToken = parsed.accessToken,
+                            refreshToken = parsed.refreshToken.orEmpty(),
+                            expiresAtEpochSec = System.currentTimeMillis() / 1000L + parsed.expiresIn,
+                        )
+                    )
+                }
+                return@runCatching
+            }
 
-        http.newCall(userReq).execute().use { resp ->
-            if (!resp.isSuccessful) return@withContext false
-            val body = resp.body?.string().orEmpty()
-            val user = json.decodeFromString<AuthUserDto>(body)
-            sessionStore.saveSession(
-                AuthSession(
-                    userId = user.id,
-                    email = user.email,
-                    accessToken = access,
-                    refreshToken = refresh,
-                    expiresAtEpochSec = System.currentTimeMillis() / 1000L + expiresIn,
+            sessionStore.consumePkceVerifier()
+            val access = fragmentParams["access_token"]
+                ?: error("OAuth callback did not contain an authorization code or access token.")
+            val refresh = fragmentParams["refresh_token"].orEmpty()
+            val expiresIn = fragmentParams["expires_in"]?.toLongOrNull() ?: 3600L
+
+            val userReq = Request.Builder()
+                .url("$baseUrl/auth/v1/user")
+                .header("apikey", anonKey)
+                .header("Authorization", "Bearer $access")
+                .get()
+                .build()
+
+            http.newCall(userReq).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    error("Failed to verify OAuth session (${resp.code})")
+                }
+                val user = json.decodeFromString<AuthUserDto>(body)
+                sessionStore.saveSession(
+                    AuthSession(
+                        userId = user.id,
+                        email = user.email,
+                        accessToken = access,
+                        refreshToken = refresh,
+                        expiresAtEpochSec = System.currentTimeMillis() / 1000L + expiresIn,
+                    )
                 )
-            )
-            return@withContext true
+            }
         }
+    }
+
+    private fun parseFormParams(encoded: String?): Map<String, String> {
+        if (encoded.isNullOrBlank()) return emptyMap()
+        return encoded.split("&").mapNotNull { part ->
+            val idx = part.indexOf("=")
+            if (idx <= 0) null
+            else {
+                val k = URLDecoder.decode(part.substring(0, idx), StandardCharsets.UTF_8.name())
+                val v = URLDecoder.decode(part.substring(idx + 1), StandardCharsets.UTF_8.name())
+                k to v
+            }
+        }.toMap()
     }
 
     suspend fun signInWithEmail(email: String, password: String): Result<AuthSession> =
@@ -144,7 +235,10 @@ class SupabaseClient(
                     val raw = resp.body?.string().orEmpty()
                     val parsed = runCatching { json.decodeFromString<AuthTokenResponseDto>(raw) }.getOrNull()
                     if (!resp.isSuccessful || parsed?.accessToken == null || parsed.user == null) {
-                        val msg = parsed?.errorDescription ?: parsed?.msg ?: "Sign-in failed (${resp.code})"
+                        val msg = parsed?.errorDescription
+                            ?: parsed?.msg
+                            ?: parsed?.error
+                            ?: "Sign-in failed (${resp.code})"
                         error(msg)
                     }
                     val session = AuthSession(
@@ -178,7 +272,12 @@ class SupabaseClient(
                     val raw = resp.body?.string().orEmpty()
                     val parsed = runCatching { json.decodeFromString<AuthTokenResponseDto>(raw) }.getOrNull()
                     if (!resp.isSuccessful) {
-                        error(parsed?.errorDescription ?: parsed?.msg ?: "Sign-up failed (${resp.code})")
+                        error(
+                            parsed?.errorDescription
+                                ?: parsed?.msg
+                                ?: parsed?.error
+                                ?: "Sign-up failed (${resp.code})"
+                        )
                     }
                     if (parsed?.accessToken != null && parsed.user != null) {
                         sessionStore.saveSession(
@@ -198,16 +297,28 @@ class SupabaseClient(
             }
         }
 
-    private suspend fun validToken(): String? {
+    private suspend fun validToken(force: Boolean = false): String? {
         val current = sessionStore.session.value ?: return null
         val nowSec = System.currentTimeMillis() / 1000L
-        if (current.expiresAtEpochSec - nowSec > 90L || current.refreshToken.isBlank()) {
+        if (!force && current.expiresAtEpochSec - nowSec > 90L) {
             return current.accessToken
+        }
+        if (current.refreshToken.isBlank()) {
+            return if (force || current.expiresAtEpochSec <= nowSec) null else current.accessToken
         }
         return refreshMutex.withLock {
             val freshCheck = sessionStore.session.value ?: return@withLock null
-            if (freshCheck.expiresAtEpochSec - (System.currentTimeMillis() / 1000L) > 90L) {
+            val freshNow = System.currentTimeMillis() / 1000L
+            if (!force && freshCheck.expiresAtEpochSec - freshNow > 90L) {
                 return@withLock freshCheck.accessToken
+            }
+            if (force && freshCheck.accessToken != current.accessToken &&
+                freshCheck.expiresAtEpochSec - freshNow > 90L
+            ) {
+                return@withLock freshCheck.accessToken
+            }
+            if (freshCheck.refreshToken.isBlank()) {
+                return@withLock null
             }
             withContext(Dispatchers.IO) {
                 val payload = buildJsonObject {
@@ -218,117 +329,211 @@ class SupabaseClient(
                     .header("apikey", anonKey)
                     .post(payload.toRequestBody(jsonMedia))
                     .build()
-                runCatching {
+                try {
                     http.newCall(req).execute().use { resp ->
-                        if (!resp.isSuccessful) return@use freshCheck.accessToken
+                        if (resp.code == 400 || resp.code == 401) {
+                            sessionStore.clear()
+                            return@use null
+                        }
+                        if (!resp.isSuccessful) {
+                            return@use if (!force && freshCheck.expiresAtEpochSec > System.currentTimeMillis() / 1000L) {
+                                freshCheck.accessToken
+                            } else {
+                                null
+                            }
+                        }
                         val raw = resp.body?.string().orEmpty()
                         val parsed = json.decodeFromString<AuthTokenResponseDto>(raw)
-                        if (parsed.accessToken != null) {
-                            val updated = freshCheck.copy(
-                                accessToken = parsed.accessToken,
-                                refreshToken = parsed.refreshToken ?: freshCheck.refreshToken,
-                                expiresAtEpochSec = System.currentTimeMillis() / 1000L + parsed.expiresIn,
-                            )
-                            sessionStore.saveSession(updated)
-                            updated.accessToken
-                        } else {
-                            freshCheck.accessToken
+                        val newAccess = parsed.accessToken ?: return@use null
+                        val latest = sessionStore.session.value
+                        if (latest == null || latest.userId != freshCheck.userId) {
+                            return@use null
                         }
+                        val updated = latest.copy(
+                            accessToken = newAccess,
+                            refreshToken = parsed.refreshToken?.takeIf { it.isNotBlank() } ?: latest.refreshToken,
+                            expiresAtEpochSec = System.currentTimeMillis() / 1000L + parsed.expiresIn,
+                            learningLanguage = latest.learningLanguage,
+                            userLevel = latest.userLevel,
+                        )
+                        sessionStore.saveSession(updated)
+                        updated.accessToken
                     }
-                }.getOrDefault(freshCheck.accessToken)
+                } catch (_: IOException) {
+                    if (!force && freshCheck.expiresAtEpochSec > System.currentTimeMillis() / 1000L) {
+                        freshCheck.accessToken
+                    } else {
+                        null
+                    }
+                }
             }
         }
     }
 
-    suspend fun fetchProfileAndProgress(userId: String): Pair<String, String> = withContext(Dispatchers.IO) {
-        val token = validToken() ?: return@withContext ("ja" to "none")
-        val profReq = Request.Builder()
-            .url("$baseUrl/rest/v1/profiles?user_id=eq.$userId&select=user_id,learning_language,ui_language")
-            .header("apikey", anonKey)
-            .header("Authorization", "Bearer $token")
-            .get()
-            .build()
-
-        val lang = runCatching {
-            http.newCall(profReq).execute().use { resp ->
-                if (!resp.isSuccessful) "ja"
-                else json.decodeFromString<List<ProfileDto>>(resp.body?.string().orEmpty())
-                    .firstOrNull()?.learningLanguage ?: "ja"
-            }
-        }.getOrDefault("ja")
-
-        val progReq = Request.Builder()
-            .url("$baseUrl/rest/v1/user_language_progress?user_id=eq.$userId&learning_language=eq.$lang&select=learning_language,level,placement_done")
-            .header("apikey", anonKey)
-            .header("Authorization", "Bearer $token")
-            .get()
-            .build()
-
-        val lvl = runCatching {
-            http.newCall(progReq).execute().use { resp ->
-                if (!resp.isSuccessful) "none"
-                else json.decodeFromString<List<LanguageProgressDto>>(resp.body?.string().orEmpty())
-                    .firstOrNull()?.level ?: "none"
-            }
-        }.getOrDefault("none")
-
-        sessionStore.updateLanguagePrefs(lang, lvl)
-        lang to lvl
+    private suspend fun executeAuthenticated(buildRequest: (token: String) -> Request): Response {
+        val token = validToken(force = false) ?: throw IOException("Not signed in")
+        val first = http.newCall(buildRequest(token)).execute()
+        if (first.code != 401) return first
+        first.close()
+        val refreshed = validToken(force = true) ?: throw IOException("Session expired (401)")
+        return http.newCall(buildRequest(refreshed)).execute()
     }
 
-    suspend fun fetchWordStates(userId: String, lang: String): List<UserWordStateDto> =
-        withContext(Dispatchers.IO) {
-            val token = validToken() ?: return@withContext emptyList()
-            val req = Request.Builder()
-                .url(
-                    "$baseUrl/rest/v1/user_word_state" +
-                        "?user_id=eq.$userId&learning_language=eq.$lang" +
-                        "&select=word,reading,level,learning_language,state,preference,known_source,correct_streak,srs_level,srs_due_at,last_reviewed_at,marked_known_at"
-                )
+    suspend fun fetchProfileAndProgress(userId: String): Pair<String, String> = withContext(Dispatchers.IO) {
+        val profUrl = "$baseUrl/rest/v1/profiles".toHttpUrl().newBuilder()
+            .addQueryParameter("user_id", "eq.$userId")
+            .addQueryParameter("select", "user_id,learning_language,ui_language")
+            .build()
+
+        val lang = executeAuthenticated { token ->
+            Request.Builder()
+                .url(profUrl)
                 .header("apikey", anonKey)
                 .header("Authorization", "Bearer $token")
                 .get()
                 .build()
-            http.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) emptyList()
-                else json.decodeFromString(resp.body?.string().orEmpty())
+        }.use { resp ->
+            val raw = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                throw IOException("Profile fetch failed (${resp.code}): ${raw.take(180)}")
             }
+            json.decodeFromString<List<ProfileDto>>(raw)
+                .firstOrNull()?.learningLanguage ?: "ja"
+        }
+
+        val lvl = fetchLanguageLevel(userId, lang)
+        if (sessionStore.session.value?.userId == userId) {
+            sessionStore.updateLanguagePrefs(lang, lvl)
+        }
+        lang to lvl
+    }
+
+    private suspend fun fetchLanguageLevel(userId: String, lang: String): String {
+        val progUrl = "$baseUrl/rest/v1/user_language_progress".toHttpUrl().newBuilder()
+            .addQueryParameter("user_id", "eq.$userId")
+            .addQueryParameter("learning_language", "eq.$lang")
+            .addQueryParameter("select", "learning_language,level,placement_done")
+            .build()
+
+        return executeAuthenticated { token ->
+            Request.Builder()
+                .url(progUrl)
+                .header("apikey", anonKey)
+                .header("Authorization", "Bearer $token")
+                .get()
+                .build()
+        }.use { resp ->
+            val raw = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                throw IOException("Language progress fetch failed (${resp.code}): ${raw.take(180)}")
+            }
+            json.decodeFromString<List<LanguageProgressDto>>(raw)
+                .firstOrNull()?.level ?: "none"
+        }
+    }
+
+    suspend fun fetchWordStates(userId: String, lang: String): List<UserWordStateDto> =
+        withContext(Dispatchers.IO) {
+            val all = mutableListOf<UserWordStateDto>()
+            var offset = 0
+            while (true) {
+                val url = "$baseUrl/rest/v1/user_word_state".toHttpUrl().newBuilder()
+                    .addQueryParameter("user_id", "eq.$userId")
+                    .addQueryParameter("learning_language", "eq.$lang")
+                    .addQueryParameter(
+                        "select",
+                        "word,reading,level,learning_language,state,preference,known_source,correct_streak,srs_level,srs_due_at,last_reviewed_at,marked_known_at"
+                    )
+                    .addQueryParameter("order", "word.asc")
+                    .addQueryParameter("limit", PAGE_SIZE.toString())
+                    .addQueryParameter("offset", offset.toString())
+                    .build()
+
+                val page = executeAuthenticated { token ->
+                    Request.Builder()
+                        .url(url)
+                        .header("apikey", anonKey)
+                        .header("Authorization", "Bearer $token")
+                        .get()
+                        .build()
+                }.use { resp ->
+                    val raw = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        throw IOException("Word states fetch failed (${resp.code}): ${raw.take(180)}")
+                    }
+                    json.decodeFromString<List<UserWordStateDto>>(raw)
+                }
+
+                all += page
+                if (page.size < PAGE_SIZE) break
+                offset += PAGE_SIZE
+            }
+            all
         }
 
     suspend fun upsertWordStates(rows: List<UserWordStateDto>): Boolean =
         withContext(Dispatchers.IO) {
             if (rows.isEmpty()) return@withContext true
-            val token = validToken() ?: return@withContext false
-            val body = json.encodeToString(rows)
-            val req = Request.Builder()
-                .url("$baseUrl/rest/v1/user_word_state?on_conflict=user_id,word,learning_language")
-                .header("apikey", anonKey)
-                .header("Authorization", "Bearer $token")
-                .header("Prefer", "resolution=merge-duplicates,return=minimal")
-                .post(body.toRequestBody(jsonMedia))
-                .build()
-            http.newCall(req).execute().use { resp -> resp.isSuccessful }
+            runCatching {
+                val body = postgrestWriteJson.encodeToString(rows)
+                executeAuthenticated { token ->
+                    Request.Builder()
+                        .url("$baseUrl/rest/v1/user_word_state?on_conflict=user_id,word,learning_language")
+                        .header("apikey", anonKey)
+                        .header("Authorization", "Bearer $token")
+                        .header("Prefer", "resolution=merge-duplicates,return=minimal")
+                        .post(body.toRequestBody(jsonMedia))
+                        .build()
+                }.use { resp -> resp.isSuccessful }
+            }.getOrDefault(false)
+        }
+
+    suspend fun deleteWordStates(userId: String, lang: String, words: List<String>): Boolean =
+        withContext(Dispatchers.IO) {
+            if (words.isEmpty()) return@withContext true
+            runCatching {
+                for (batch in words.chunked(50)) {
+                    val quoted = batch.joinToString(",") { w ->
+                        "\"${w.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+                    }
+                    val url = "$baseUrl/rest/v1/user_word_state".toHttpUrl().newBuilder()
+                        .addQueryParameter("user_id", "eq.$userId")
+                        .addQueryParameter("learning_language", "eq.$lang")
+                        .addQueryParameter("word", "in.($quoted)")
+                        .build()
+                    val ok = executeAuthenticated { token ->
+                        Request.Builder()
+                            .url(url)
+                            .header("apikey", anonKey)
+                            .header("Authorization", "Bearer $token")
+                            .delete()
+                            .build()
+                    }.use { resp -> resp.isSuccessful }
+                    if (!ok) return@runCatching false
+                }
+                true
+            }.getOrDefault(false)
         }
 
     suspend fun fetchUserAnime(userId: String, lang: String): List<UserAnimeRowDto> =
         withContext(Dispatchers.IO) {
-            val token = validToken() ?: return@withContext emptyList()
             val url = "$baseUrl/rest/v1/user_anime".toHttpUrl().newBuilder()
                 .addQueryParameter("user_id", "eq.$userId")
                 .addQueryParameter("learning_language", "eq.$lang")
                 .addQueryParameter("select", "position,anime:anime_id(id,title_romaji,title_en,title_jp,cover_url)")
                 .addQueryParameter("order", "position.asc")
                 .build()
-            val req = Request.Builder()
-                .url(url)
-                .header("apikey", anonKey)
-                .header("Authorization", "Bearer $token")
-                .get()
-                .build()
-            http.newCall(req).execute().use { resp ->
+            executeAuthenticated { token ->
+                Request.Builder()
+                    .url(url)
+                    .header("apikey", anonKey)
+                    .header("Authorization", "Bearer $token")
+                    .get()
+                    .build()
+            }.use { resp ->
                 val raw = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
-                    error("Library fetch failed (${resp.code}): ${raw.take(180)}")
+                    throw IOException("Library fetch failed (${resp.code}): ${raw.take(180)}")
                 }
                 json.decodeFromString(raw)
             }
@@ -337,33 +542,46 @@ class SupabaseClient(
     suspend fun fetchEpisodesForAnimeIds(animeIds: List<String>): List<EpisodeRowDto> =
         withContext(Dispatchers.IO) {
             if (animeIds.isEmpty()) return@withContext emptyList()
-            val token = validToken() ?: return@withContext emptyList()
-            val inList = animeIds.joinToString(",")
-            val url = "$baseUrl/rest/v1/episodes".toHttpUrl().newBuilder()
-                .addQueryParameter("seasons.anime_id", "in.($inList)")
-                .addQueryParameter("select", "id,episode_number,processing_status,seasons!inner(anime_id,season_number)")
-                .addQueryParameter("order", "episode_number.asc")
-                .addQueryParameter("limit", "1000")
-                .build()
-            val req = Request.Builder()
-                .url(url)
-                .header("apikey", anonKey)
-                .header("Authorization", "Bearer $token")
-                .get()
-                .build()
-            http.newCall(req).execute().use { resp ->
-                val raw = resp.body?.string().orEmpty()
-                if (!resp.isSuccessful) {
-                    error("Episodes fetch failed (${resp.code}): ${raw.take(180)}")
+            val all = mutableListOf<EpisodeRowDto>()
+            for (animeBatch in animeIds.chunked(50)) {
+                val inList = animeBatch.joinToString(",")
+                var offset = 0
+                while (true) {
+                    val url = "$baseUrl/rest/v1/episodes".toHttpUrl().newBuilder()
+                        .addQueryParameter("seasons.anime_id", "in.($inList)")
+                        .addQueryParameter(
+                            "select",
+                            "id,episode_number,title_en,title_jp,processing_status,seasons!inner(anime_id,season_number)"
+                        )
+                        .addQueryParameter("order", "id.asc")
+                        .addQueryParameter("limit", PAGE_SIZE.toString())
+                        .addQueryParameter("offset", offset.toString())
+                        .build()
+                    val page = executeAuthenticated { token ->
+                        Request.Builder()
+                            .url(url)
+                            .header("apikey", anonKey)
+                            .header("Authorization", "Bearer $token")
+                            .get()
+                            .build()
+                    }.use { resp ->
+                        val raw = resp.body?.string().orEmpty()
+                        if (!resp.isSuccessful) {
+                            throw IOException("Episodes fetch failed (${resp.code}): ${raw.take(180)}")
+                        }
+                        json.decodeFromString<List<EpisodeRowDto>>(raw)
+                    }
+                    all += page
+                    if (page.size < PAGE_SIZE) break
+                    offset += PAGE_SIZE
                 }
-                json.decodeFromString(raw)
             }
+            all
         }
 
     suspend fun fetchEpisodeVocabCaches(episodeIds: List<String>, lang: String): List<EpisodeVocabCacheDto> =
         withContext(Dispatchers.IO) {
             if (episodeIds.isEmpty()) return@withContext emptyList()
-            val token = validToken() ?: return@withContext emptyList()
             val out = mutableListOf<EpisodeVocabCacheDto>()
             for (batch in episodeIds.chunked(25)) {
                 val inList = batch.joinToString(",")
@@ -372,16 +590,19 @@ class SupabaseClient(
                     .addQueryParameter("language", "eq.$lang")
                     .addQueryParameter("select", "episode_id,vocab")
                     .build()
-                val req = Request.Builder()
-                    .url(url)
-                    .header("apikey", anonKey)
-                    .header("Authorization", "Bearer $token")
-                    .get()
-                    .build()
-                http.newCall(req).execute().use { resp ->
-                    if (resp.isSuccessful) {
-                        out += json.decodeFromString<List<EpisodeVocabCacheDto>>(resp.body?.string().orEmpty())
+                executeAuthenticated { token ->
+                    Request.Builder()
+                        .url(url)
+                        .header("apikey", anonKey)
+                        .header("Authorization", "Bearer $token")
+                        .get()
+                        .build()
+                }.use { resp ->
+                    val raw = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        throw IOException("Episode vocab cache fetch failed (${resp.code}): ${raw.take(180)}")
                     }
+                    out += json.decodeFromString<List<EpisodeVocabCacheDto>>(raw)
                 }
             }
             out
@@ -389,59 +610,170 @@ class SupabaseClient(
 
     suspend fun fetchChunkWords(userId: String, lang: String): List<StudyChunkWordDto> =
         withContext(Dispatchers.IO) {
-            val token = validToken() ?: return@withContext emptyList()
-            val chunkUrl = "$baseUrl/rest/v1/study_chunks".toHttpUrl().newBuilder()
-                .addQueryParameter("user_id", "eq.$userId")
-                .addQueryParameter("learning_language", "eq.$lang")
-                .addQueryParameter("select", "id")
-                .addQueryParameter("limit", "100")
-                .build()
-            val chunkIds = http.newCall(
-                Request.Builder()
-                    .url(chunkUrl)
-                    .header("apikey", anonKey)
-                    .header("Authorization", "Bearer $token")
-                    .get()
+            val chunkIds = mutableListOf<String>()
+            var chunkOffset = 0
+            while (true) {
+                val chunkUrl = "$baseUrl/rest/v1/study_chunks".toHttpUrl().newBuilder()
+                    .addQueryParameter("user_id", "eq.$userId")
+                    .addQueryParameter("learning_language", "eq.$lang")
+                    .addQueryParameter("select", "id")
+                    .addQueryParameter("order", "id.asc")
+                    .addQueryParameter("limit", PAGE_SIZE.toString())
+                    .addQueryParameter("offset", chunkOffset.toString())
                     .build()
-            ).execute().use { resp ->
-                if (!resp.isSuccessful) emptyList()
-                else json.decodeFromString<List<StudyChunkIdDto>>(resp.body?.string().orEmpty()).map { it.id }
+                val page = executeAuthenticated { token ->
+                    Request.Builder()
+                        .url(chunkUrl)
+                        .header("apikey", anonKey)
+                        .header("Authorization", "Bearer $token")
+                        .get()
+                        .build()
+                }.use { resp ->
+                    val raw = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        throw IOException("Study chunks fetch failed (${resp.code}): ${raw.take(180)}")
+                    }
+                    json.decodeFromString<List<StudyChunkIdDto>>(raw).map { it.id }
+                }
+                chunkIds += page
+                if (page.size < PAGE_SIZE) break
+                chunkOffset += PAGE_SIZE
             }
             if (chunkIds.isEmpty()) return@withContext emptyList()
 
-            val wordsUrl = "$baseUrl/rest/v1/study_chunk_words".toHttpUrl().newBuilder()
-                .addQueryParameter("chunk_id", "in.(${chunkIds.joinToString(",")})")
-                .addQueryParameter("select", "word,reading,meaning,part_of_speech,level,example_sentence_jp,example_sentence_en")
-                .build()
-            http.newCall(
-                Request.Builder()
-                    .url(wordsUrl)
-                    .header("apikey", anonKey)
-                    .header("Authorization", "Bearer $token")
-                    .get()
+            val words = mutableListOf<StudyChunkWordDto>()
+            for (batch in chunkIds.chunked(25)) {
+                val inList = batch.joinToString(",")
+                var wordOffset = 0
+                while (true) {
+                    val wordsUrl = "$baseUrl/rest/v1/study_chunk_words".toHttpUrl().newBuilder()
+                        .addQueryParameter("chunk_id", "in.($inList)")
+                        .addQueryParameter(
+                            "select",
+                            "word,reading,meaning,part_of_speech,level,example_sentence_jp,example_sentence_en"
+                        )
+                        .addQueryParameter("order", "id.asc")
+                        .addQueryParameter("limit", PAGE_SIZE.toString())
+                        .addQueryParameter("offset", wordOffset.toString())
+                        .build()
+                    val page = executeAuthenticated { token ->
+                        Request.Builder()
+                            .url(wordsUrl)
+                            .header("apikey", anonKey)
+                            .header("Authorization", "Bearer $token")
+                            .get()
+                            .build()
+                    }.use { resp ->
+                        val raw = resp.body?.string().orEmpty()
+                        if (!resp.isSuccessful) {
+                            throw IOException("Study chunk words fetch failed (${resp.code}): ${raw.take(180)}")
+                        }
+                        json.decodeFromString<List<StudyChunkWordDto>>(raw)
+                    }
+                    words += page
+                    if (page.size < PAGE_SIZE) break
+                    wordOffset += PAGE_SIZE
+                }
+            }
+            words
+        }
+
+    suspend fun updateUserLevel(userId: String, lang: String, level: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val payload = buildJsonObject {
+                    put("user_id", userId)
+                    put("learning_language", lang)
+                    put("level", level)
+                    put("placement_done", true)
+                }.toString()
+                val url = "$baseUrl/rest/v1/user_language_progress".toHttpUrl().newBuilder()
+                    .addQueryParameter("on_conflict", "user_id,learning_language")
                     .build()
-            ).execute().use { resp ->
-                if (!resp.isSuccessful) emptyList()
-                else json.decodeFromString(resp.body?.string().orEmpty())
+                executeAuthenticated { token ->
+                    Request.Builder()
+                        .url(url)
+                        .header("apikey", anonKey)
+                        .header("Authorization", "Bearer $token")
+                        .header("Prefer", "resolution=merge-duplicates,return=minimal")
+                        .post(payload.toRequestBody(jsonMedia))
+                        .build()
+                }.use { resp ->
+                    val raw = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        error("Couldn't save level (${resp.code}): ${raw.take(140)}")
+                    }
+                }
+            }
+        }
+
+    suspend fun updateLearningLanguage(userId: String, lang: String): Result<String> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val payload = buildJsonObject {
+                    put("learning_language", lang)
+                }.toString()
+                val url = "$baseUrl/rest/v1/profiles".toHttpUrl().newBuilder()
+                    .addQueryParameter("user_id", "eq.$userId")
+                    .build()
+                executeAuthenticated { token ->
+                    Request.Builder()
+                        .url(url)
+                        .header("apikey", anonKey)
+                        .header("Authorization", "Bearer $token")
+                        .header("Prefer", "return=minimal")
+                        .patch(payload.toRequestBody(jsonMedia))
+                        .build()
+                }.use { resp ->
+                    val raw = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        error("Couldn't update language (${resp.code}): ${raw.take(140)}")
+                    }
+                }
+                fetchLanguageLevel(userId, lang)
+            }
+        }
+
+    suspend fun removeUserAnime(userId: String, animeId: String, lang: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val url = "$baseUrl/rest/v1/user_anime".toHttpUrl().newBuilder()
+                    .addQueryParameter("user_id", "eq.$userId")
+                    .addQueryParameter("anime_id", "eq.$animeId")
+                    .addQueryParameter("learning_language", "eq.$lang")
+                    .build()
+                executeAuthenticated { token ->
+                    Request.Builder()
+                        .url(url)
+                        .header("apikey", anonKey)
+                        .header("Authorization", "Bearer $token")
+                        .delete()
+                        .build()
+                }.use { resp ->
+                    val raw = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        error("Couldn't remove anime (${resp.code}): ${raw.take(140)}")
+                    }
+                }
             }
         }
 
     suspend fun searchAnime(query: String): Result<List<AnimeSearchResultDto>> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val token = validToken() ?: error("Not signed in")
                 val payload = buildJsonObject { put("query", query.trim()) }.toString()
-                val req = Request.Builder()
-                    .url("$baseUrl/functions/v1/search-anime")
-                    .header("apikey", anonKey)
-                    .header("Authorization", "Bearer $token")
-                    .post(payload.toRequestBody(jsonMedia))
-                    .build()
-                http.newCall(req).execute().use { resp ->
+                executeAuthenticated { token ->
+                    Request.Builder()
+                        .url("$baseUrl/functions/v1/search-anime")
+                        .header("apikey", anonKey)
+                        .header("Authorization", "Bearer $token")
+                        .post(payload.toRequestBody(jsonMedia))
+                        .build()
+                }.use { resp ->
                     val raw = resp.body?.string().orEmpty()
-                    val parsed = json.decodeFromString<SearchAnimeResponseDto>(raw)
-                    if (!resp.isSuccessful) error(parsed.error ?: "Search failed (${resp.code})")
-                    parsed.results
+                    val parsed = runCatching { json.decodeFromString<SearchAnimeResponseDto>(raw) }.getOrNull()
+                    if (!resp.isSuccessful) error(parsed?.error ?: "Search failed (${resp.code})")
+                    parsed?.results.orEmpty()
                 }
             }
         }
@@ -449,7 +781,6 @@ class SupabaseClient(
     suspend fun addAnimeToLibrary(anime: AnimeSearchResultDto, lang: String): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val token = validToken() ?: error("Not signed in")
                 val bodyObj = buildJsonObject {
                     put("learning_language", lang)
                     put(
@@ -457,14 +788,43 @@ class SupabaseClient(
                         json.parseToJsonElement(json.encodeToString(anime))
                     )
                 }.toString()
-                val req = Request.Builder()
-                    .url("$baseUrl/functions/v1/add-anime-to-library")
-                    .header("apikey", anonKey)
-                    .header("Authorization", "Bearer $token")
-                    .post(bodyObj.toRequestBody(jsonMedia))
-                    .build()
-                http.newCall(req).execute().use { resp ->
+                executeAuthenticated { token ->
+                    Request.Builder()
+                        .url("$baseUrl/functions/v1/add-anime-to-library")
+                        .header("apikey", anonKey)
+                        .header("Authorization", "Bearer $token")
+                        .post(bodyObj.toRequestBody(jsonMedia))
+                        .build()
+                }.use { resp ->
                     if (!resp.isSuccessful) error("Couldn't add anime (${resp.code})")
+                }
+            }
+        }
+
+    suspend fun processEpisodeWithSubtitleText(episodeId: String, subtitleText: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val trimmed = subtitleText.trimStart('\uFEFF').trim()
+                if (trimmed.isBlank()) error("Subtitle text is empty.")
+                val procPayload = buildJsonObject {
+                    put("episode_id", episodeId)
+                    put("subtitle_text", trimmed)
+                }.toString()
+                executeAuthenticated { token ->
+                    Request.Builder()
+                        .url("$baseUrl/functions/v1/process-episode")
+                        .header("apikey", anonKey)
+                        .header("Authorization", "Bearer $token")
+                        .post(procPayload.toRequestBody(jsonMedia))
+                        .build()
+                }.use { resp ->
+                    val raw = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        val parsedErr = runCatching {
+                            json.decodeFromString<ProcessEpisodeResponseDto>(raw).error
+                        }.getOrNull()
+                        error(parsedErr ?: "Episode processing failed (${resp.code})")
+                    }
                 }
             }
         }
@@ -472,16 +832,15 @@ class SupabaseClient(
     suspend fun autoFetchAndProcessEpisode(episodeId: String): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val token = validToken() ?: error("Not signed in")
                 val fetchPayload = buildJsonObject { put("episode_id", episodeId) }.toString()
-                val fetchReq = Request.Builder()
-                    .url("$baseUrl/functions/v1/fetch-subtitles")
-                    .header("apikey", anonKey)
-                    .header("Authorization", "Bearer $token")
-                    .post(fetchPayload.toRequestBody(jsonMedia))
-                    .build()
-
-                val subtitleContent = http.newCall(fetchReq).execute().use { resp ->
+                val subtitleContent = executeAuthenticated { token ->
+                    Request.Builder()
+                        .url("$baseUrl/functions/v1/fetch-subtitles")
+                        .header("apikey", anonKey)
+                        .header("Authorization", "Bearer $token")
+                        .post(fetchPayload.toRequestBody(jsonMedia))
+                        .build()
+                }.use { resp ->
                     val raw = resp.body?.string().orEmpty()
                     val parsed = runCatching { json.decodeFromString<FetchSubtitlesResponseDto>(raw) }.getOrNull()
                     if (!resp.isSuccessful || parsed?.found != true || parsed.content.isNullOrBlank()) {
@@ -490,44 +849,63 @@ class SupabaseClient(
                     parsed.content
                 }
 
-                val procPayload = buildJsonObject {
-                    put("episode_id", episodeId)
-                    put("subtitle_text", subtitleContent)
-                }.toString()
-                val procReq = Request.Builder()
-                    .url("$baseUrl/functions/v1/process-episode")
-                    .header("apikey", anonKey)
-                    .header("Authorization", "Bearer $token")
-                    .post(procPayload.toRequestBody(jsonMedia))
-                    .build()
-                http.newCall(procReq).execute().use { resp ->
-                    if (!resp.isSuccessful) error("Episode processing failed (${resp.code})")
-                }
+                processEpisodeWithSubtitleText(episodeId, subtitleContent).getOrThrow()
             }
         }
 
     suspend fun deleteAllUserData(userId: String): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val token = validToken() ?: error("Not signed in")
-                val tables = listOf(
-                    "quiz_results",
-                    "study_sessions",
-                    "study_chunks",
-                    "user_word_state",
-                    "user_anime",
-                    "flashcard_push_devices",
-                    "user_language_progress",
-                )
-                for (table in tables) {
-                    val req = Request.Builder()
-                        .url("$baseUrl/rest/v1/$table?user_id=eq.$userId")
+                val fnCode = executeAuthenticated { token ->
+                    Request.Builder()
+                        .url("$baseUrl/functions/v1/delete-account")
                         .header("apikey", anonKey)
                         .header("Authorization", "Bearer $token")
-                        .delete()
+                        .post("{}".toRequestBody(jsonMedia))
                         .build()
-                    http.newCall(req).execute().close()
+                }.use { resp ->
+                    if (resp.isSuccessful) return@runCatching
+                    val raw = resp.body?.string().orEmpty()
+                    if (resp.code != 404) {
+                        error("Account deletion failed (${resp.code}): ${raw.take(180)}")
+                    }
+                    resp.code
+                }
+
+                if (fnCode == 404) {
+                    val tables = listOf(
+                        "quiz_results",
+                        "study_sessions",
+                        "study_chunks",
+                        "user_word_state",
+                        "user_anime",
+                        "flashcard_push_devices",
+                        "user_language_progress",
+                        "profiles",
+                    )
+                    for (table in tables) {
+                        val url = "$baseUrl/rest/v1/$table".toHttpUrl().newBuilder()
+                            .addQueryParameter("user_id", "eq.$userId")
+                            .build()
+                        executeAuthenticated { token ->
+                            Request.Builder()
+                                .url(url)
+                                .header("apikey", anonKey)
+                                .header("Authorization", "Bearer $token")
+                                .delete()
+                                .build()
+                        }.use { resp ->
+                            if (!resp.isSuccessful) {
+                                val raw = resp.body?.string().orEmpty()
+                                error("Failed to delete $table (${resp.code}): ${raw.take(140)}")
+                            }
+                        }
+                    }
                 }
             }
         }
+
+    companion object {
+        const val PAGE_SIZE = 1000
+    }
 }

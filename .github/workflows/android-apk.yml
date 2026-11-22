@@ -122,6 +122,7 @@ jobs:
         with:
           name: tatani-android-v${{ steps.ver.outputs.version_code }}
           path: |
+            tatani-android-debug.apk
             tatani-release-${{ steps.ver.outputs.version_code }}.aab
             tatani-r8-mapping.txt
           if-no-files-found: ignore

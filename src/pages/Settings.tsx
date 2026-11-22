@@ -5,13 +5,24 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/PageHeader";
 import { NotificationSettings } from "@/components/NotificationSettings";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useAuth } from "@/context/AuthContext";
-import { Settings as SettingsIcon, LogOut, RotateCw, Trash2, Film, Layers, Languages, GraduationCap } from "lucide-react";
+import { Settings as SettingsIcon, LogOut, RotateCw, Trash2, Film, Layers, Languages, GraduationCap, UserX } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useI18n, SUPPORTED_LANGUAGES, LangCode, DICTS } from "@/i18n";
 import { LEARNING_LANGUAGES, LearningLangCode, levelsFor, scaleLabel, formatLevel } from "@/lib/languages";
+import { clearLocalSrsCache } from "@/lib/srs-store";
 import {
   useStudyPrefs,
   CHUNK_SIZE_MIN,
@@ -22,7 +33,6 @@ import {
   DEFAULT_QUEUE_SIZE,
 } from "@/hooks/use-study-prefs";
 
-// Common countries for streaming-region filtering. Extendable.
 const COUNTRIES = [
   { code: "CH", name: "Switzerland" },
   { code: "US", name: "United States" },
@@ -41,6 +51,8 @@ export default function Settings() {
   const { chunkSize, queueSize, setChunkSize, setQueueSize } = useStudyPrefs();
   const [queueText, setQueueText] = useState(String(queueSize));
   const [chunkText, setChunkText] = useState(String(chunkSize));
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState(false);
 
   const changeLanguage = async (code: LangCode) => {
     if (code === lang) return;
@@ -112,7 +124,10 @@ export default function Settings() {
         supabase.from("user_word_state").delete().eq("user_id", user.id).eq("learning_language", learningLanguage),
         supabase.from("quiz_results").delete().eq("user_id", user.id).eq("learning_language", learningLanguage),
         supabase.from("study_sessions").delete().eq("user_id", user.id).eq("learning_language", learningLanguage),
+        supabase.from("study_chunks").delete().eq("user_id", user.id).eq("learning_language", learningLanguage),
+        supabase.from("episode_summaries").delete().eq("user_id", user.id).eq("learning_language", learningLanguage),
       ]);
+      clearLocalSrsCache(user.id, learningLanguage);
       await supabase
         .from("user_language_progress")
         .update({ placement_done: false, level: "none", total_words_known: 0, study_streak: 0 })
@@ -121,7 +136,7 @@ export default function Settings() {
       await refreshProfile();
       toast.success(t("settings.resetDone"));
       navigate("/onboarding");
-    } catch (e) {
+    } catch {
       toast.error(t("settings.resetFailed"));
     }
   };
@@ -132,11 +147,41 @@ export default function Settings() {
     try {
       const { data, error } = await supabase.functions.invoke("wipe-anime-data", { body: {} });
       if (error) throw error;
-      const counts = (data as any)?.counts ?? {};
+      const payload = data as { counts?: Record<string, number> } | null;
+      const counts = payload?.counts ?? {};
       const summary = Object.entries(counts).map(([k, v]) => `${k}: ${v}`).join(", ");
       toast.success(t("settings.wipeDone"), { description: summary });
-    } catch (e: any) {
-      toast.error(t("settings.wipeFailed"), { description: e?.message ?? "" });
+    } catch (e: unknown) {
+      toast.error(t("settings.wipeFailed"), {
+        description: e instanceof Error ? e.message : "",
+      });
+    }
+  };
+
+  const deleteAccount = async () => {
+    if (!user) return;
+    setDeletingAccount(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("delete-account", { body: {} });
+      if (error) throw error;
+      const payload = data as { error?: string } | null;
+      if (payload?.error) throw new Error(payload.error);
+      try {
+        localStorage.clear();
+        sessionStorage.clear();
+      } catch {
+        // Ignore storage errors cleanly
+      }
+      await signOut();
+      setDeleteDialogOpen(false);
+      toast.success(t("settings.deleteAccountDone"));
+      navigate("/auth", { replace: true });
+    } catch (e: unknown) {
+      toast.error(t("settings.deleteAccountFailed"), {
+        description: e instanceof Error ? e.message : "",
+      });
+    } finally {
+      setDeletingAccount(false);
     }
   };
 
@@ -307,11 +352,47 @@ export default function Settings() {
         <Card className="p-4 gradient-card border-border/50">
           <h3 className="font-semibold mb-1">{t("settings.signOut")}</h3>
           <p className="text-xs text-muted-foreground mb-3">{t("settings.signOutHelp")}</p>
-          <Button variant="destructive" onClick={async () => { await signOut(); navigate("/auth"); }}>
+          <Button variant="outline" onClick={async () => { await signOut(); navigate("/auth"); }}>
             <LogOut className="h-4 w-4" /> {t("settings.signOut")}
           </Button>
         </Card>
+
+        <Card className="p-4 gradient-card border-destructive/40">
+          <h3 className="font-semibold mb-1 text-destructive">{t("settings.deleteAccount")}</h3>
+          <p className="text-xs text-muted-foreground mb-3">{t("settings.deleteAccountHelp")}</p>
+          <Button
+            id="settings-delete-account"
+            variant="destructive"
+            onClick={() => setDeleteDialogOpen(true)}
+          >
+            <UserX className="h-4 w-4" /> {t("settings.deleteAccountBtn")}
+          </Button>
+        </Card>
       </div>
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={(o) => !deletingAccount && setDeleteDialogOpen(o)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("settings.deleteAccountConfirmTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("settings.deleteAccountConfirmBody")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingAccount}>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                void deleteAccount();
+              }}
+              disabled={deletingAccount}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deletingAccount ? t("settings.deletingAccount") : t("settings.deleteAccountBtn")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

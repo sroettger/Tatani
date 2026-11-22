@@ -7,18 +7,32 @@ import { ChevronLeft, Play } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { useI18n } from "@/i18n";
+import type { StringKey } from "@/i18n/strings";
+import { fetchAllPages, fetchBatchedPages } from "@/lib/supabase-pagination";
 
 type Anime = {
-  id: string; title_romaji: string; title_en: string | null; title_jp: string | null;
-  cover_url: string | null; year: number | null; synopsis: string | null;
+  id: string;
+  title_romaji: string;
+  title_en: string | null;
+  title_jp: string | null;
+  cover_url: string | null;
+  year: number | null;
+  synopsis: string | null;
 };
 type Season = { id: string; season_number: number; episode_count: number };
-type Episode = { id: string; episode_number: number; processing_status: string; title_en: string | null; title_jp: string | null };
+type Episode = {
+  id: string;
+  season_id: string;
+  episode_number: number;
+  processing_status: string;
+  title_en: string | null;
+  title_jp: string | null;
+};
 
 export default function AnimeDetail() {
   const { animeId } = useParams();
   const navigate = useNavigate();
-  const { learningLanguageInfo } = useAuth();
+  const { learningLanguage, learningLanguageInfo } = useAuth();
   const { t } = useI18n();
   const [anime, setAnime] = useState<Anime | null>(null);
   const [seasons, setSeasons] = useState<Season[]>([]);
@@ -26,23 +40,77 @@ export default function AnimeDetail() {
 
   useEffect(() => {
     if (!animeId) return;
+    let cancelled = false;
     (async () => {
-      const { data: a } = await supabase.from("anime").select("*").eq("id", animeId).maybeSingle();
-      setAnime(a as Anime);
-      const { data: s } = await supabase.from("seasons").select("id,season_number,episode_count").eq("anime_id", animeId).order("season_number");
-      setSeasons((s ?? []) as Season[]);
+      const [{ data: a }, { data: s }] = await Promise.all([
+        supabase.from("anime").select("*").eq("id", animeId).maybeSingle(),
+        supabase.from("seasons").select("id,season_number,episode_count").eq("anime_id", animeId).order("season_number"),
+      ]);
+      if (cancelled) return;
+
+      const seasonList = (s ?? []) as Season[];
+      setAnime((a as Anime | null) ?? null);
+      setSeasons(seasonList);
+
+      const seasonIds = seasonList.map((season) => season.id);
       const map: Record<string, Episode[]> = {};
-      for (const season of s ?? []) {
-        const { data: eps } = await supabase
-          .from("episodes")
-          .select("id,episode_number,processing_status,title_en,title_jp")
-          .eq("season_id", season.id)
-          .order("episode_number");
-        map[season.id] = (eps ?? []) as Episode[];
+      for (const sid of seasonIds) {
+        map[sid] = [];
       }
+
+      if (seasonIds.length > 0) {
+        const { data: allEps } = await fetchAllPages<Episode>((from, to) =>
+          supabase
+            .from("episodes")
+            .select("id,season_id,episode_number,processing_status,title_en,title_jp")
+            .in("season_id", seasonIds)
+            .order("season_id", { ascending: true })
+            .order("episode_number", { ascending: true })
+            .range(from, to),
+        );
+        if (cancelled) return;
+
+        const epIds = allEps.map((ep) => ep.id);
+        const cachedEpIds = new Set<string>();
+        if (epIds.length > 0) {
+          const { data: cachedRows } = await fetchBatchedPages<string, { episode_id: string }>(
+            epIds,
+            200,
+            (slice, from, to) =>
+              supabase
+                .from("episode_vocab_cache")
+                .select("episode_id")
+                .in("episode_id", slice)
+                .eq("language", learningLanguage)
+                .order("episode_id", { ascending: true })
+                .range(from, to),
+          );
+          for (const row of cachedRows) {
+            cachedEpIds.add(row.episode_id);
+          }
+        }
+        if (cancelled) return;
+
+        for (const ep of allEps) {
+          const effectiveStatus = cachedEpIds.has(ep.id)
+            ? "ready"
+            : ep.processing_status === "processing" || ep.processing_status === "failed"
+              ? ep.processing_status
+              : "not_processed";
+          if (!map[ep.season_id]) map[ep.season_id] = [];
+          map[ep.season_id].push({
+            ...ep,
+            processing_status: effectiveStatus,
+          });
+        }
+      }
+
       setEpisodesBySeason(map);
     })();
-  }, [animeId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [animeId, learningLanguage]);
 
   return (
     <div className="max-w-2xl mx-auto pb-10">
@@ -114,7 +182,7 @@ export default function AnimeDetail() {
   );
 }
 
-function StatusBadge({ status, t }: { status: string; t: (k: any, vars?: any) => string }) {
+function StatusBadge({ status, t }: { status: string; t: (k: StringKey, vars?: Record<string, string | number>) => string }) {
   const map: Record<string, { label: string; cls: string }> = {
     not_processed: { label: t("anime.statusNotProcessed"), cls: "bg-muted text-muted-foreground" },
     processing: { label: t("anime.statusProcessing"), cls: "bg-warning/20 text-warning" },

@@ -9,6 +9,7 @@ import { AppShell } from "@/components/AppShell";
 import { I18nProvider } from "@/i18n";
 
 import Auth from "./pages/Auth";
+import ResetPassword from "./pages/ResetPassword";
 import Onboarding from "./pages/Onboarding";
 import Sprint from "./pages/Sprint";
 import LearnSession from "./pages/LearnSession";
@@ -29,17 +30,22 @@ import Privacy from "./pages/Privacy";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
+const routerBasename = (import.meta.env.BASE_URL || "/").replace(/\/+$/, "") || "/";
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <Toaster />
       <Sonner theme="dark" />
-      <BrowserRouter basename={import.meta.env.BASE_URL}>
+      <BrowserRouter
+        basename={routerBasename}
+        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+      >
         <AuthProvider>
           <I18nProvider>
             <Routes>
               <Route path="/auth" element={<Auth />} />
+              <Route path="/reset-password" element={<ResetPassword />} />
               <Route path="/privacy" element={<Privacy />} />
               <Route
                 path="/onboarding"

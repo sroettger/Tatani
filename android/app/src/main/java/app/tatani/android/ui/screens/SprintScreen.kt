@@ -15,8 +15,10 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.automirrored.outlined.VolumeOff
@@ -46,11 +48,14 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -70,12 +75,14 @@ import app.tatani.android.ui.theme.SumiSurface
 import app.tatani.android.ui.theme.VermilionPrimary
 import app.tatani.android.ui.theme.WashiForeground
 import app.tatani.android.ui.theme.WashiMuted
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private data class SprintUndoEntry(
     val card: WordCardEntity,
     val prevSnapshot: SrsEngine.SrsSnapshot,
     val prevQueue: List<WordCardEntity>,
+    val prevCramMode: Boolean,
 )
 
 @Composable
@@ -85,6 +92,10 @@ fun SprintScreen(
     onOpenLearn: (String?) -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
+    val density = LocalDensity.current
+    val swipeThresholdPx = with(density) { 96.dp.toPx() }
+    val maxDragPx = with(density) { 220.dp.toPx() }
+
     val dueCards by viewModel.dueCards.collectAsState()
     val graduatedCards by viewModel.graduatedCards.collectAsState()
     val deckCards by viewModel.deckCards.collectAsState()
@@ -102,6 +113,12 @@ fun SprintScreen(
     var reviewedCount by remember { mutableIntStateOf(0) }
     val sessionStartMs = remember { System.currentTimeMillis() }
     var dragOffsetX by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(queue.size, cramMode) {
+        if (cramMode && queue.isEmpty()) {
+            cramMode = false
+        }
+    }
 
     // Seed and top-up Sprint queue seamlessly from Room SQLite without disrupting current card
     LaunchedEffect(dueCards, cramMode) {
@@ -149,6 +166,12 @@ fun SprintScreen(
     fun gradeCurrent(remembered: Boolean) {
         val card = current ?: return
         val snapshotQueue = queue.toList()
+        val snapshotCram = cramMode
+        val prevSnap = card.toSrsSnapshot()
+
+        if (undoStack.size >= 20) undoStack.removeAt(0)
+        undoStack.add(SprintUndoEntry(card, prevSnap, snapshotQueue, snapshotCram))
+
         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
         revealed = false
         dragOffsetX = 0f
@@ -161,17 +184,18 @@ fun SprintScreen(
                 queue.add(idx, head)
             }
         }
-
-        viewModel.gradeCard(card, remembered) { prevSnap ->
-            if (undoStack.size >= 20) undoStack.removeAt(0)
-            undoStack.add(SprintUndoEntry(card, prevSnap, snapshotQueue))
+        if (cramMode && queue.isEmpty()) {
+            cramMode = false
         }
+
+        viewModel.gradeCard(card, remembered)
     }
 
     fun undoLast() {
         val last = undoStack.removeLastOrNull() ?: return
         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         viewModel.restoreSnapshot(last.card, last.prevSnapshot)
+        cramMode = last.prevCramMode
         queue.clear()
         queue.addAll(last.prevQueue)
         revealed = false
@@ -220,7 +244,7 @@ fun SprintScreen(
                             modifier = Modifier.size(15.dp),
                         )
                         Text(
-                            text = "${queue.size} due",
+                            text = if (cramMode) "${queue.size} ahead" else "${queue.size} due",
                             style = MaterialTheme.typography.labelMedium,
                             color = WashiForeground,
                         )
@@ -300,11 +324,26 @@ fun SprintScreen(
         }
 
         if (current != null) {
-            val nextDays = SrsEngine.nextIntervalDaysForGrade(
-                current.srsLevel,
-                current.srsDueAtEpochMs,
-                true
+            val nextDays = SrsEngine.nextIntervalDays(
+                prev = current.toSrsSnapshot(),
+                remembered = true,
             )
+            val latestRevealed by rememberUpdatedState(revealed)
+            val latestGradeCurrent by rememberUpdatedState(::gradeCurrent)
+            val latestThresholdPx by rememberUpdatedState(swipeThresholdPx)
+            val latestMaxDragPx by rememberUpdatedState(maxDragPx)
+
+            val swipeProgress = (dragOffsetX / swipeThresholdPx.coerceAtLeast(1f)).coerceIn(-1f, 1f)
+            val cardContainerColor = when {
+                swipeProgress > 0f -> lerp(SumiSurface, JadeSuccess, 0.14f * swipeProgress)
+                swipeProgress < 0f -> lerp(SumiSurface, CrimsonAgain, 0.14f * (-swipeProgress))
+                else -> SumiSurface
+            }
+            val cardBorderColor = when {
+                swipeProgress > 0.08f -> lerp(SumiBorder, JadeSuccess, swipeProgress)
+                swipeProgress < -0.08f -> lerp(SumiBorder, CrimsonAgain, -swipeProgress)
+                else -> SumiBorder
+            }
 
             // Swipeable & Tappable 120Hz Flashcard Stage
             Card(
@@ -313,13 +352,13 @@ fun SprintScreen(
                     .weight(1f)
                     .padding(vertical = 12.dp)
                     .offset { IntOffset(dragOffsetX.roundToInt(), 0) }
-                    .pointerInput(current.word, revealed) {
+                    .pointerInput(current.word) {
                         detectHorizontalDragGestures(
                             onDragEnd = {
-                                if (revealed) {
+                                if (latestRevealed) {
                                     when {
-                                        dragOffsetX > 160f -> gradeCurrent(true)
-                                        dragOffsetX < -160f -> gradeCurrent(false)
+                                        dragOffsetX > latestThresholdPx -> latestGradeCurrent(true)
+                                        dragOffsetX < -latestThresholdPx -> latestGradeCurrent(false)
                                         else -> dragOffsetX = 0f
                                     }
                                 } else {
@@ -328,17 +367,18 @@ fun SprintScreen(
                             },
                             onDragCancel = { dragOffsetX = 0f },
                             onHorizontalDrag = { change, dragAmount ->
-                                if (revealed) {
+                                if (latestRevealed) {
                                     change.consume()
-                                    dragOffsetX = (dragOffsetX + dragAmount).coerceIn(-360f, 360f)
+                                    dragOffsetX = (dragOffsetX + dragAmount)
+                                        .coerceIn(-latestMaxDragPx, latestMaxDragPx)
                                 }
                             },
                         )
                     }
                     .clickable(enabled = !revealed) { revealCard() },
                 shape = RoundedCornerShape(22.dp),
-                colors = CardDefaults.cardColors(containerColor = SumiSurface),
-                border = BorderStroke(1.dp, SumiBorder),
+                colors = CardDefaults.cardColors(containerColor = cardContainerColor),
+                border = BorderStroke(1.dp, cardBorderColor),
             ) {
                 Column(
                     modifier = Modifier
@@ -355,6 +395,7 @@ fun SprintScreen(
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f),
                         ) {
                             if (!current.level.isNullOrBlank()) {
                                 Surface(
@@ -402,11 +443,15 @@ fun SprintScreen(
                         }
                     }
 
-                    // Center Prompt & Reveal Content
+                    // Center Prompt & Reveal Content (scrollable on compact screens)
                     Column(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp)
+                            .verticalScroll(rememberScrollState()),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
                     ) {
                         if (listeningMode && !revealed) {
                             Surface(
@@ -494,10 +539,21 @@ fun SprintScreen(
                         }
                     }
 
+                    val footerHint = when {
+                        !revealed -> "Tap anywhere to reveal"
+                        swipeProgress >= 0.35f -> "Release right · Know (+${nextDays}d)"
+                        swipeProgress <= -0.35f -> "Release left · Again (1d)"
+                        else -> "Swipe left/right or tap below"
+                    }
+                    val footerColor = when {
+                        swipeProgress >= 0.35f -> JadeSuccess
+                        swipeProgress <= -0.35f -> CrimsonAgain
+                        else -> WashiMuted.copy(alpha = 0.7f)
+                    }
                     Text(
-                        text = if (!revealed) "Tap anywhere to reveal" else "Swipe left/right or tap below",
+                        text = footerHint,
                         style = MaterialTheme.typography.labelMedium,
-                        color = WashiMuted.copy(alpha = 0.7f),
+                        color = footerColor,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth(),
                     )

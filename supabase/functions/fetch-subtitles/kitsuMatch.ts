@@ -22,6 +22,9 @@ export function kitsuSanitizeDirName(raw: string): string {
   return s;
 }
 
+const VIDEO_CODEC_TOKENS_RE =
+  /(?<![a-z0-9])(?:2160p|1080p|720p|480p|x264|x265|h\.?264|h\.?265|hevc|10bit|hi10p|aac\d*(?:[._]\d+)?|flac)(?![a-z0-9])/gi;
+
 /**
  * Episode-aware filename scorer that requires an actual episode number match
  * (unless `allowMovieFallback` is enabled for Episode 1 movies/specials).
@@ -35,6 +38,8 @@ export function scoreEpisodeFilename(
   const n = name.toLowerCase();
   if (!/\.(srt|ass|ssa|vtt|zip)$/i.test(n)) return -1;
 
+  const stripped = n.replace(VIDEO_CODEC_TOKENS_RE, " ");
+
   const ep = String(episode);
   const pad = ep.padStart(2, "0");
   const pad3 = ep.padStart(3, "0");
@@ -43,29 +48,29 @@ export function scoreEpisodeFilename(
   let score = 0;
   let matched = false;
 
-  if (n.includes(se)) {
+  if (stripped.includes(se)) {
     score += 120;
     matched = true;
   }
-  if (new RegExp(`s\\d{1,2}e${pad}([^0-9]|$)`).test(n)) {
+  if (new RegExp(`s\\d{1,2}e${pad}([^0-9]|$)`).test(stripped)) {
     score += 100;
     matched = true;
   }
-  if (new RegExp(`(^|[^0-9a-z])(ep?|episode)\\s*${pad}([^0-9]|$)`).test(n)) {
+  if (new RegExp(`(^|[^0-9a-z])(ep?|episode)\\s*${pad}([^0-9]|$)`).test(stripped)) {
     score += 90;
     matched = true;
   }
-  if (new RegExp(`-\\s*${pad}(v\\d+)?(\\s*[\\[\\(.]|\\s*$)`).test(n)) {
+  if (new RegExp(`-\\s*${pad}(v\\d+)?(\\s*[\\[\\(.]|\\s*$)`).test(stripped)) {
     score += 85;
     matched = true;
   }
-  if (new RegExp(`(^|[^0-9])${pad}([^0-9]|$)`).test(n)) {
+  if (new RegExp(`(^|[^0-9])${pad}([^0-9]|$)`).test(stripped)) {
     score += 50;
     matched = true;
-  } else if (new RegExp(`(^|[^0-9])${pad3}([^0-9]|$)`).test(n)) {
+  } else if (new RegExp(`(^|[^0-9])${pad3}([^0-9]|$)`).test(stripped)) {
     score += 45;
     matched = true;
-  } else if (new RegExp(`(^|[^0-9])${ep}([^0-9]|$)`).test(n)) {
+  } else if (new RegExp(`(^|[^0-9])${ep}([^0-9]|$)`).test(stripped)) {
     score += 20;
     matched = true;
   }

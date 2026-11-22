@@ -1,32 +1,56 @@
 // Recommend anime via Gemini API based on JLPT/CEFR level + library exclusions
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  corsHeaders,
+  createAdminClient,
+  jsonResponse,
+  requireAuthUser,
+} from "../_shared/auth.ts";
 import { callAiChatCompletions, getAiApiKey } from "../_shared/ai.ts";
 import { getUserLanguages, uiLanguageName } from "../_shared/languages.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
-
 const ANILIST_URL = "https://graphql.anilist.co";
-
-const ANILIST_LOOKUP = `
-query ($search: String) {
-  Page(page: 1, perPage: 1) {
-    media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
-      id
-      idMal
-      title { romaji english native }
-      coverImage { large }
-      seasonYear
-      episodes
-      description(asHtml: false)
-      externalLinks { site url language }
-    }
-  }
-}`;
+const ANILIST_ALIAS_BATCH_SIZE = 8;
 
 type Suggestion = { title: string; reason: string };
+
+type LibraryAnimeJoin = {
+  anime?: {
+    title_romaji?: string | null;
+    title_en?: string | null;
+    title_jp?: string | null;
+  } | null;
+};
+
+type AniListExternalLink = {
+  site?: string | null;
+  url?: string | null;
+  language?: string | null;
+};
+
+type AniListMediaNode = {
+  id: number;
+  idMal?: number | null;
+  title?: { romaji?: string | null; english?: string | null; native?: string | null } | null;
+  coverImage?: { large?: string | null } | null;
+  seasonYear?: number | null;
+  episodes?: number | null;
+  description?: string | null;
+  externalLinks?: AniListExternalLink[] | null;
+};
+
+type RecommendedAnimeItem = {
+  anilist_id: number;
+  mal_id: number | null;
+  title_romaji: string;
+  title_en: string | null;
+  title_jp: string | null;
+  cover_url: string | null;
+  year: number | null;
+  episode_count: number;
+  synopsis: string | null;
+  streaming: string[];
+  reason: string;
+};
 
 const LEVEL_GUIDE: Record<string, string> = {
   N5: "Absolute beginner. Need anime with very simple, slow, everyday Japanese (slice-of-life for kids/families, e.g. Shirokuma Cafe, Chi's Sweet Home, Yotsuba-style).",
@@ -43,10 +67,7 @@ const LEVEL_GUIDE: Record<string, string> = {
   none: "Unknown level — assume beginner-friendly slice-of-life with simple dialogue.",
 };
 
-// Map AniList externalLinks into normalized streaming platform tags.
-// AniList's externalLinks doesn't expose a reliable country code, so Netflix
-// regional availability is best-effort (presence of a Netflix link only).
-function extractStreaming(links: Array<{ site?: string; url?: string; language?: string }> | null | undefined) {
+function extractStreaming(links: AniListExternalLink[] | null | undefined): string[] {
   const out = new Set<string>();
   for (const l of links ?? []) {
     const site = (l?.site ?? "").toLowerCase();
@@ -56,40 +77,92 @@ function extractStreaming(links: Array<{ site?: string; url?: string; language?:
   return Array.from(out);
 }
 
+/**
+ * Batch up to 8 AniList title searches into a single GraphQL request using parameterized aliases
+ * (`q0: Page(...)`, `q1: Page(...)`, ...), keeping 16 suggestions to at most 2 HTTP POSTs.
+ */
+async function batchLookupAniList(batch: Suggestion[]): Promise<Array<AniListMediaNode | null>> {
+  if (batch.length === 0) return [];
+  const varDefs = batch.map((_, idx) => `$s${idx}: String`).join(", ");
+  const fields = batch
+    .map(
+      (_, idx) => `
+    q${idx}: Page(page: 1, perPage: 1) {
+      media(search: $s${idx}, type: ANIME, sort: SEARCH_MATCH) {
+        id
+        idMal
+        title { romaji english native }
+        coverImage { large }
+        seasonYear
+        episodes
+        description(asHtml: false)
+        externalLinks { site url language }
+      }
+    }`,
+    )
+    .join("\n");
+  const query = `query (${varDefs}) {\n${fields}\n}`;
+  const variables: Record<string, string> = {};
+  batch.forEach((s, idx) => {
+    variables[`s${idx}`] = s.title;
+  });
+
+  try {
+    const r = await fetch(ANILIST_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "User-Agent": "Tatani/2.0",
+      },
+      body: JSON.stringify({ query, variables }),
+    });
+    if (!r.ok) {
+      const errBody = await r.text();
+      console.error("AniList batched lookup failed:", r.status, errBody.slice(0, 200));
+      return batch.map(() => null);
+    }
+    const json = (await r.json()) as {
+      data?: Record<string, { media?: AniListMediaNode[] } | undefined>;
+    };
+    return batch.map((_, idx) => json?.data?.[`q${idx}`]?.media?.[0] ?? null);
+  } catch (e) {
+    console.error("AniList batched lookup exception:", e);
+    return batch.map(() => null);
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   try {
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-    const supa = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_ANON_KEY") ?? Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ?? "",
-      { global: { headers: { Authorization: authHeader } } },
-    );
-    const { data: claims, error: claimsErr } = await supa.auth.getClaims(authHeader.replace("Bearer ", ""));
-    if (claimsErr || !claims?.claims) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-    const userId = claims.claims.sub as string;
+    const auth = await requireAuthUser(req);
+    if (auth instanceof Response) return auth;
+    const { userId } = auth;
 
-    // Optional body: { streaming_filters: ["crunchyroll","netflix"] }
     let streamingFilters: string[] = [];
+    let requestedLang: string | undefined;
     try {
-      const body = await req.json();
+      const body = (await req.json()) as {
+        streaming_filters?: unknown;
+        learning_language?: unknown;
+      };
       if (Array.isArray(body?.streaming_filters)) {
         streamingFilters = body.streaming_filters
-          .filter((s: unknown) => typeof s === "string")
-          .map((s: string) => s.toLowerCase());
+          .filter((s: unknown): s is string => typeof s === "string")
+          .map((s) => s.toLowerCase());
       }
-    } catch { /* no body */ }
+      if (typeof body?.learning_language === "string") {
+        requestedLang = body.learning_language;
+      }
+    } catch {
+      /* optional body */
+    }
 
-    // Get profile + library
-    const { learning, uiLanguage, level } = await getUserLanguages(supa, userId);
+    const admin = createAdminClient();
+    const { learning, uiLanguage, level } = await getUserLanguages(admin, userId, requestedLang);
     const [{ data: profile }, { data: libRows }] = await Promise.all([
-      supa.from("profiles").select("country").eq("user_id", userId).maybeSingle(),
-      supa
+      admin.from("profiles").select("country").eq("user_id", userId).maybeSingle(),
+      admin
         .from("user_anime")
         .select("anime:anime_id(title_romaji,title_en,title_jp)")
         .eq("user_id", userId)
@@ -97,24 +170,26 @@ Deno.serve(async (req) => {
     ]);
     const nativeLang = uiLanguageName(uiLanguage);
     const country = (profile?.country ?? null) as string | null;
-    const ownedTitles = (libRows ?? [])
-      .map((r: any) => [r.anime?.title_en, r.anime?.title_romaji, r.anime?.title_jp].filter(Boolean))
-      .flat();
+
+    const typedLibRows = (libRows ?? []) as LibraryAnimeJoin[];
+    const libraryByAnime = typedLibRows.map((r) => {
+      const a = r.anime;
+      return [a?.title_en, a?.title_romaji, a?.title_jp].filter(
+        (t): t is string => typeof t === "string" && t.length > 0,
+      );
+    });
+    const ownedTitles = libraryByAnime.flat();
 
     let aiApiKey: string;
     try {
       aiApiKey = getAiApiKey();
     } catch {
-      return new Response(JSON.stringify({ error: "AI not configured (set GEMINI_API_KEY)" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return jsonResponse({ error: "AI not configured (set GEMINI_API_KEY)" }, 500);
     }
 
     const guide = LEVEL_GUIDE[level] ?? LEVEL_GUIDE.none;
     const scaleLabel = learning.scale === "jlpt" ? "JLPT" : "CEFR";
-    const libraryByAnime = (libRows ?? []).map((r: any) => {
-      const a = r.anime ?? {};
-      return [a.title_en, a.title_romaji, a.title_jp].filter(Boolean);
-    });
-    const primaryTitles = libraryByAnime.map((t) => t[0]).filter(Boolean);
+    const primaryTitles = libraryByAnime.map((t) => t[0]).filter((t): t is string => Boolean(t));
 
     const librarySection = primaryTitles.length
       ? `The user's current library (use these as the PRIMARY signal for taste — genre, tone, themes, era, studios):
@@ -126,7 +201,6 @@ ${primaryTitles.map((t) => `- ${t}`).join("\n")}`
 ${libraryByAnime.map((titles) => `- ${titles.join(" / ")}`).join("\n")}`
       : "";
 
-    // Ask for more candidates when filtering, since some won't match the platform.
     const wantCount = streamingFilters.length ? 16 : 8;
 
     const prompt = `Recommend ${wantCount} anime (dubbed or subtitled in ${learning.name}, or originally in ${learning.name}) to a ${learning.name} learner at ${scaleLabel} ${level}.
@@ -148,82 +222,100 @@ Write every "reason" in ${nativeLang}.
 
 Return ONLY JSON in this exact shape: {"suggestions":[{"title":"...","reason":"one short sentence connecting it to their library and level"}]}.`;
 
-    const aiResp = await callAiChatCompletions({
-      model: "gemini-2.5-flash",
-      messages: [
-        { role: "system", content: `You are an expert in anime and ${learning.name} language learning. Reply with valid JSON only.` },
-        { role: "user", content: prompt },
-      ],
-      response_format: { type: "json_object" },
-    }, aiApiKey);
+    const aiResp = await callAiChatCompletions(
+      {
+        model: "gemini-2.5-flash",
+        messages: [
+          {
+            role: "system",
+            content: `You are an expert in anime and ${learning.name} language learning. Reply with valid JSON only.`,
+          },
+          { role: "user", content: prompt },
+        ],
+        response_format: { type: "json_object" },
+      },
+      aiApiKey,
+    );
 
     if (aiResp.status === 429) {
-      return new Response(JSON.stringify({ error: "Rate limit, try again shortly." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return jsonResponse({ error: "Rate limit, try again shortly." }, 429);
     }
     if (aiResp.status === 402) {
-      return new Response(JSON.stringify({ error: "AI quota exhausted." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return jsonResponse({ error: "AI quota exhausted." }, 402);
     }
     if (!aiResp.ok) {
       const t = await aiResp.text();
       console.error("ai error", aiResp.status, t);
-      return new Response(JSON.stringify({ error: "AI error" }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return jsonResponse({ error: "AI error" }, 502);
     }
-    const aiData = await aiResp.json();
+    const aiData = (await aiResp.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
     const content = aiData?.choices?.[0]?.message?.content ?? "{}";
-    let parsed: { suggestions?: Suggestion[] } = {};
-    try { parsed = JSON.parse(content); } catch { parsed = {}; }
-    const suggestions = (parsed.suggestions ?? []).slice(0, wantCount);
+    let parsed: { suggestions?: unknown } = {};
+    try {
+      parsed = JSON.parse(content) as { suggestions?: unknown };
+    } catch {
+      parsed = {};
+    }
+    const suggestions: Suggestion[] = Array.isArray(parsed.suggestions)
+      ? parsed.suggestions
+          .filter(
+            (s): s is Suggestion =>
+              Boolean(s) &&
+              typeof s === "object" &&
+              typeof (s as Suggestion).title === "string" &&
+              (s as Suggestion).title.trim().length > 0,
+          )
+          .map((s) => ({ title: s.title.trim(), reason: typeof s.reason === "string" ? s.reason : "" }))
+          .slice(0, wantCount)
+      : [];
 
-    // Lookup AniList for each title to enrich with cover/ids/streaming
-    const ownedSet = new Set(ownedTitles.map((t: string) => t.toLowerCase()));
-    const enriched = await Promise.all(
-      suggestions.map(async (s) => {
-        try {
-          const r = await fetch(ANILIST_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Accept: "application/json" },
-            body: JSON.stringify({ query: ANILIST_LOOKUP, variables: { search: s.title } }),
-          });
-          const j = await r.json();
-          const m = j?.data?.Page?.media?.[0];
-          if (!m) return null;
-          const titles = [m.title?.english, m.title?.romaji, m.title?.native].filter(Boolean);
-          if (titles.some((t: string) => ownedSet.has(t.toLowerCase()))) return null;
-          const streaming = extractStreaming(m.externalLinks);
-          return {
-            anilist_id: m.id,
-            mal_id: m.idMal,
-            title_romaji: m.title?.romaji ?? m.title?.english ?? s.title,
-            title_en: m.title?.english ?? null,
-            title_jp: m.title?.native ?? null,
-            cover_url: m.coverImage?.large ?? null,
-            year: m.seasonYear ?? null,
-            episode_count: m.episodes ?? 0,
-            synopsis: m.description?.replace(/<[^>]+>/g, "") ?? null,
-            streaming,
-            reason: s.reason,
-          };
-        } catch (e) {
-          console.error("anilist lookup failed", s.title, e);
-          return null;
-        }
-      }),
-    );
+    // Batch AniList lookups into at most 2 GraphQL alias requests instead of 16 parallel POSTs.
+    const suggestionChunks: Suggestion[][] = [];
+    for (let i = 0; i < suggestions.length; i += ANILIST_ALIAS_BATCH_SIZE) {
+      suggestionChunks.push(suggestions.slice(i, i + ANILIST_ALIAS_BATCH_SIZE));
+    }
+    const chunkNodes = await Promise.all(suggestionChunks.map((chunk) => batchLookupAniList(chunk)));
+    const mediaNodes = chunkNodes.flat();
 
-    let results = enriched.filter(Boolean) as Array<{ streaming: string[] }>;
+    const ownedSet = new Set(ownedTitles.map((t) => t.toLowerCase()));
+    const seenAnilistIds = new Set<number>();
+    let results: RecommendedAnimeItem[] = [];
+
+    for (let i = 0; i < suggestions.length; i++) {
+      const s = suggestions[i];
+      const m = mediaNodes[i];
+      if (!m || typeof m.id !== "number") continue;
+      if (seenAnilistIds.has(m.id)) continue;
+      const candidateTitles = [m.title?.english, m.title?.romaji, m.title?.native].filter(
+        (t): t is string => typeof t === "string" && t.length > 0,
+      );
+      if (candidateTitles.some((t) => ownedSet.has(t.toLowerCase()))) continue;
+      seenAnilistIds.add(m.id);
+      results.push({
+        anilist_id: m.id,
+        mal_id: m.idMal ?? null,
+        title_romaji: m.title?.romaji ?? m.title?.english ?? s.title,
+        title_en: m.title?.english ?? null,
+        title_jp: m.title?.native ?? null,
+        cover_url: m.coverImage?.large ?? null,
+        year: m.seasonYear ?? null,
+        episode_count: m.episodes ?? 0,
+        synopsis: m.description?.replace(/<[^>]+>/g, "") ?? null,
+        streaming: extractStreaming(m.externalLinks),
+        reason: s.reason,
+      });
+    }
+
     if (streamingFilters.length) {
       results = results.filter((r) => streamingFilters.some((f) => r.streaming.includes(f)));
     }
-    // Cap final results so UI stays manageable
     results = results.slice(0, 8);
 
-    return new Response(JSON.stringify({ results, level, country }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return jsonResponse({ results, level, country });
   } catch (e) {
     console.error(e);
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "unknown" }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return jsonResponse({ error: e instanceof Error ? e.message : "unknown" }, 500);
   }
 });

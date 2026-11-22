@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { levelRank } from "@/lib/languages";
+import { fetchAllPages, fetchBatchedPages } from "@/lib/supabase-pagination";
 import {
   computeNextSrsState,
   computePriorKnownState,
@@ -42,14 +43,16 @@ interface CachedDeckSnapshot {
 }
 
 const STORAGE_PREFIX = "tatani-srs-deck-v1:";
+const FOCUS_SYNC_THROTTLE_MS = 30_000;
+export const SRS_UPDATED_EVENT = "tatani:srs-updated";
 
-function cacheKey(userId: string, lang: string) {
+export function srsDeckStorageKey(userId: string, lang: string): string {
   return `${STORAGE_PREFIX}${userId}:${lang}`;
 }
 
 function readSnapshot(userId: string, lang: string): CachedDeckSnapshot | null {
   try {
-    const raw = localStorage.getItem(cacheKey(userId, lang));
+    const raw = localStorage.getItem(srsDeckStorageKey(userId, lang));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as CachedDeckSnapshot;
     if (!parsed || typeof parsed.cards !== "object") return null;
@@ -66,9 +69,42 @@ function readSnapshot(userId: string, lang: string): CachedDeckSnapshot | null {
 
 function writeSnapshot(userId: string, lang: string, snap: CachedDeckSnapshot) {
   try {
-    localStorage.setItem(cacheKey(userId, lang), JSON.stringify(snap));
+    localStorage.setItem(srsDeckStorageKey(userId, lang), JSON.stringify(snap));
   } catch {
     // Ignore storage quota errors cleanly
+  }
+}
+
+/**
+ * Marks the local SRS cache stale (preserving offline cards & outbox) and broadcasts
+ * `"tatani:srs-updated"` so any mounted `useSrsDeck` refreshes immediately.
+ */
+export function invalidateLocalSrsCache(userId?: string, lang?: string): void {
+  if (userId && lang) {
+    const snap = readSnapshot(userId, lang);
+    if (snap) {
+      writeSnapshot(userId, lang, { ...snap, updatedAt: 0 });
+    }
+  }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent(SRS_UPDATED_EVENT, { detail: { userId, learningLanguage: lang } }),
+    );
+  }
+}
+
+export function clearLocalSrsCache(userId: string, lang: string): void {
+  try {
+    localStorage.removeItem(srsDeckStorageKey(userId, lang));
+  } catch {
+    // Ignore storage errors cleanly
+  }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent(SRS_UPDATED_EVENT, {
+        detail: { userId, learningLanguage: lang, cleared: true },
+      }),
+    );
   }
 }
 
@@ -82,6 +118,30 @@ type RawEpisodeVocab = {
   example_sentence_jp?: string;
   example_sentence_en?: string;
   frequency?: number;
+};
+
+type StateRow = {
+  word: string;
+  reading: string | null;
+  level: string | null;
+  state: string | null;
+  preference: string | null;
+  known_source: string | null;
+  correct_streak: number | null;
+  srs_level: number | null;
+  srs_due_at: string | null;
+  last_reviewed_at: string | null;
+  marked_known_at: string | null;
+};
+
+type ChunkWordRow = {
+  word: string;
+  reading: string | null;
+  meaning: string | null;
+  part_of_speech: string | null;
+  level: string | null;
+  example_sentence_jp: string | null;
+  example_sentence_en: string | null;
 };
 
 export function useSrsDeck(
@@ -102,6 +162,7 @@ export function useSrsDeck(
   const cardsRef = useRef<Record<string, SrsDeckCard>>(initial?.cards ?? {});
   const nextEpisodeRef = useRef<ActiveEpisodeTarget | null>(initial?.nextEpisode ?? null);
   const flushingRef = useRef(false);
+  const lastSyncAtRef = useRef<number>(0);
 
   useEffect(() => {
     cardsRef.current = cards;
@@ -126,6 +187,7 @@ export function useSrsDeck(
 
   const flushOutbox = useCallback(async () => {
     if (!userId || flushingRef.current) return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
     const entries = Object.values(outboxRef.current);
     if (entries.length === 0) return;
 
@@ -134,17 +196,17 @@ export function useSrsDeck(
       const rows = entries.map((entry) => ({
         user_id: userId,
         word: entry.record.word,
-        reading: entry.record.reading,
-        level: entry.record.level === "none" ? null : entry.record.level,
+        reading: entry.record.reading ?? null,
+        level: entry.record.level === "none" ? null : (entry.record.level ?? null),
         learning_language: entry.learningLanguage,
         state: entry.record.state,
         preference: entry.record.preference,
-        known_source: entry.record.known_source,
+        known_source: entry.record.known_source ?? null,
         correct_streak: entry.record.correct_streak,
         srs_level: entry.record.srs_level,
-        srs_due_at: entry.record.srs_due_at,
-        last_reviewed_at: entry.record.last_reviewed_at,
-        ...(entry.record.marked_known_at ? { marked_known_at: entry.record.marked_known_at } : {}),
+        srs_due_at: entry.record.srs_due_at ?? null,
+        last_reviewed_at: entry.record.last_reviewed_at ?? null,
+        marked_known_at: entry.record.marked_known_at ?? null,
       }));
 
       const { error } = await supabase
@@ -172,30 +234,46 @@ export function useSrsDeck(
 
   const refreshFromServer = useCallback(async () => {
     if (!userId) return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
     setSyncing(true);
     try {
-      const [{ data: stateRows }, { data: libRows }, { data: chunkRows }] = await Promise.all([
-        supabase
-          .from("user_word_state")
-          .select("word,reading,level,state,preference,known_source,correct_streak,srs_level,srs_due_at,last_reviewed_at,marked_known_at")
-          .eq("user_id", userId)
-          .eq("learning_language", learningLanguage),
+      const [
+        { data: stateRows, error: stateErr },
+        { data: libRows, error: libErr },
+        { data: chunkRows, error: chunkErr },
+      ] = await Promise.all([
+        fetchAllPages<StateRow>((from, to) =>
+          supabase
+            .from("user_word_state")
+            .select("word,reading,level,state,preference,known_source,correct_streak,srs_level,srs_due_at,last_reviewed_at,marked_known_at")
+            .eq("user_id", userId)
+            .eq("learning_language", learningLanguage)
+            .order("word", { ascending: true })
+            .range(from, to),
+        ),
         supabase
           .from("user_anime")
           .select("position, anime:anime_id(id,title_en,title_romaji)")
           .eq("user_id", userId)
           .eq("learning_language", learningLanguage)
           .order("position", { ascending: true }),
-        supabase
-          .from("study_chunks")
-          .select("id")
-          .eq("user_id", userId)
-          .eq("learning_language", learningLanguage)
-          .limit(100),
+        fetchAllPages<{ id: string }>((from, to) =>
+          supabase
+            .from("study_chunks")
+            .select("id")
+            .eq("user_id", userId)
+            .eq("learning_language", learningLanguage)
+            .order("id", { ascending: true })
+            .range(from, to),
+        ),
       ]);
 
+      if (stateErr || libErr || chunkErr) {
+        return;
+      }
+
       const stateMap = new Map<string, WordSrsRecord>();
-      for (const r of stateRows ?? []) {
+      for (const r of stateRows) {
         stateMap.set(r.word, {
           word: r.word,
           reading: r.reading ?? null,
@@ -257,14 +335,25 @@ export function useSrsDeck(
         };
       };
 
-      // 1. Hydrate from study_chunk_words if present
-      const chunkIds = (chunkRows ?? []).map((c: { id: string }) => c.id);
+      // 1. Hydrate from study_chunk_words if present (batched by 50 chunkIds + paginated)
+      const chunkIds = chunkRows.map((c) => c.id);
       if (chunkIds.length > 0) {
-        const { data: cWords } = await supabase
-          .from("study_chunk_words")
-          .select("word,reading,meaning,part_of_speech,level,example_sentence_jp,example_sentence_en")
-          .in("chunk_id", chunkIds);
-        for (const w of cWords ?? []) {
+        const { data: cWords, error: chunkWordsErr } = await fetchBatchedPages<string, ChunkWordRow>(
+          chunkIds,
+          50,
+          (slice, from, to) =>
+            supabase
+              .from("study_chunk_words")
+              .select("word,reading,meaning,part_of_speech,level,example_sentence_jp,example_sentence_en")
+              .in("chunk_id", slice)
+              .order("chunk_id", { ascending: true })
+              .order("position", { ascending: true })
+              .range(from, to),
+        );
+        if (chunkWordsErr) {
+          return;
+        }
+        for (const w of cWords) {
           ensureCard(w.word, {
             reading: w.reading,
             meaning: w.meaning,
@@ -277,38 +366,57 @@ export function useSrsDeck(
         }
       }
 
-      // 2. Hydrate from processed episodes in the user's anime library (gives multi-episode context + next learn target!)
+      // 2. Hydrate from processed episodes in the user's anime library
       const myRank = levelRank(learningLanguage, userLevel);
       const isBelowLevel = (lvl: string | null | undefined) =>
         myRank > 0 && (levelRank(learningLanguage, lvl ?? "none") || 99) < myRank;
 
       let chosenNextEpisode: ActiveEpisodeTarget | null = null;
-      const animeEntries = (libRows ?? []) as Array<{ position: number; anime: { id: string; title_en: string | null; title_romaji: string } | null }>;
+      const animeEntries = (libRows ?? []) as Array<{
+        position: number;
+        anime: { id: string; title_en: string | null; title_romaji: string } | null;
+      }>;
       const animeIds = animeEntries.map((e) => e.anime?.id).filter(Boolean) as string[];
 
       if (animeIds.length > 0) {
-        const { data: epRows } = await supabase
-          .from("episodes")
-          .select("id, episode_number, seasons!inner(anime_id, season_number)")
-          .in("seasons.anime_id", animeIds)
-          .eq("processing_status", "ready");
-
-        const epList = (epRows ?? []) as Array<{
+        const { data: epList, error: epErr } = await fetchAllPages<{
           id: string;
           episode_number: number;
           seasons: { anime_id: string; season_number: number };
-        }>;
+        }>((from, to) =>
+          supabase
+            .from("episodes")
+            .select("id, episode_number, seasons!inner(anime_id, season_number)")
+            .in("seasons.anime_id", animeIds)
+            .eq("processing_status", "ready")
+            .order("id", { ascending: true })
+            .range(from, to),
+        );
+        if (epErr) {
+          return;
+        }
+
         const epIds = epList.map((e) => e.id);
 
         if (epIds.length > 0) {
-          const { data: caches } = await supabase
-            .from("episode_vocab_cache")
-            .select("episode_id, vocab")
-            .in("episode_id", epIds)
-            .eq("language", learningLanguage);
+          const { data: caches, error: cacheErr } = await fetchBatchedPages<
+            string,
+            { episode_id: string; vocab: unknown }
+          >(epIds, 200, (slice, from, to) =>
+            supabase
+              .from("episode_vocab_cache")
+              .select("episode_id, vocab")
+              .in("episode_id", slice)
+              .eq("language", learningLanguage)
+              .order("episode_id", { ascending: true })
+              .range(from, to),
+          );
+          if (cacheErr) {
+            return;
+          }
 
           const cacheByEp = new Map<string, RawEpisodeVocab[]>();
-          for (const c of caches ?? []) {
+          for (const c of caches) {
             cacheByEp.set(c.episode_id, (Array.isArray(c.vocab) ? c.vocab : []) as RawEpisodeVocab[]);
           }
 
@@ -398,9 +506,12 @@ export function useSrsDeck(
         }
       }
 
+      lastSyncAtRef.current = Date.now();
       setCards(mergedCards);
       setNextEpisode(chosenNextEpisode);
       persistLocal(mergedCards, chosenNextEpisode, outboxRef.current);
+    } catch {
+      // Preserve existing cached local deck on network/offline failure
     } finally {
       setSyncing(false);
     }
@@ -410,17 +521,54 @@ export function useSrsDeck(
     if (!userId) return;
     const snap = readSnapshot(userId, learningLanguage);
     if (snap) {
+      cardsRef.current = snap.cards;
+      nextEpisodeRef.current = snap.nextEpisode;
       setCards(snap.cards);
       setNextEpisode(snap.nextEpisode);
       outboxRef.current = snap.outbox;
       setPendingSyncCount(Object.keys(snap.outbox).length);
       setSyncing(false);
+    } else {
+      cardsRef.current = {};
+      nextEpisodeRef.current = null;
+      setCards({});
+      setNextEpisode(null);
+      outboxRef.current = {};
+      setPendingSyncCount(0);
     }
     void flushOutbox().then(() => refreshFromServer());
 
-    const onOnline = () => { void flushOutbox(); };
+    const onOnline = () => {
+      void flushOutbox().then(() => refreshFromServer());
+    };
+    const onVisibilityChange = () => {
+      if (document.hidden) return;
+      if (Date.now() - lastSyncAtRef.current < FOCUS_SYNC_THROTTLE_MS) return;
+      void flushOutbox().then(() => refreshFromServer());
+    };
+    const onSrsUpdated = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ userId?: string; learningLanguage?: string; cleared?: boolean }>).detail;
+      if (detail?.userId && detail.userId !== userId) return;
+      if (detail?.learningLanguage && detail.learningLanguage !== learningLanguage) return;
+      if (detail?.cleared) {
+        cardsRef.current = {};
+        nextEpisodeRef.current = null;
+        outboxRef.current = {};
+        setCards({});
+        setNextEpisode(null);
+        setPendingSyncCount(0);
+      }
+      void flushOutbox().then(() => refreshFromServer());
+    };
+
     window.addEventListener("online", onOnline);
-    return () => window.removeEventListener("online", onOnline);
+    window.addEventListener(SRS_UPDATED_EVENT, onSrsUpdated);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener(SRS_UPDATED_EVENT, onSrsUpdated);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [userId, learningLanguage, flushOutbox, refreshFromServer]);
 
   const applyOptimisticRecord = useCallback(

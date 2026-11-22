@@ -117,20 +117,32 @@ async function getFcmAccessToken(
   return json.access_token;
 }
 
-export async function sendFcmWebPush(
-  deviceToken: string,
-  data: Record<string, string>,
+export interface PreparedFcmSender {
+  projectId: string;
+  accessToken: string;
+}
+
+export async function prepareFcmSender(
   serviceAccountJson: string | undefined,
   fetchImpl: typeof fetch = fetch,
-): Promise<Response> {
+): Promise<PreparedFcmSender> {
   const sa = parseFirebaseServiceAccount(serviceAccountJson);
   const accessToken = await getFcmAccessToken(sa, fetchImpl);
+  return { projectId: sa.project_id, accessToken };
+}
+
+export async function sendPreparedFcmWebPush(
+  deviceToken: string,
+  data: Record<string, string>,
+  prepared: PreparedFcmSender,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Response> {
   return await fetchImpl(
-    `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(sa.project_id)}/messages:send`,
+    `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(prepared.projectId)}/messages:send`,
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: `Bearer ${prepared.accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -147,4 +159,14 @@ export async function sendFcmWebPush(
       }),
     },
   );
+}
+
+export async function sendFcmWebPush(
+  deviceToken: string,
+  data: Record<string, string>,
+  serviceAccountJson: string | undefined,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Response> {
+  const prepared = await prepareFcmSender(serviceAccountJson, fetchImpl);
+  return await sendPreparedFcmWebPush(deviceToken, data, prepared, fetchImpl);
 }

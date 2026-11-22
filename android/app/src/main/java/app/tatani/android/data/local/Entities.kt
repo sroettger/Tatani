@@ -1,5 +1,6 @@
 package app.tatani.android.data.local
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import app.tatani.android.domain.SrsEngine
 
@@ -43,14 +44,16 @@ data class WordCardEntity(
         srsDueAtEpochMs = srsDueAtEpochMs,
         lastReviewedAtIso = lastReviewedAtIso,
         markedKnownAtIso = markedKnownAtIso,
+        hasServerState = hasServerState,
     )
 }
 
 @Entity(
     tableName = "outbox_mutations",
-    primaryKeys = ["word", "learningLanguage"],
+    primaryKeys = ["userId", "word", "learningLanguage"],
 )
 data class OutboxMutationEntity(
+    @ColumnInfo(defaultValue = "") val userId: String,
     val word: String,
     val learningLanguage: String,
     val reading: String?,
@@ -84,4 +87,6 @@ data class LibraryEpisodeEntity(
     val totalWords: Int,
     val knownWords: Int,
     val unlearnedWords: Int,
+    val episodeTitleEn: String? = null,
+    val episodeTitleJp: String? = null,
 )

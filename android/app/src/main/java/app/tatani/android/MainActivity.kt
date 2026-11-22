@@ -3,6 +3,7 @@ package app.tatani.android
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -44,12 +45,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        handleIncomingIntent(intent)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            requestNotificationPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (savedInstanceState == null) {
+            handleIncomingIntent(intent)
         }
 
         setContent {
@@ -69,6 +66,17 @@ class MainActivity : ComponentActivity() {
                             message = authMessage,
                         )
                     } else {
+                        LaunchedEffect(session?.userId) {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                ContextCompat.checkSelfPermission(
+                                    this@MainActivity,
+                                    Manifest.permission.POST_NOTIFICATIONS
+                                ) != PackageManager.PERMISSION_GRANTED
+                            ) {
+                                requestNotificationPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                        }
+
                         val navController = rememberNavController()
 
                         LaunchedEffect(pendingDeepRoute) {
@@ -89,8 +97,11 @@ class MainActivity : ComponentActivity() {
                                     viewModel = viewModel,
                                     onOpenLibrary = { navController.navigate("library") },
                                     onOpenLearn = { epId ->
-                                        if (epId != null) navController.navigate("learn?episodeId=$epId")
-                                        else navController.navigate("learn")
+                                        if (epId != null) {
+                                            navController.navigate("learn?episodeId=${Uri.encode(epId)}")
+                                        } else {
+                                            navController.navigate("learn")
+                                        }
                                     },
                                 )
                             }
@@ -126,7 +137,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                     },
                                     onOpenEpisode = { epId ->
-                                        navController.navigate("episode/$epId")
+                                        navController.navigate("episode/${Uri.encode(epId)}")
                                     },
                                 )
                             }
@@ -137,7 +148,7 @@ class MainActivity : ComponentActivity() {
                                     episodeId = epId,
                                     onBack = { navController.popBackStack() },
                                     onStartLearn = { id ->
-                                        navController.navigate("learn?episodeId=$id")
+                                        navController.navigate("learn?episodeId=${Uri.encode(id)}")
                                     },
                                     onGoSprint = {
                                         navController.navigate("sprint") {
@@ -153,8 +164,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        viewModel.onAppForegrounded()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         handleIncomingIntent(intent)
     }
 
@@ -162,8 +179,15 @@ class MainActivity : ComponentActivity() {
         val uri = intent?.data ?: return
         if (uri.scheme != "tatani") return
         when (uri.host) {
-            "auth-callback" -> viewModel.onOAuthDeepLink(uri)
-            "learn" -> pendingDeepRoute = "learn"
+            "auth-callback" -> viewModel.onOAuthDeepLink(uri.toString())
+            "learn" -> {
+                val epId = uri.getQueryParameter("episodeId")?.takeIf { it.isNotBlank() }
+                pendingDeepRoute = if (epId != null) {
+                    "learn?episodeId=${Uri.encode(epId)}"
+                } else {
+                    "learn"
+                }
+            }
             "library" -> pendingDeepRoute = "library"
             "sprint" -> pendingDeepRoute = "sprint"
         }

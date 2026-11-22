@@ -24,6 +24,9 @@
 -keep class app.tatani.android.notifications.DueBoosterWorker {
     public <init>(android.content.Context, androidx.work.WorkerParameters);
 }
+-keep class app.tatani.android.notifications.OutboxSyncWorker {
+    public <init>(android.content.Context, androidx.work.WorkerParameters);
+}
 -keep class app.tatani.android.notifications.BoosterActionReceiver { *; }
 
 # OkHttp / Okio platform warnings

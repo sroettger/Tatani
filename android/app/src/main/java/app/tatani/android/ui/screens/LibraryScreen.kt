@@ -1,9 +1,13 @@
 package app.tatani.android.ui.screens
 
+import android.net.Uri
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,24 +19,31 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -46,17 +57,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.tatani.android.data.local.LibraryEpisodeEntity
 import app.tatani.android.data.remote.AnimeSearchResultDto
 import app.tatani.android.ui.TataniViewModel
+import app.tatani.android.ui.theme.AmberAccent
+import app.tatani.android.ui.theme.CrimsonAgain
 import app.tatani.android.ui.theme.JadeSuccess
 import app.tatani.android.ui.theme.SumiBorder
 import app.tatani.android.ui.theme.SumiElevated
 import app.tatani.android.ui.theme.SumiSurface
 import app.tatani.android.ui.theme.VermilionPrimary
+import app.tatani.android.ui.theme.WashiForeground
 import app.tatani.android.ui.theme.WashiMuted
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
@@ -67,10 +82,12 @@ fun LibraryScreen(
     onBackToSprint: () -> Unit,
     onOpenEpisode: (String) -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     val episodes by viewModel.libraryEpisodes.collectAsState()
     val syncing by viewModel.syncing.collectAsState()
     val syncError by viewModel.syncError.collectAsState()
     val dueCards by viewModel.dueCards.collectAsState()
+    val processingIds by viewModel.processingEpisodeIds.collectAsState()
 
     val groupedByAnime = remember(episodes) {
         episodes.groupBy { it.animeId }.values.toList()
@@ -81,6 +98,9 @@ fun LibraryScreen(
     }
     var addDialogOpen by remember { mutableStateOf(false) }
     var accountDialogOpen by remember { mutableStateOf(false) }
+    var animePendingRemove by remember { mutableStateOf<LibraryEpisodeEntity?>(null) }
+    var removingAnime by remember { mutableStateOf(false) }
+    var removeError by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier = Modifier
@@ -117,7 +137,11 @@ fun LibraryScreen(
                     Icon(Icons.Outlined.Add, contentDescription = "Add anime")
                 }
                 IconButton(onClick = { accountDialogOpen = true }) {
-                    Icon(Icons.AutoMirrored.Outlined.Logout, contentDescription = "Account & Privacy", tint = WashiMuted)
+                    Icon(
+                        Icons.Outlined.Settings,
+                        contentDescription = "Account & Study Settings",
+                        tint = WashiMuted
+                    )
                 }
             }
         }
@@ -131,9 +155,10 @@ fun LibraryScreen(
         )
         Spacer(Modifier.height(14.dp))
 
-        if (!syncError.isNullOrBlank()) {
+        val visibleError = removeError ?: syncError
+        if (!visibleError.isNullOrBlank()) {
             Text(
-                text = syncError!!,
+                text = visibleError,
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier.padding(bottom = 10.dp),
@@ -174,8 +199,11 @@ fun LibraryScreen(
             ) {
                 items(groupedByAnime, key = { it.first().animeId }) { animeEps ->
                     val head = animeEps.first()
-                    val readyCount = animeEps.count { it.processingStatus == "ready" }
+                    val realEps = animeEps.filterNot { it.episodeId.startsWith("placeholder:") }
+                    val readyCount = realEps.count { it.processingStatus == "ready" }
                     val isExpanded = expandedAnimeId == head.animeId
+                    val seasonsMap = remember(realEps) { realEps.groupBy { it.seasonNumber } }
+                    val showSeasonHeaders = seasonsMap.size > 1 || (seasonsMap.keys.firstOrNull() ?: 1) > 1
 
                     Card(
                         shape = RoundedCornerShape(18.dp),
@@ -221,9 +249,27 @@ fun LibraryScreen(
                                     }
                                     Spacer(Modifier.height(4.dp))
                                     Text(
-                                        text = "$readyCount / ${animeEps.size} episodes ready",
+                                        text = if (realEps.isEmpty()) {
+                                            "Episodes syncing · Tap to refresh"
+                                        } else {
+                                            "$readyCount / ${realEps.size} episodes ready"
+                                        },
                                         style = MaterialTheme.typography.labelMedium,
                                         color = WashiMuted,
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        removeError = null
+                                        animePendingRemove = head
+                                    },
+                                    modifier = Modifier.size(36.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.DeleteOutline,
+                                        contentDescription = "Remove anime",
+                                        tint = WashiMuted,
+                                        modifier = Modifier.size(19.dp),
                                     )
                                 }
                             }
@@ -231,17 +277,33 @@ fun LibraryScreen(
                             if (isExpanded) {
                                 Spacer(Modifier.height(12.dp))
                                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    for (ep in animeEps) {
-                                        EpisodeRowItem(
-                                            ep = ep,
-                                            onClick = {
-                                                if (ep.episodeId.startsWith("placeholder:")) {
-                                                    viewModel.refreshSync()
-                                                } else {
-                                                    onOpenEpisode(ep.episodeId)
-                                                }
-                                            },
-                                        )
+                                    if (realEps.isEmpty()) {
+                                        for (ep in animeEps) {
+                                            EpisodeRowItem(
+                                                ep = ep,
+                                                isProcessing = false,
+                                                onClick = { viewModel.refreshSync() },
+                                            )
+                                        }
+                                    } else {
+                                        for ((seasonNum, seasonEps) in seasonsMap) {
+                                            if (showSeasonHeaders) {
+                                                Text(
+                                                    text = "Season $seasonNum",
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = WashiMuted,
+                                                    modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+                                                )
+                                            }
+                                            for (ep in seasonEps) {
+                                                EpisodeRowItem(
+                                                    ep = ep,
+                                                    isProcessing = ep.episodeId in processingIds,
+                                                    onClick = { onOpenEpisode(ep.episodeId) },
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -260,56 +322,255 @@ fun LibraryScreen(
     }
 
     if (accountDialogOpen) {
-        AccountPrivacyModal(
+        AccountSettingsModal(
             viewModel = viewModel,
             onDismiss = { accountDialogOpen = false },
         )
     }
+
+    val targetRemove = animePendingRemove
+    if (targetRemove != null) {
+        AlertDialog(
+            onDismissRequest = { if (!removingAnime) animePendingRemove = null },
+            containerColor = SumiSurface,
+            title = { Text("Remove from library?") },
+            text = {
+                Text(
+                    "Remove \"${targetRemove.animeTitle}\" from your library? Your graduated SRS progress is preserved.",
+                    color = WashiMuted,
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            removingAnime = true
+                            removeError = null
+                            viewModel.removeAnime(targetRemove.animeId)
+                                .onSuccess { animePendingRemove = null }
+                                .onFailure { err ->
+                                    removeError = err.message ?: "Couldn't remove anime"
+                                    animePendingRemove = null
+                                }
+                            removingAnime = false
+                        }
+                    },
+                    enabled = !removingAnime,
+                    colors = ButtonDefaults.buttonColors(containerColor = CrimsonAgain),
+                ) {
+                    Text(if (removingAnime) "Removing…" else "Remove")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { animePendingRemove = null },
+                    enabled = !removingAnime,
+                ) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AccountPrivacyModal(
+private fun AccountSettingsModal(
     viewModel: TataniViewModel,
     onDismiss: () -> Unit,
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     val session by viewModel.session.collectAsState()
+    val boostersEnabled by viewModel.boostersEnabled.collectAsState()
     val scope = rememberCoroutineScope()
+
+    var savingPrefs by remember { mutableStateOf(false) }
+    var settingsError by remember { mutableStateOf<String?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
+
+    val currentLang = session?.learningLanguage ?: "ja"
+    val currentLevel = session?.userLevel ?: "none"
+
+    val languages = remember {
+        listOf(
+            "ja" to "Japanese",
+            "es" to "Spanish",
+            "fr" to "French",
+            "de" to "German",
+        )
+    }
+
+    val levelOptions = remember(currentLang) {
+        if (currentLang == "ja") {
+            listOf("none", "N5", "N4", "N3", "N2", "N1")
+        } else {
+            listOf("none", "A1", "A2", "B1", "B2", "C1", "C2")
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = SumiSurface,
-        title = { Text("Account & Privacy") },
+        title = { Text("Account & Study Settings") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 Text(
                     text = session?.email ?: "Signed in",
                     style = MaterialTheme.typography.bodyMedium,
                     color = WashiMuted,
                 )
+
+                if (!settingsError.isNullOrBlank()) {
+                    Text(
+                        text = settingsError!!,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+
+                HorizontalDivider(color = SumiBorder)
+
+                // Learning Language Selector
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "Learning Language",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        for ((code, label) in languages) {
+                            val selected = currentLang == code
+                            FilterChip(
+                                selected = selected,
+                                onClick = {
+                                    if (!selected && !savingPrefs) {
+                                        scope.launch {
+                                            savingPrefs = true
+                                            settingsError = null
+                                            viewModel.updateLearningLanguage(code)
+                                                .onFailure { err ->
+                                                    settingsError = err.message ?: "Failed to switch language"
+                                                }
+                                            savingPrefs = false
+                                        }
+                                    }
+                                },
+                                enabled = !savingPrefs && !deleting,
+                                label = { Text(label) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = VermilionPrimary.copy(alpha = 0.22f),
+                                    selectedLabelColor = WashiForeground,
+                                ),
+                            )
+                        }
+                    }
+                }
+
+                // Proficiency Level Selector
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = if (currentLang == "ja") "JLPT Level" else "CEFR Level",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        text = "Words below your level are auto-marked known.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = WashiMuted,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        for (lvl in levelOptions) {
+                            val selected = currentLevel.equals(lvl, ignoreCase = true)
+                            FilterChip(
+                                selected = selected,
+                                onClick = {
+                                    if (!selected && !savingPrefs) {
+                                        scope.launch {
+                                            savingPrefs = true
+                                            settingsError = null
+                                            viewModel.updateUserLevel(lvl)
+                                                .onFailure { err ->
+                                                    settingsError = err.message ?: "Failed to update level"
+                                                }
+                                            savingPrefs = false
+                                        }
+                                    }
+                                },
+                                enabled = !savingPrefs && !deleting,
+                                label = { Text(if (lvl == "none") "None" else lvl.uppercase()) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = VermilionPrimary.copy(alpha = 0.22f),
+                                    selectedLabelColor = WashiForeground,
+                                ),
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = SumiBorder)
+
+                // Booster Notification Toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                        Text(
+                            text = "Due Booster Notifications",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = "Hourly self-check cards during daytime (9:00–20:59)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = WashiMuted,
+                        )
+                    }
+                    Switch(
+                        checked = boostersEnabled,
+                        onCheckedChange = { viewModel.setBoostersEnabled(it) },
+                    )
+                }
+
+                HorizontalDivider(color = SumiBorder)
+
                 OutlinedButton(
                     onClick = {
-                        androidx.browser.customtabs.CustomTabsIntent.Builder().build()
-                            .launchUrl(context, android.net.Uri.parse("https://sroettger.github.io/Tatani/privacy"))
+                        CustomTabsIntent.Builder().build()
+                            .launchUrl(context, Uri.parse("https://sroettger.github.io/Tatani/privacy"))
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("Privacy Policy & Data Info")
                 }
+
                 OutlinedButton(
                     onClick = {
                         onDismiss()
                         viewModel.signOut()
                     },
+                    enabled = !deleting,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("Sign out")
                 }
+
                 if (!confirmDelete) {
                     TextButton(
-                        onClick = { confirmDelete = true },
+                        onClick = {
+                            settingsError = null
+                            confirmDelete = true
+                        },
+                        enabled = !deleting,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text("Delete my study & account data", color = MaterialTheme.colorScheme.error)
@@ -319,9 +580,15 @@ private fun AccountPrivacyModal(
                         onClick = {
                             scope.launch {
                                 deleting = true
-                                viewModel.deleteAccountData()
+                                settingsError = null
+                                val res = viewModel.deleteAccountData()
                                 deleting = false
-                                onDismiss()
+                                res.onSuccess {
+                                    onDismiss()
+                                }.onFailure { err ->
+                                    settingsError = err.message
+                                        ?: "Account deletion failed. Check your connection and try again."
+                                }
                             }
                         },
                         enabled = !deleting,
@@ -334,7 +601,7 @@ private fun AccountPrivacyModal(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Close") }
+            TextButton(onClick = onDismiss, enabled = !deleting) { Text("Close") }
         },
     )
 }
@@ -342,8 +609,22 @@ private fun AccountPrivacyModal(
 @Composable
 private fun EpisodeRowItem(
     ep: LibraryEpisodeEntity,
+    isProcessing: Boolean,
     onClick: () -> Unit,
 ) {
+    val isPlaceholder = ep.episodeId.startsWith("placeholder:")
+    val isFailed = ep.processingStatus == "error" || ep.processingStatus == "failed"
+    val effectiveProcessing = isProcessing || ep.processingStatus == "processing"
+    val epTitle = ep.episodeTitleEn?.takeIf { it.isNotBlank() }
+        ?: ep.episodeTitleJp?.takeIf { it.isNotBlank() }
+
+    val (badgeText, badgeBg, badgeFg) = when {
+        effectiveProcessing -> Triple("Processing…", AmberAccent.copy(alpha = 0.18f), AmberAccent)
+        ep.processingStatus == "ready" -> Triple("Ready", JadeSuccess.copy(alpha = 0.18f), JadeSuccess)
+        isFailed -> Triple("Retry", CrimsonAgain.copy(alpha = 0.18f), CrimsonAgain)
+        else -> Triple("Process", SumiSurface, WashiMuted)
+    }
+
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(12.dp),
@@ -356,37 +637,44 @@ private fun EpisodeRowItem(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                 Text(
-                    text = "Episode ${ep.episodeNumber}",
+                    text = when {
+                        isPlaceholder -> "Syncing episode catalog…"
+                        epTitle != null -> "Episode ${ep.episodeNumber} · $epTitle"
+                        else -> "Episode ${ep.episodeNumber}"
+                    },
                     fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
-                if (ep.processingStatus == "ready") {
-                    val coverage = if (ep.totalWords > 0) {
-                        ((ep.knownWords * 100) / ep.totalWords)
-                    } else 0
-                    Text(
-                        text = "${ep.unlearnedWords} to learn · $coverage% known",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = WashiMuted,
-                    )
-                } else {
-                    Text(
-                        text = "Tap to fetch subtitles & extract vocab",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = WashiMuted,
-                    )
+                val subtitle = when {
+                    isPlaceholder -> "Tap to refresh episodes from server"
+                    effectiveProcessing -> "Extracting vocabulary in background…"
+                    ep.processingStatus == "ready" -> {
+                        val coverage = if (ep.totalWords > 0) {
+                            ((ep.knownWords * 100) / ep.totalWords)
+                        } else 0
+                        "${ep.unlearnedWords} to learn · $coverage% known"
+                    }
+                    isFailed -> "Extraction failed · Tap to retry or import subtitles"
+                    else -> "Tap to fetch or import subtitles"
                 }
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = WashiMuted,
+                )
             }
 
             Surface(
                 shape = RoundedCornerShape(8.dp),
-                color = if (ep.processingStatus == "ready") JadeSuccess.copy(alpha = 0.18f) else SumiSurface,
+                color = badgeBg,
             ) {
                 Text(
-                    text = if (ep.processingStatus == "ready") "Ready" else "Process",
+                    text = badgeText,
                     style = MaterialTheme.typography.labelMedium,
-                    color = if (ep.processingStatus == "ready") JadeSuccess else WashiMuted,
+                    color = badgeFg,
                     modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
                 )
             }

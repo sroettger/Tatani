@@ -16,6 +16,7 @@ data class AuthTokenResponseDto(
     @SerialName("expires_in") val expiresIn: Long = 3600L,
     val user: AuthUserDto? = null,
     @SerialName("error_description") val errorDescription: String? = null,
+    val error: String? = null,
     val msg: String? = null,
 )
 
@@ -75,6 +76,8 @@ data class SeasonNestedDto(
 data class EpisodeRowDto(
     val id: String,
     @SerialName("episode_number") val episodeNumber: Int,
+    @SerialName("title_en") val titleEn: String? = null,
+    @SerialName("title_jp") val titleJp: String? = null,
     @SerialName("processing_status") val processingStatus: String = "pending",
     val seasons: SeasonNestedDto,
 )
@@ -137,5 +140,10 @@ data class SearchAnimeResponseDto(
 data class FetchSubtitlesResponseDto(
     val found: Boolean = false,
     val content: String? = null,
+    val error: String? = null,
+)
+
+@Serializable
+data class ProcessEpisodeResponseDto(
     val error: String? = null,
 )

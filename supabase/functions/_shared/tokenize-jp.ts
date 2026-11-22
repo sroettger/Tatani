@@ -4,28 +4,30 @@ import * as kuromoji from "https://esm.sh/@patdx/kuromoji@1.0.4";
 
 const DICT_BASE = "https://cdn.jsdelivr.net/npm/@patdx/kuromoji@1.0.4/dict";
 
-// Custom loader: fetch .dat.gz from CDN, decompress with DecompressionStream.
+// Custom loader: fetch .dat.gz from CDN (retrying once on transient failure), decompress with DecompressionStream.
 const loader: kuromoji.LoaderConfig = {
   async loadArrayBuffer(url: string): Promise<ArrayBufferLike> {
     // url ends in `.dat.gz` — kuromoji passes just the filename relative to dicPath
     const filename = url.split("/").pop()!;
     const fullUrl = `${DICT_BASE}/${filename}`;
-    const res = await fetch(fullUrl);
-    if (!res.ok) throw new Error(`Failed to fetch dict ${filename}: ${res.status}`);
-    const stream = res.body!.pipeThrough(new DecompressionStream("gzip"));
-    const buf = await new Response(stream).arrayBuffer();
-    return buf;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetch(fullUrl);
+        if (!res.ok) throw new Error(`Failed to fetch dict ${filename}: ${res.status}`);
+        if (!res.body) throw new Error(`Empty dict response body for ${filename}`);
+        const stream = res.body.pipeThrough(new DecompressionStream("gzip"));
+        return await new Response(stream).arrayBuffer();
+      } catch (err) {
+        lastError = err;
+        if (attempt === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(`Failed to fetch dict ${filename}`);
   },
 };
-
-let tokenizerPromise: Promise<any> | null = null;
-
-export function getTokenizer(): Promise<any> {
-  if (!tokenizerPromise) {
-    tokenizerPromise = new kuromoji.TokenizerBuilder({ loader }).build();
-  }
-  return tokenizerPromise;
-}
 
 export type Token = {
   surface_form: string;
@@ -33,7 +35,26 @@ export type Token = {
   reading?: string;
   pos: string;
   pos_detail_1?: string;
+  word_type?: string;
 };
+
+export interface JapaneseTokenizer {
+  tokenize(text: string): Token[];
+}
+
+let tokenizerPromise: Promise<JapaneseTokenizer> | null = null;
+
+export function getTokenizer(): Promise<JapaneseTokenizer> {
+  if (!tokenizerPromise) {
+    tokenizerPromise = (new kuromoji.TokenizerBuilder({ loader }).build() as Promise<JapaneseTokenizer>).catch(
+      (err: unknown) => {
+        tokenizerPromise = null;
+        throw err;
+      },
+    );
+  }
+  return tokenizerPromise;
+}
 
 // POS classes worth surfacing as vocabulary. Filter out particles, aux verbs, symbols, etc.
 const STUDY_POS = new Set(["名詞", "動詞", "形容詞", "副詞", "形容動詞", "連体詞"]);
@@ -41,7 +62,24 @@ const STUDY_POS = new Set(["名詞", "動詞", "形容詞", "副詞", "形容動
 // Skip these noun subtypes (numbers, pronouns, suffixes) — too noisy as vocab.
 const SKIP_POS_DETAIL = new Set(["数", "代名詞", "非自立", "接尾", "接続助詞"]);
 
-function katakanaToHiragana(s: string): string {
+// Common 2-char hiragana adverbs/conjunctions that are genuine study words rather than conjugation fragments.
+const ALLOWED_SHORT_HIRAGANA = new Set([
+  "すぐ",
+  "まだ",
+  "もう",
+  "なぜ",
+  "よく",
+  "ぜひ",
+  "ただ",
+  "まず",
+  "ほぼ",
+  "もし",
+]);
+
+// 2-char Katakana loanwords (e.g. パン, ドア, バス, キー).
+const TWO_CHAR_KATAKANA_RE = /^[ァ-ヴー]{2}$/;
+
+export function katakanaToHiragana(s: string): string {
   return s.replace(/[\u30A1-\u30F6]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
 }
 
@@ -65,25 +103,23 @@ function trailingKana(s: string): string {
 /**
  * Convert a surface-form reading into the dictionary-form reading.
  * Kuromoji gives `reading` for the inflected `surface_form`, but we store
- * `basic_form` as the word — without this fix, 殴る shows as なぐっ, 助ける as たすけ.
- *
- * Strategy: strip the trailing-kana portion of the surface from the reading,
- * then append the trailing-kana portion of the dictionary form.
+ * `basic_form` as the word — without this fix, 殴る shows as なぐっ, 助ける as たすけ,
+ * and irregular verbs 来る / する would misread as きる / こる.
  */
-function dictionaryFormReading(surface: string, basic: string, surfaceReading: string): string {
+export function dictionaryFormReading(surface: string, basic: string, surfaceReading: string): string {
+  if (basic === "来る") return "くる";
+  if (basic === "する") return "する";
   if (!surfaceReading) return "";
-  if (surface === basic) return surfaceReading;
+  if (surface === basic) return katakanaToHiragana(surfaceReading);
   const surfaceTailLen = trailingKanaCount(surface);
-  const basicTail = trailingKana(basic);
-  // Reading should end with the surface's trailing kana — strip that many chars,
-  // then append the dictionary form's trailing kana.
+  const basicTail = katakanaToHiragana(trailingKana(basic));
   const stem = surfaceReading.slice(0, Math.max(0, surfaceReading.length - surfaceTailLen));
   return stem + basicTail;
 }
 
 export type VocabEntry = {
-  word: string;       // dictionary form (basic_form)
-  reading: string;    // hiragana
+  word: string; // dictionary form (basic_form)
+  reading: string; // hiragana
   part_of_speech: string;
   frequency: number;
   example_sentence_jp: string; // best subtitle line containing the word
@@ -97,14 +133,17 @@ export async function extractVocabFromSubtitles(text: string): Promise<VocabEntr
   const tokenizer = await getTokenizer();
   const lines = text.split("\n").filter((l) => l.trim().length > 0);
 
-  // word -> { count, reading, pos, exampleLineIdx (shortest line containing it) }
-  const map = new Map<string, { count: number; reading: string; pos: string; exampleLineIdx: number; exampleLineLen: number }>();
+  // word -> { count, reading, pos, exampleLineIdx (shortest contextual line containing it) }
+  const map = new Map<
+    string,
+    { count: number; reading: string; pos: string; exampleLineIdx: number; exampleLineLen: number }
+  >();
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     let tokens: Token[];
     try {
-      tokens = tokenizer.tokenize(line) as Token[];
+      tokens = tokenizer.tokenize(line);
     } catch {
       continue;
     }
@@ -112,22 +151,21 @@ export async function extractVocabFromSubtitles(text: string): Promise<VocabEntr
       if (!STUDY_POS.has(t.pos)) continue;
       if (t.pos_detail_1 && SKIP_POS_DETAIL.has(t.pos_detail_1)) continue;
       // Drop UNKNOWN tokens entirely — kuromoji tags every unrecognized symbol/emoji as 名詞.
-      if ((t as any).word_type === "UNKNOWN") continue;
+      if (t.word_type === "UNKNOWN") continue;
       const word = t.basic_form && t.basic_form !== "*" ? t.basic_form : t.surface_form;
       if (!word || word.length < 1) continue;
       // Must contain at least one Japanese character (kanji, hiragana, or katakana).
       if (!/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]/.test(word)) continue;
       // Skip pure-kana single chars and punctuation-y stuff.
       if (/^[、。！？…・「」『』（）()\s]+$/.test(word)) continue;
-      // Drop short pure-hiragana/katakana "words" (1-2 chars) — these are almost always
-      // tokenizer fragments from conjugations (ちゃ, しょ, ばー, やや) rather than real vocab.
-      // Real short kana words (e.g. 目, 手) are kanji and pass this filter.
+
       const isAllKana = /^[\u3040-\u309F\u30A0-\u30FFー]+$/.test(word);
-      if (isAllKana && word.length <= 2) continue;
+      if (isAllKana && word.length <= 2) {
+        const allowedKatakana = TWO_CHAR_KATAKANA_RE.test(word) && word !== "ーー";
+        if (!allowedKatakana && !ALLOWED_SHORT_HIRAGANA.has(word)) continue;
+      }
 
       const surfaceReading = t.reading ? katakanaToHiragana(t.reading) : "";
-      // Kuromoji's `reading` matches the inflected surface_form. Convert it
-      // to the dictionary-form reading so cards display 殴る/なぐる, not 殴る/なぐっ.
       const reading = dictionaryFormReading(t.surface_form, word, surfaceReading);
       const cur = map.get(word);
       if (cur) {

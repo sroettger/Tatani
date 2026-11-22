@@ -1,12 +1,66 @@
-import { createClient } from "npm:@supabase/supabase-js@2";
-import { corsHeaders } from "npm:@supabase/supabase-js@2/cors";
 import { z } from "npm:zod@3";
-import { sendFcmWebPush } from "../_shared/fcm.ts";
+import {
+  corsHeaders,
+  createAdminClient,
+  jsonResponse,
+  requireAuthUser,
+} from "../_shared/auth.ts";
+import { prepareFcmSender, sendPreparedFcmWebPush } from "../_shared/fcm.ts";
 import { currentSlot, eligibleWord, hasUnhandledDelivery } from "../_shared/push-schedule.ts";
 
-const db = createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "");
-const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-const Schedule = z.object({ timezone: z.string().max(100).refine(v => { try { new Intl.DateTimeFormat("en", { timeZone: v }); return true; } catch { return false; } }), start_hour: z.number().int().min(0).max(23), end_hour: z.number().int().min(0).max(23), cards_per_hour: z.number().int().min(1).max(60) }).refine(s => s.end_hour > s.start_hour);
+const DISPATCH_CONCURRENCY = 4;
+const WORD_STATE_PAGE_SIZE = 1000;
+
+type PushDeviceRow = {
+  id: string;
+  user_id: string;
+  token: string;
+  enabled: boolean;
+  timezone: string;
+  start_hour: number;
+  end_hour: number;
+  cards_per_hour: number;
+};
+
+type WordStateRow = {
+  id: string;
+  word: string;
+  reading: string | null;
+  level: string | null;
+  state: string;
+  preference: string;
+  known_source: string | null;
+  last_reviewed_at: string | null;
+  srs_due_at: string | null;
+};
+
+type CardMeta = {
+  word: string;
+  reading: string | null;
+  meaning: string;
+  level: string | null;
+  example_sentence_jp: string | null;
+};
+
+const Schedule = z
+  .object({
+    timezone: z
+      .string()
+      .max(100)
+      .refine((v) => {
+        try {
+          new Intl.DateTimeFormat("en", { timeZone: v });
+          return true;
+        } catch {
+          return false;
+        }
+      }),
+    start_hour: z.number().int().min(0).max(23),
+    end_hour: z.number().int().min(0).max(23),
+    cards_per_hour: z.number().int().min(1).max(60),
+  })
+  .refine((s) => s.end_hour > s.start_hour);
+
 const Input = z.discriminatedUnion("action", [
   z.object({ action: z.literal("settings"), device_id: z.string().uuid().optional() }),
   z.object({ action: z.literal("enable"), token: z.string().min(20).max(4096), schedule: Schedule }),
@@ -15,52 +69,150 @@ const Input = z.discriminatedUnion("action", [
   z.object({ action: z.literal("card"), delivery_id: z.string().uuid() }),
   z.object({ action: z.literal("review"), delivery_id: z.string().uuid(), remembered: z.boolean() }),
   z.object({ action: z.literal("dispatch"), job_id: z.string().uuid() }),
-  z.object({ action: z.literal("notification_review"), delivery_id: z.string().uuid(), token: z.string().uuid(), remembered: z.boolean() }),
-  z.object({ action: z.literal("quiz_answer"), delivery_id: z.string().uuid(), token: z.string().uuid().optional(), answer: z.number().int().min(-1).max(1) }),
+  z.object({
+    action: z.literal("notification_review"),
+    delivery_id: z.string().uuid(),
+    token: z.string().uuid(),
+    remembered: z.boolean(),
+  }),
+  z.object({
+    action: z.literal("quiz_answer"),
+    delivery_id: z.string().uuid(),
+    token: z.string().uuid().optional(),
+    answer: z.number().int().min(-1).max(1),
+  }),
 ]);
 
-async function sendCard(device: any, slot: string): Promise<string> {
+async function sendCard(db: ReturnType<typeof createAdminClient>, device: PushDeviceRow, slot: string): Promise<string> {
   const expireBefore = new Date(Date.now() - (slot.startsWith("test-") ? 0 : 2 * 3600_000)).toISOString();
-  await db.from("flashcard_push_deliveries").update({ status: "expired" }).eq("user_id", device.user_id).is("reviewed_at", null).in("status", ["pending", "sent"]).lt("created_at", expireBefore);
-  const { data: unhandled, error: pendingError } = await db.from("flashcard_push_deliveries").select("status,reviewed_at").eq("user_id", device.user_id).is("reviewed_at", null).in("status", ["pending", "sent"]).limit(1);
+  await db
+    .from("flashcard_push_deliveries")
+    .update({ status: "expired" })
+    .eq("user_id", device.user_id)
+    .is("reviewed_at", null)
+    .in("status", ["pending", "sent"])
+    .lt("created_at", expireBefore);
+
+  const { data: unhandled, error: pendingError } = await db
+    .from("flashcard_push_deliveries")
+    .select("status,reviewed_at")
+    .eq("user_id", device.user_id)
+    .is("reviewed_at", null)
+    .in("status", ["pending", "sent"])
+    .limit(1);
   if (pendingError) throw pendingError;
   if (hasUnhandledDelivery(unhandled ?? [])) return "unhandled";
-  const { data: profile, error: profileError } = await db.from("profiles").select("learning_language,ui_language").eq("user_id", device.user_id).single();
+
+  // Use maybeSingle() and auto-disable orphaned devices instead of throwing PGRST116.
+  const { data: profile, error: profileError } = await db
+    .from("profiles")
+    .select("learning_language,ui_language")
+    .eq("user_id", device.user_id)
+    .maybeSingle();
   if (profileError) throw profileError;
+  if (!profile) {
+    await db.from("flashcard_push_devices").update({ enabled: false }).eq("id", device.id);
+    return "disabled_orphaned";
+  }
   const language = profile.learning_language;
-  const { data: states, error: stateError } = await db.from("user_word_state").select("word,reading,level,state,preference,known_source,last_reviewed_at,srs_due_at").eq("user_id", device.user_id).eq("learning_language", language);
-  if (stateError) throw stateError;
-  const dueStates = (states ?? []).filter(s => eligibleWord(s, true));
+
+  // Paginate user_word_state in 1,000-row pages so >1,000-word users never lose due notifications.
+  const states: WordStateRow[] = [];
+  let offset = 0;
+  while (true) {
+    const { data: page, error: stateError } = await db
+      .from("user_word_state")
+      .select("id,word,reading,level,state,preference,known_source,last_reviewed_at,srs_due_at")
+      .eq("user_id", device.user_id)
+      .eq("learning_language", language)
+      .not("srs_due_at", "is", null)
+      .order("id", { ascending: true })
+      .range(offset, offset + WORD_STATE_PAGE_SIZE - 1);
+    if (stateError) throw stateError;
+    const rows = (page ?? []) as WordStateRow[];
+    states.push(...rows);
+    if (rows.length < WORD_STATE_PAGE_SIZE) break;
+    offset += WORD_STATE_PAGE_SIZE;
+  }
+
+  const dueStates = states.filter((s) => eligibleWord(s, true));
   if (!dueStates.length) return "empty";
-  const dueWordSet = new Set(dueStates.map(s => s.word));
-  type CardMeta = { word: string; reading: string | null; meaning: string; level: string | null; example_sentence_jp: string | null };
+
+  const dueWordSet = new Set(dueStates.map((s) => s.word));
   const metaMap = new Map<string, CardMeta>();
 
-  const { data: chunks, error: chunkError } = await db.from("study_chunks").select("id").eq("user_id", device.user_id).eq("learning_language", language).order("updated_at", { ascending: false }).limit(100);
+  const { data: chunks, error: chunkError } = await db
+    .from("study_chunks")
+    .select("id")
+    .eq("user_id", device.user_id)
+    .eq("learning_language", language)
+    .order("updated_at", { ascending: false })
+    .limit(100);
   if (chunkError) throw chunkError;
   if (chunks?.length) {
-    const { data: words, error: wordsError } = await db.from("study_chunk_words").select("word,reading,meaning,level,example_sentence_jp").in("chunk_id", chunks.map(c => c.id));
+    const { data: words, error: wordsError } = await db
+      .from("study_chunk_words")
+      .select("word,reading,meaning,level,example_sentence_jp")
+      .in(
+        "chunk_id",
+        chunks.map((c: { id: string }) => c.id),
+      );
     if (wordsError) throw wordsError;
     for (const w of words ?? []) {
-      if (w.meaning && dueWordSet.has(w.word) && (!metaMap.has(w.word) || (!metaMap.get(w.word)?.example_sentence_jp && w.example_sentence_jp))) {
-        metaMap.set(w.word, { word: w.word, reading: w.reading, meaning: w.meaning, level: w.level, example_sentence_jp: w.example_sentence_jp });
+      if (
+        w.meaning &&
+        dueWordSet.has(w.word) &&
+        (!metaMap.has(w.word) || (!metaMap.get(w.word)?.example_sentence_jp && w.example_sentence_jp))
+      ) {
+        metaMap.set(w.word, {
+          word: w.word,
+          reading: w.reading,
+          meaning: w.meaning,
+          level: w.level,
+          example_sentence_jp: w.example_sentence_jp,
+        });
       }
     }
   }
 
-  // Also resolve graduated words learned directly from episodes without legacy chunks
+  // Also resolve graduated words learned directly from episodes without legacy chunks.
   if (metaMap.size < dueWordSet.size) {
-    const { data: lib } = await db.from("user_anime").select("anime_id").eq("user_id", device.user_id).eq("learning_language", language);
+    const { data: lib } = await db
+      .from("user_anime")
+      .select("anime_id")
+      .eq("user_id", device.user_id)
+      .eq("learning_language", language);
     const animeIds = (lib ?? []).map((r: { anime_id: string }) => r.anime_id);
     if (animeIds.length) {
-      const { data: eps } = await db.from("episodes").select("id, seasons!inner(anime_id)").in("seasons.anime_id", animeIds).eq("processing_status", "ready").limit(60);
+      const { data: eps } = await db
+        .from("episodes")
+        .select("id, seasons!inner(anime_id)")
+        .in("seasons.anime_id", animeIds)
+        .eq("processing_status", "ready")
+        .limit(60);
       const epIds = (eps ?? []).map((e: { id: string }) => e.id);
       if (epIds.length) {
-        const { data: caches } = await db.from("episode_vocab_cache").select("vocab").in("episode_id", epIds).eq("language", language);
+        const { data: caches } = await db
+          .from("episode_vocab_cache")
+          .select("vocab")
+          .in("episode_id", epIds)
+          .eq("language", language);
         for (const row of caches ?? []) {
           const vocab = Array.isArray(row.vocab) ? row.vocab : [];
-          for (const v of vocab as Array<{ word?: string; reading?: string; meaning?: string; level?: string; jlpt_level?: string; example_sentence_jp?: string }>) {
-            if (v.word && v.meaning && dueWordSet.has(v.word) && (!metaMap.has(v.word) || (!metaMap.get(v.word)?.example_sentence_jp && v.example_sentence_jp))) {
+          for (const v of vocab as Array<{
+            word?: string;
+            reading?: string;
+            meaning?: string;
+            level?: string;
+            jlpt_level?: string;
+            example_sentence_jp?: string;
+          }>) {
+            if (
+              v.word &&
+              v.meaning &&
+              dueWordSet.has(v.word) &&
+              (!metaMap.has(v.word) || (!metaMap.get(v.word)?.example_sentence_jp && v.example_sentence_jp))
+            ) {
               metaMap.set(v.word, {
                 word: v.word,
                 reading: v.reading ?? null,
@@ -77,141 +229,281 @@ async function sendCard(device: any, slot: string): Promise<string> {
 
   const candidates = [...metaMap.values()];
   if (!candidates.length) return "empty";
-  const { data: recent } = await db.from("flashcard_push_deliveries").select("word").eq("user_id", device.user_id).eq("learning_language", language).order("created_at", { ascending: false }).limit(50);
-  const recentWords = new Set((recent ?? []).map(d => d.word));
-  const fresh = candidates.filter(w => !recentWords.has(w.word));
+
+  const { data: recent } = await db
+    .from("flashcard_push_deliveries")
+    .select("word")
+    .eq("user_id", device.user_id)
+    .eq("learning_language", language)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  const recentWords = new Set((recent ?? []).map((d: { word: string }) => d.word));
+  const fresh = candidates.filter((w) => !recentWords.has(w.word));
   const pool = fresh.length ? fresh : candidates;
   const card = pool[Math.floor(Math.random() * pool.length)];
   const ja = profile.ui_language === "ja";
-  const serviceAccountJson = Deno.env.get("FIREBASE_SERVICE_ACCOUNT_JSON");
-  if (!serviceAccountJson) throw new Error("Firebase is not configured (set FIREBASE_SERVICE_ACCOUNT_JSON)");
-  const { data: delivery, error: insertError } = await db.from("flashcard_push_deliveries").insert({ user_id: device.user_id, device_id: device.id, slot, learning_language: language, word: card.word, reading: card.reading, meaning: card.meaning, example_sentence: card.example_sentence_jp, level: card.level, quiz_options: [ja ? "知ってる" : "I know", ja ? "わからない" : "I don't know"], quiz_correct_index: 0 }).select("id,review_token").single();
+
+  // Verify FCM service account config and obtain OAuth token BEFORE inserting a 'pending' delivery,
+  // so configuration/OAuth errors never leave a phantom 'pending' row blocking the user for 2 hours.
+  const preparedFcm = await prepareFcmSender(Deno.env.get("FIREBASE_SERVICE_ACCOUNT_JSON"));
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  if (!supabaseUrl) throw new Error("SUPABASE_URL is not configured");
+
+  const { data: delivery, error: insertError } = await db
+    .from("flashcard_push_deliveries")
+    .insert({
+      user_id: device.user_id,
+      device_id: device.id,
+      slot,
+      learning_language: language,
+      word: card.word,
+      reading: card.reading,
+      meaning: card.meaning,
+      example_sentence: card.example_sentence_jp,
+      level: card.level,
+      quiz_options: [ja ? "知ってる" : "I know", ja ? "わからない" : "I don't know"],
+      quiz_correct_index: 0,
+    })
+    .select("id,review_token")
+    .single();
   if (insertError?.code === "P0001") return "unhandled";
   if (insertError?.code === "23505") return "duplicate";
   if (insertError || !delivery) throw insertError ?? new Error("Delivery was not created");
-  const webBasePath = (Deno.env.get("WEB_BASE_PATH") ?? "").replace(/\/+$/, "");
-  const path = `${webBasePath}/notifications/review/${delivery.id}`;
-  // Answer key stays server-side; the worker submits only the chosen answer index.
-  const data: Record<string, string> = {
-    path, delivery_id: delivery.id, token: delivery.review_token, api: `${Deno.env.get("SUPABASE_URL")}/functions/v1/flashcard-notifications`,
-    word: card.word, reading: card.reading ?? "",
-    example: card.example_sentence_jp ?? "",
-    l_know: ja ? "知ってる" : "I know",
-    l_correct: ja ? "正解" : "Correct", l_incorrect: ja ? "不正解" : "Incorrect",
-    l_dont_know: ja ? "わからない" : "I don't know",
-    l_failed: ja ? "同期できませんでした" : "Couldn't sync",
-  };
+
+  let data: Record<string, string>;
+  try {
+    const webBasePath = (Deno.env.get("WEB_BASE_PATH") ?? "").replace(/\/+$/, "");
+    const path = `${webBasePath}/notifications/review/${delivery.id}`;
+    // Answer key stays server-side; the worker submits only the chosen answer index.
+    data = {
+      path,
+      delivery_id: delivery.id,
+      token: delivery.review_token,
+      api: `${supabaseUrl}/functions/v1/flashcard-notifications`,
+      word: card.word,
+      reading: card.reading ?? "",
+      example: card.example_sentence_jp ?? "",
+      l_know: ja ? "知ってる" : "I know",
+      l_correct: ja ? "正解" : "Correct",
+      l_incorrect: ja ? "不正解" : "Incorrect",
+      l_dont_know: ja ? "わからない" : "I don't know",
+      l_failed: ja ? "同期できませんでした" : "Couldn't sync",
+    };
+  } catch (prepError) {
+    await db.from("flashcard_push_deliveries").update({ status: "failed" }).eq("id", delivery.id);
+    throw prepError;
+  }
+
   let response: Response;
   try {
-    response = await sendFcmWebPush(device.token, data, serviceAccountJson);
+    response = await sendPreparedFcmWebPush(device.token, data, preparedFcm);
   } catch (error) {
-    // Keep uncertain deliveries pending: a network timeout may still have delivered the card.
+    // Keep uncertain deliveries pending: a network timeout during messages:send may still have delivered the card.
     console.error("Firebase delivery outcome unknown", error);
     throw error;
   }
+
   if (!response.ok) {
     const details = await response.text();
     // INVALID_ARGUMENT can describe malformed payloads, not just stale tokens.
-    if (details.includes('"UNREGISTERED"')) await db.from("flashcard_push_devices").update({ enabled: false }).eq("id", device.id);
+    if (details.includes('"UNREGISTERED"')) {
+      await db.from("flashcard_push_devices").update({ enabled: false }).eq("id", device.id);
+    }
     await db.from("flashcard_push_deliveries").update({ status: "failed" }).eq("id", delivery.id);
     console.error(`Firebase send failed [${response.status}]: ${details}`);
     throw new Error(`Firebase send failed [${response.status}]: ${details}`);
   }
+
   await db.from("flashcard_push_deliveries").update({ status: "sent" }).eq("id", delivery.id);
   return "sent";
 }
 
-Deno.serve(async req => {
+Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   try {
     const parsed = Input.safeParse(await req.json());
-    if (!parsed.success) return reply({ error: "Invalid request", details: parsed.error.flatten() }, 400);
+    if (!parsed.success) return jsonResponse({ error: "Invalid request", details: parsed.error.flatten() }, 400);
     const input = parsed.data;
+    const db = createAdminClient();
+
     if (input.action === "quiz_answer") {
       let ownerId: string;
       if (input.token) {
-        const { data: card, error } = await db.from("flashcard_push_deliveries").select("user_id").eq("id", input.delivery_id).eq("review_token", input.token).maybeSingle();
+        const { data: card, error } = await db
+          .from("flashcard_push_deliveries")
+          .select("user_id")
+          .eq("id", input.delivery_id)
+          .eq("review_token", input.token)
+          .maybeSingle();
         if (error) throw error;
-        if (!card) return reply({ error: "Unauthorized" }, 401);
+        if (!card) return jsonResponse({ error: "Unauthorized" }, 401);
         ownerId = card.user_id;
       } else {
-        const jwt = req.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
-        if (!jwt) return reply({ error: "Unauthorized" }, 401);
-        const { data: auth, error } = await db.auth.getUser(jwt);
-        if (error || !auth.user) return reply({ error: "Unauthorized" }, 401);
-        ownerId = auth.user.id;
+        const auth = await requireAuthUser(req);
+        if (auth instanceof Response) return auth;
+        ownerId = auth.userId;
       }
-      const { data: result, error } = await db.rpc("answer_flashcard_quiz", { delivery_id: input.delivery_id, owner_id: ownerId, selected_answer: input.answer });
+      const { data: result, error } = await db.rpc("answer_flashcard_quiz", {
+        delivery_id: input.delivery_id,
+        owner_id: ownerId,
+        selected_answer: input.answer,
+      });
       if (error) throw error;
-      if (!result) return reply({ error: "Not found" }, 404);
-      return reply(result);
+      if (!result) return jsonResponse({ error: "Not found" }, 404);
+      return jsonResponse(result);
     }
+
     if (input.action === "dispatch") {
       // A one-use queue record created by the database scheduler authenticates this callback.
-      const { data: job, error } = await db.from("flashcard_push_jobs").update({ claimed_at: new Date().toISOString() }).eq("id", input.job_id).is("claimed_at", null).gte("created_at", new Date(Date.now() - 300000).toISOString()).select("id").maybeSingle();
-      if (error || !job) return reply({ error: "Unauthorized" }, 401);
-      const { data: devices, error: deviceError } = await db.from("flashcard_push_devices").select("*").eq("enabled", true);
+      const { data: job, error } = await db
+        .from("flashcard_push_jobs")
+        .update({ claimed_at: new Date().toISOString() })
+        .eq("id", input.job_id)
+        .is("claimed_at", null)
+        .gte("created_at", new Date(Date.now() - 300_000).toISOString())
+        .select("id")
+        .maybeSingle();
+      if (error || !job) return jsonResponse({ error: "Unauthorized" }, 401);
+
+      const { data: devices, error: deviceError } = await db
+        .from("flashcard_push_devices")
+        .select("id,user_id,token,enabled,timezone,start_hour,end_hour,cards_per_hour")
+        .eq("enabled", true);
       if (deviceError) throw deviceError;
-      const results: string[] = [];
-      for (const device of devices ?? []) {
-        const slot = currentSlot(device, new Date());
-        if (!slot) continue;
-        try { results.push(await sendCard(device, slot)); } catch (error) { console.error(error); results.push("failed"); }
-      }
-      await db.from("flashcard_push_jobs").delete().lt("created_at", new Date(Date.now() - 86400000).toISOString());
-      return reply({ results });
+
+      const now = new Date();
+      const dueItems = ((devices ?? []) as PushDeviceRow[])
+        .map((device) => ({ device, slot: currentSlot(device, now) }))
+        .filter((item): item is { device: PushDeviceRow; slot: string } => item.slot !== null);
+
+      const results: string[] = new Array(dueItems.length);
+      let cursor = 0;
+      const workers = Array.from({ length: Math.min(DISPATCH_CONCURRENCY, dueItems.length) }, async () => {
+        while (true) {
+          const idx = cursor++;
+          if (idx >= dueItems.length) return;
+          const { device, slot } = dueItems[idx];
+          try {
+            results[idx] = await sendCard(db, device, slot);
+          } catch (err) {
+            console.error(err);
+            results[idx] = "failed";
+          }
+        }
+      });
+      await Promise.all(workers);
+
+      await db
+        .from("flashcard_push_jobs")
+        .delete()
+        .lt("created_at", new Date(Date.now() - 86_400_000).toISOString());
+      return jsonResponse({ results });
     }
+
     if (input.action === "notification_review") {
-      // The per-delivery secret sent only to this device authorizes grading straight from the notification.
-      const { data: card, error } = await db.from("flashcard_push_deliveries").select("id,user_id,quiz_options").eq("id", input.delivery_id).eq("review_token", input.token).maybeSingle();
+      // The per-delivery secret sent only to this device authorizes grading straight from legacy notifications.
+      const { data: card, error } = await db
+        .from("flashcard_push_deliveries")
+        .select("id,user_id,quiz_options")
+        .eq("id", input.delivery_id)
+        .eq("review_token", input.token)
+        .maybeSingle();
       if (error) throw error;
-      if (!card) return reply({ error: "Unauthorized" }, 401);
-      if (card.quiz_options) return reply({ error: "Select a quiz answer" }, 400);
-      const { data: recorded, error: reviewError } = await db.rpc("review_flashcard_delivery", { delivery_id: card.id, owner_id: card.user_id, remembered: input.remembered });
+      if (!card) return jsonResponse({ error: "Unauthorized" }, 401);
+      if (card.quiz_options) return jsonResponse({ error: "Select a quiz answer" }, 400);
+      const { data: recorded, error: reviewError } = await db.rpc("review_flashcard_delivery", {
+        delivery_id: card.id,
+        owner_id: card.user_id,
+        remembered: input.remembered,
+      });
       if (reviewError) throw reviewError;
-      return reply({ recorded });
+      return jsonResponse({ recorded });
     }
-    const jwt = req.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
-    if (!jwt) return reply({ error: "Unauthorized" }, 401);
-    const { data: auth, error: authError } = await db.auth.getUser(jwt);
-    if (authError || !auth.user) return reply({ error: "Unauthorized" }, 401);
-    const uid = auth.user.id;
+
+    const auth = await requireAuthUser(req);
+    if (auth instanceof Response) return auth;
+    const uid = auth.userId;
+
     if (input.action === "enable") {
-      const { data, error } = await db.from("flashcard_push_devices").upsert({ user_id: uid, token: input.token, enabled: true, ...input.schedule, cards_per_day: 1, updated_at: new Date().toISOString() }, { onConflict: "token" }).select("id,enabled,timezone,start_hour,end_hour,cards_per_hour").single();
+      const { data, error } = await db
+        .from("flashcard_push_devices")
+        .upsert(
+          {
+            user_id: uid,
+            token: input.token,
+            enabled: true,
+            ...input.schedule,
+            cards_per_day: 1,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "token" },
+        )
+        .select("id,enabled,timezone,start_hour,end_hour,cards_per_hour")
+        .single();
       if (error) throw error;
-      return reply({ device: data });
+      return jsonResponse({ device: data });
     }
+
     if (input.action === "settings") {
-      if (!input.device_id) return reply({ device: null });
-      const { data, error } = await db.from("flashcard_push_devices").select("id,enabled,timezone,start_hour,end_hour,cards_per_hour").eq("user_id", uid).eq("id", input.device_id).maybeSingle();
+      if (!input.device_id) return jsonResponse({ device: null });
+      const { data, error } = await db
+        .from("flashcard_push_devices")
+        .select("id,enabled,timezone,start_hour,end_hour,cards_per_hour")
+        .eq("user_id", uid)
+        .eq("id", input.device_id)
+        .maybeSingle();
       if (error) throw error;
-      return reply({ device: data });
+      return jsonResponse({ device: data });
     }
+
     if (input.action === "card" || input.action === "review") {
-      const { data: card, error } = await db.from("flashcard_push_deliveries").select("id,word,reading,meaning,example_sentence,learning_language,reviewed_at,quiz_options,quiz_selected_index,quiz_correct_index").eq("id", input.delivery_id).eq("user_id", uid).maybeSingle();
+      const { data: card, error } = await db
+        .from("flashcard_push_deliveries")
+        .select(
+          "id,word,reading,meaning,example_sentence,learning_language,reviewed_at,quiz_options,quiz_selected_index,quiz_correct_index",
+        )
+        .eq("id", input.delivery_id)
+        .eq("user_id", uid)
+        .maybeSingle();
       if (error) throw error;
-      if (!card) return reply({ error: "Not found" }, 404);
+      if (!card) return jsonResponse({ error: "Not found" }, 404);
       if (input.action === "card") {
-        const { quiz_correct_index, ...visible } = card;
-        return reply({ card: { ...visible, meaning: card.reviewed_at || !card.quiz_options ? card.meaning : null } });
+        const { quiz_correct_index: _hiddenAnswerKey, ...visible } = card;
+        return jsonResponse({
+          card: { ...visible, meaning: card.reviewed_at || !card.quiz_options ? card.meaning : null },
+        });
       }
-      if (card.quiz_options) return reply({ error: "Select a quiz answer" }, 400);
-      const { data: recorded, error: reviewError } = await db.rpc("review_flashcard_delivery", { delivery_id: card.id, owner_id: uid, remembered: input.remembered });
+      if (card.quiz_options) return jsonResponse({ error: "Select a quiz answer" }, 400);
+      const { data: recorded, error: reviewError } = await db.rpc("review_flashcard_delivery", {
+        delivery_id: card.id,
+        owner_id: uid,
+        remembered: input.remembered,
+      });
       if (reviewError) throw reviewError;
-      return reply({ recorded });
+      return jsonResponse({ recorded });
     }
-    const { data: device, error } = await db.from("flashcard_push_devices").select("*").eq("id", input.device_id).eq("user_id", uid).maybeSingle();
+
+    const { data: device, error } = await db
+      .from("flashcard_push_devices")
+      .select("id,user_id,token,enabled,timezone,start_hour,end_hour,cards_per_hour")
+      .eq("id", input.device_id)
+      .eq("user_id", uid)
+      .maybeSingle();
     if (error) throw error;
-    if (!device) return reply({ error: "Not found" }, 404);
+    if (!device) return jsonResponse({ error: "Not found" }, 404);
     if (input.action === "disable") {
-      const { error } = await db.from("flashcard_push_devices").update({ enabled: false }).eq("id", device.id);
-      if (error) throw error;
-      return reply({ disabled: true });
+      const { error: disableErr } = await db
+        .from("flashcard_push_devices")
+        .update({ enabled: false })
+        .eq("id", device.id);
+      if (disableErr) throw disableErr;
+      return jsonResponse({ disabled: true });
     }
-    if (!device.enabled) return reply({ error: "Notifications are disabled" }, 400);
-    return reply({ result: await sendCard(device, `test-${crypto.randomUUID()}`) });
+    if (!device.enabled) return jsonResponse({ error: "Notifications are disabled" }, 400);
+    return jsonResponse({ result: await sendCard(db, device as PushDeviceRow, `test-${crypto.randomUUID()}`) });
   } catch (error) {
-    const message = error instanceof Error ? error.message : (error as { message?: string })?.message ?? "Request failed";
-    return reply({ error: message }, message === "Quiz expired" ? 410 : 500);
+    const message =
+      error instanceof Error ? error.message : (error as { message?: string })?.message ?? "Request failed";
+    return jsonResponse({ error: message }, message === "Quiz expired" ? 410 : 500);
   }
 });

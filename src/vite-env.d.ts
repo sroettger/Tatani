@@ -1,3 +1,7 @@
 /// <reference types="vite/client" />
 
-// trigger rebuild 1793112934
+declare const Deno: {
+  env: {
+    get(key: string): string | undefined;
+  };
+};

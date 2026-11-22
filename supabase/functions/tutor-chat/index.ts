@@ -1,15 +1,13 @@
 // Streaming AI tutor for vocabulary learning in the learner's target language.
 // Uses Google Gemini API (OpenAI-compatible) and supports tool calls for marking words known
 // and starting a mini-quiz from the episode's vocab.
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { callAiChatCompletions, getAiApiKey } from "../_shared/ai.ts";
+import {
+  corsHeaders,
+  jsonResponse,
+  requireAuthUser,
+} from "../_shared/auth.ts";
+import { callAiChatCompletions, getAiApiKey, validateClientMessages } from "../_shared/ai.ts";
 import { langInfo, uiLanguageName } from "../_shared/languages.ts";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
-};
 
 type VocabItem = {
   word: string;
@@ -21,58 +19,53 @@ type VocabItem = {
   example_sentence_en?: string;
 };
 
-type ChatMsg = { role: "user" | "assistant" | "system" | "tool"; content: string };
-
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-    const supa = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_ANON_KEY") ?? Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ?? "",
-      { global: { headers: { Authorization: authHeader } } },
-    );
-    const { data: { user } } = await supa.auth.getUser();
-    if (!user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    const auth = await requireAuthUser(req);
+    if (auth instanceof Response) return auth;
 
     const aiApiKey = getAiApiKey();
 
-    const body = await req.json();
-    const messages: ChatMsg[] = Array.isArray(body?.messages) ? body.messages : [];
-    const vocab: VocabItem[] = Array.isArray(body?.vocab) ? body.vocab.slice(0, 80) : [];
-    const jlptLevel: string = typeof body?.jlpt_level === "string" ? body.jlpt_level : "none";
-    const focusWord: string | null = typeof body?.focus_word === "string" ? body.focus_word : null;
+    const body = (await req.json()) as {
+      messages?: unknown;
+      vocab?: unknown;
+      jlpt_level?: unknown;
+      focus_word?: unknown;
+      ui_language?: unknown;
+      learning_language?: unknown;
+    };
+
+    const validated = validateClientMessages(body?.messages, {
+      allowEmpty: false,
+      maxMessages: 40,
+      maxCharsPerMessage: 4_000,
+    });
+    if (!validated.ok) {
+      return jsonResponse({ error: validated.error }, 400);
+    }
+    const messages = validated.messages;
+
+    const vocab: VocabItem[] = Array.isArray(body?.vocab)
+      ? (body.vocab as VocabItem[]).slice(0, 80)
+      : [];
+    const jlptLevel: string = typeof body?.jlpt_level === "string" ? body.jlpt_level.slice(0, 20) : "none";
+    const focusWord: string | null =
+      typeof body?.focus_word === "string" && body.focus_word.trim()
+        ? body.focus_word.trim().slice(0, 100)
+        : null;
     const nativeLang = uiLanguageName(typeof body?.ui_language === "string" ? body.ui_language : "en");
-    // Learning language resolved from the shared config (falls back to the default).
     const learning = langInfo(typeof body?.learning_language === "string" ? body.learning_language : null);
     const learningLangName = learning.name;
     const levelScale = learning.scale.toUpperCase();
-
-    if (messages.length === 0) {
-      return new Response(JSON.stringify({ error: "messages required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
 
     const vocabContext = vocab.length
       ? vocab
           .map(
             (v) =>
-              `- ${v.word} (${v.reading}) — ${v.meaning}${
-                v.jlpt_level ? ` [${v.jlpt_level}]` : ""
+              `- ${String(v.word ?? "")} (${String(v.reading ?? "")}) — ${String(v.meaning ?? "")}${
+                v.jlpt_level ? ` [${String(v.jlpt_level)}]` : ""
               }`,
           )
           .join("\n")
@@ -100,11 +93,15 @@ ${learning.morphological ? `- When showing ${learningLangName} text, include rea
         type: "function",
         function: {
           name: "mark_word_known",
-          description: "Mark a vocabulary word as 'known' in the learner's word state. Use when they clearly indicate they know it.",
+          description:
+            "Mark a vocabulary word as 'known' in the learner's word state. Use when they clearly indicate they know it.",
           parameters: {
             type: "object",
             properties: {
-              word: { type: "string", description: "The target-language word (dictionary/kanji form if available)" },
+              word: {
+                type: "string",
+                description: "The target-language word (dictionary/kanji form if available)",
+              },
             },
             required: ["word"],
             additionalProperties: false,
@@ -115,7 +112,8 @@ ${learning.morphological ? `- When showing ${learningLangName} text, include rea
         type: "function",
         function: {
           name: "start_mini_quiz",
-          description: "Start a short interactive quiz on episode vocabulary. Use when the learner asks to be quizzed or wants practice.",
+          description:
+            "Start a short interactive quiz on episode vocabulary. Use when the learner asks to be quizzed or wants practice.",
           parameters: {
             type: "object",
             properties: {
@@ -128,32 +126,26 @@ ${learning.morphological ? `- When showing ${learningLangName} text, include rea
       },
     ];
 
-    const upstream = await callAiChatCompletions({
-      model: "gemini-2.5-flash",
-      messages: [{ role: "system", content: systemPrompt }, ...messages],
-      tools,
-      stream: true,
-    }, aiApiKey);
+    const upstream = await callAiChatCompletions(
+      {
+        model: "gemini-2.5-flash",
+        messages: [{ role: "system", content: systemPrompt }, ...messages],
+        tools,
+        stream: true,
+      },
+      aiApiKey,
+    );
 
     if (!upstream.ok) {
       if (upstream.status === 429) {
-        return new Response(
-          JSON.stringify({ error: "Rate limit reached. Please wait a moment and try again." }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
+        return jsonResponse({ error: "Rate limit reached. Please wait a moment and try again." }, 429);
       }
       if (upstream.status === 402) {
-        return new Response(
-          JSON.stringify({ error: "AI quota exhausted." }),
-          { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
+        return jsonResponse({ error: "AI quota exhausted." }, 402);
       }
       const t = await upstream.text();
       console.error("AI API error", upstream.status, t);
-      return new Response(JSON.stringify({ error: "AI API error" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return jsonResponse({ error: "AI API error" }, 500);
     }
 
     return new Response(upstream.body, {
@@ -161,9 +153,6 @@ ${learning.morphological ? `- When showing ${learningLangName} text, include rea
     });
   } catch (e) {
     console.error("tutor-chat error:", e);
-    return new Response(
-      JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+    return jsonResponse({ error: e instanceof Error ? e.message : "Unknown error" }, 500);
   }
 });

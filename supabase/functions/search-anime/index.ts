@@ -1,10 +1,9 @@
 // Search anime via AniList GraphQL API (no key required)
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+import {
+  corsHeaders,
+  jsonResponse,
+  requireAuthUser,
+} from "../_shared/auth.ts";
 
 const ANILIST_URL = "https://graphql.anilist.co";
 
@@ -29,35 +28,29 @@ query ($search: String) {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   try {
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-    const supa = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY") ?? Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ?? "", { global: { headers: { Authorization: authHeader } } });
-    const { data: claims, error: claimsErr } = await supa.auth.getClaims(authHeader.replace("Bearer ", ""));
-    if (claimsErr || !claims?.claims) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    const auth = await requireAuthUser(req);
+    if (auth instanceof Response) return auth;
+
+    const { query } = (await req.json()) as { query?: unknown };
+    if (typeof query !== "string" || !query.trim() || query.length > 200) {
+      return jsonResponse({ error: "query required (max 200 chars)" }, 400);
     }
 
-    const { query } = await req.json();
-    if (!query || typeof query !== "string") {
-      return new Response(JSON.stringify({ error: "query required" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
     const r = await fetch(ANILIST_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json", "User-Agent": "Tatani/2.0" },
-      body: JSON.stringify({ query: SEARCH_QUERY, variables: { search: query } }),
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "User-Agent": "Tatani/2.0",
+      },
+      body: JSON.stringify({ query: SEARCH_QUERY, variables: { search: query.trim() } }),
     });
     if (!r.ok) {
       const t = await r.text();
       console.error("anilist error", r.status, t);
-      return new Response(JSON.stringify({ error: "AniList error" }), {
-        status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return jsonResponse({ error: "AniList error" }, 502);
     }
-    const data = await r.json();
+    const data = (await r.json()) as { data?: { Page?: { media?: unknown[] } } };
     type AniListMediaItem = {
       id?: number;
       idMal?: number | null;
@@ -88,13 +81,9 @@ Deno.serve(async (req) => {
         synopsis: m.description?.replace(/<[^>]+>/g, "") ?? null,
       };
     });
-    return new Response(JSON.stringify({ results }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return jsonResponse({ results });
   } catch (e) {
     console.error(e);
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "unknown" }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return jsonResponse({ error: e instanceof Error ? e.message : "unknown" }, 500);
   }
 });

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,17 +19,18 @@ type Props = {
 const TTS_LANG: Record<string, string> = { ja: "ja-JP", es: "es-ES", fr: "fr-FR", de: "de-DE" };
 const ttsLangFor = (code: string) => TTS_LANG[code] ?? "en-US";
 
-// Strip markers + meta lines for TTS (don't read corrections or English aloud)
+const TRANSLATION_LINE_RE = /^\s*\*\([^:\n]+:\s*.+\)\*\s*$/;
+const TRAILING_TRANSLATION_RE = /\*\([^:\n]+:\s*([\s\S]+?)\)\*\s*$/;
+
+// Strip correction markers + translation meta lines for TTS (don't read corrections or translations aloud)
 const stripMd = (s: string) =>
   s
     .split("\n")
-    .filter((l) => !l.trim().startsWith(">") && !/^\s*\*\(English:/.test(l))
+    .filter((l) => !l.trim().startsWith(">") && !TRANSLATION_LINE_RE.test(l))
     .join("\n")
     .replace(/\*\*/g, "")
     .trim();
 
-// Render text: extract correction block (leading lines starting with >),
-// highlight **word**, and italicize *(English: ...)* line.
 function FormattedMsg({ text, hasRuby }: { text: string; hasRuby: boolean }) {
   const lines = text.split("\n");
   const correctionLines: string[] = [];
@@ -40,7 +40,7 @@ function FormattedMsg({ text, hasRuby }: { text: string; hasRuby: boolean }) {
     if (inCorrection && line.trim().startsWith(">")) {
       correctionLines.push(line.replace(/^\s*>\s?/, ""));
     } else if (inCorrection && line.trim() === "" && correctionLines.length > 0) {
-      inCorrection = false; // blank line ends correction block
+      inCorrection = false;
     } else {
       inCorrection = false;
       bodyLines.push(line);
@@ -48,9 +48,9 @@ function FormattedMsg({ text, hasRuby }: { text: string; hasRuby: boolean }) {
   }
   const body = bodyLines.join("\n").trim();
 
-  const englishMatch = body.match(/\*\(English:([^)]*)\)\*\s*$/);
-  const main = englishMatch ? body.slice(0, englishMatch.index).trim() : body;
-  const english = englishMatch?.[1]?.trim();
+  const translationMatch = body.match(TRAILING_TRANSLATION_RE);
+  const main = translationMatch ? body.slice(0, translationMatch.index).trim() : body;
+  const translation = translationMatch?.[1]?.trim();
 
   const renderInline = (s: string, keyPrefix: string) => {
     const parts = s.split(/(\*\*[^*]+\*\*)/g);
@@ -71,13 +71,13 @@ function FormattedMsg({ text, hasRuby }: { text: string; hasRuby: boolean }) {
       {correctionLines.length > 0 && (
         <div className="rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-xs space-y-0.5">
           {correctionLines.map((l, i) => {
-            const isEnglishNote = /^\s*\*\(.*\)\*\s*$/.test(l);
-            const cleaned = isEnglishNote ? l.replace(/^\s*\*\(/, "").replace(/\)\*\s*$/, "") : l;
+            const isMetaNote = /^\s*\*\(.*\)\*\s*$/.test(l);
+            const cleaned = isMetaNote ? l.replace(/^\s*\*\(/, "").replace(/\)\*\s*$/, "") : l;
             return (
               <p
                 key={i}
                 className={cn(
-                  isEnglishNote ? "text-muted-foreground italic" : cn(hasRuby && "font-jp", "text-foreground"),
+                  isMetaNote ? "text-muted-foreground italic" : cn(hasRuby && "font-jp", "text-foreground"),
                 )}
               >
                 {renderInline(cleaned, `c${i}`)}
@@ -87,7 +87,7 @@ function FormattedMsg({ text, hasRuby }: { text: string; hasRuby: boolean }) {
         </div>
       )}
       {main && <p className={cn("text-sm leading-relaxed", hasRuby && "font-jp")}>{renderInline(main, "m")}</p>}
-      {english && <p className="text-xs text-muted-foreground italic mt-1.5">{english}</p>}
+      {translation && <p className="text-xs text-muted-foreground italic mt-1.5">{translation}</p>}
     </div>
   );
 }
@@ -104,6 +104,13 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, loading]);
+
+  // Abort any in-flight SSE stream on unmount
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   // Reset on episode change
   useEffect(() => {
@@ -147,6 +154,24 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
       });
     };
 
+    const processSseLine = (rawLine: string): "continue" | "done" | "incomplete" => {
+      const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+      if (line.startsWith(":") || line.trim() === "") return "continue";
+      if (!line.startsWith("data: ")) return "continue";
+      const json = line.slice(6).trim();
+      if (json === "[DONE]") return "done";
+      try {
+        const parsed = JSON.parse(json) as {
+          choices?: Array<{ delta?: { content?: string } }>;
+        };
+        const delta = parsed.choices?.[0]?.delta;
+        if (delta?.content) upsertAssistant(delta.content);
+        return "continue";
+      } catch {
+        return "incomplete";
+      }
+    };
+
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -171,7 +196,6 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
         else if (resp.status === 402) toast.error(t("discuss.creditsExhausted"));
         else toast.error(t("discuss.failed"));
         setLoading(false);
-        // remove the optimistic user message? leave it so they can retry
         return;
       }
 
@@ -182,30 +206,35 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
 
       while (!done) {
         const { value, done: streamDone } = await reader.read();
-        if (streamDone) break;
+        if (streamDone) {
+          buffer += decoder.decode();
+          break;
+        }
         buffer += decoder.decode(value, { stream: true });
 
         let nlIdx: number;
         while ((nlIdx = buffer.indexOf("\n")) !== -1) {
-          let line = buffer.slice(0, nlIdx);
+          const line = buffer.slice(0, nlIdx);
           buffer = buffer.slice(nlIdx + 1);
-          if (line.endsWith("\r")) line = line.slice(0, -1);
-          if (line.startsWith(":") || line.trim() === "") continue;
-          if (!line.startsWith("data: ")) continue;
-          const json = line.slice(6).trim();
-          if (json === "[DONE]") { done = true; break; }
-          try {
-            const parsed = JSON.parse(json);
-            const delta = parsed.choices?.[0]?.delta;
-            if (delta?.content) upsertAssistant(delta.content);
-          } catch {
+          const status = processSseLine(line);
+          if (status === "done") {
+            done = true;
+            break;
+          }
+          if (status === "incomplete") {
             buffer = line + "\n" + buffer;
             break;
           }
         }
       }
-    } catch (e: any) {
-      if (e?.name !== "AbortError") {
+
+      if (!done && buffer.trim()) {
+        for (const trailingLine of buffer.split("\n")) {
+          if (processSseLine(trailingLine) === "done") break;
+        }
+      }
+    } catch (e: unknown) {
+      if (!(e instanceof Error && e.name === "AbortError")) {
         console.error(e);
         toast.error(t("discuss.connectionLost"));
       }
@@ -217,7 +246,7 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
   const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      send();
+      void send();
     }
   };
 
@@ -255,7 +284,7 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
                 <Button
                   size="sm"
                   className="gradient-primary text-primary-foreground h-9"
-                  onClick={() => send(undefined, { autoStart: true })}
+                  onClick={() => void send(undefined, { autoStart: true })}
                 >
                   <MessageCircle className="h-4 w-4" /> {t("discuss.start")}
                 </Button>
@@ -316,7 +345,7 @@ export function EpisodeDiscussion({ episodeId, studiedWordCount }: Props) {
               disabled={loading}
             />
             <Button
-              onClick={() => send()}
+              onClick={() => void send()}
               disabled={loading || !input.trim()}
               size="icon"
               className="gradient-primary text-primary-foreground shrink-0"

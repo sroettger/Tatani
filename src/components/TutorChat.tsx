@@ -3,11 +3,18 @@ import ReactMarkdown from "react-markdown";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Sparkles, Send, X, BrainCircuit } from "lucide-react";
+import { Sparkles, Send, BrainCircuit } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { useI18n } from "@/i18n";
 import { scaleLabel } from "@/lib/languages";
+import {
+  computeNextSrsState,
+  KnownSourceKind,
+  WordPreferenceKind,
+  WordStateKind,
+} from "@/lib/srs";
+import { invalidateLocalSrsCache } from "@/lib/srs-store";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -25,6 +32,33 @@ type VocabItem = {
 type Msg = { role: "user" | "assistant"; content: string };
 
 type ToolCall = { name: string; args: Record<string, unknown> };
+
+interface StreamToolCallDelta {
+  id?: string;
+  index?: number;
+  function?: {
+    name?: string;
+    arguments?: string;
+  };
+}
+
+interface AccumulatedToolCall {
+  id?: string;
+  streamIndex?: number;
+  name: string;
+  args: string;
+}
+
+function isCompleteJsonObject(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return false;
+  try {
+    JSON.parse(trimmed);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export type TutorChatProps = {
   vocab: VocabItem[];
@@ -50,12 +84,17 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
     return t("tutor.greeting");
   }, [focusWord, t]);
 
-  // Auto-scroll on new content
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, loading]);
 
-  // If focusWord changes while open, prefill input
+  // Abort any in-flight SSE stream on unmount
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
   // Reset conversation whenever the focused word changes so context stays accurate.
   useEffect(() => {
     setMessages([]);
@@ -68,25 +107,56 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
     if (!user) return;
     const { data: existing } = await supabase
       .from("user_word_state")
-      .select("reading,level")
+      .select("reading,level,state,preference,known_source,correct_streak,srs_level,srs_due_at,last_reviewed_at,marked_known_at")
       .eq("user_id", user.id)
       .eq("word", word)
       .eq("learning_language", learningLanguage)
       .maybeSingle();
     const v = vocab.find((x) => x.word === word);
+    const rawLevel = existing?.level ?? v?.level ?? v?.jlpt_level ?? null;
+    const next = computeNextSrsState(
+      existing
+        ? {
+            word,
+            reading: existing.reading ?? null,
+            level: existing.level ?? null,
+            state: (existing.state ?? "unknown") as WordStateKind,
+            preference: (existing.preference ?? "study") as WordPreferenceKind,
+            known_source: (existing.known_source ?? null) as KnownSourceKind,
+            correct_streak: existing.correct_streak ?? 0,
+            srs_level: existing.srs_level ?? 0,
+            srs_due_at: existing.srs_due_at ?? null,
+            last_reviewed_at: existing.last_reviewed_at ?? null,
+            marked_known_at: existing.marked_known_at ?? null,
+          }
+        : undefined,
+      {
+        word,
+        reading: existing?.reading ?? v?.reading ?? word,
+        level: rawLevel === "none" ? null : rawLevel,
+      },
+      true,
+    );
+
     await supabase.from("user_word_state").upsert(
       {
         user_id: user.id,
-        word,
-        reading: existing?.reading ?? v?.reading ?? word,
-        level: (existing?.level ?? v?.level ?? v?.jlpt_level) ?? null,
+        word: next.word,
+        reading: next.reading,
+        level: next.level,
         learning_language: learningLanguage,
-        state: "known",
-        correct_streak: 3,
-        last_reviewed_at: new Date().toISOString(),
+        state: next.state,
+        preference: next.preference,
+        known_source: next.known_source,
+        correct_streak: Math.max(3, next.correct_streak),
+        srs_level: next.srs_level,
+        srs_due_at: next.srs_due_at,
+        last_reviewed_at: next.last_reviewed_at,
+        marked_known_at: next.marked_known_at ?? null,
       },
       { onConflict: "user_id,word,learning_language" },
     );
+    invalidateLocalSrsCache(user.id, learningLanguage);
     toast.success(t("tutor.markedKnown", { word }));
     onWordMarkedKnown?.(word);
   };
@@ -94,7 +164,7 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
   const handleToolCalls = (calls: ToolCall[]) => {
     for (const call of calls) {
       if (call.name === "mark_word_known" && call.args?.word) {
-        markWordKnown(String(call.args.word));
+        void markWordKnown(String(call.args.word));
       } else if (call.name === "start_mini_quiz") {
         const n = Math.max(3, Math.min(8, Number(call.args?.count) || 5));
         onStartQuiz?.(n);
@@ -124,8 +194,77 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
       });
     };
 
-    // Accumulate tool call arguments across deltas (they stream in fragments).
-    const toolAccum: Record<number, { name: string; args: string }> = {};
+    const toolAccum: AccumulatedToolCall[] = [];
+    const accumulateToolDelta = (tc: StreamToolCallDelta, arrayPos: number) => {
+      const fnName = tc.function?.name;
+      const fnArgs = tc.function?.arguments ?? "";
+
+      if (tc.id) {
+        const byId = toolAccum.find((entry) => entry.id === tc.id);
+        if (byId) {
+          if (fnName && !byId.name) byId.name = fnName;
+          byId.args += fnArgs;
+          return;
+        }
+        toolAccum.push({
+          id: tc.id,
+          streamIndex: tc.index ?? arrayPos,
+          name: fnName ?? "",
+          args: fnArgs,
+        });
+        return;
+      }
+
+      const targetIndex = tc.index ?? arrayPos;
+      let existing: AccumulatedToolCall | undefined;
+      for (let i = toolAccum.length - 1; i >= 0; i--) {
+        if (toolAccum[i].streamIndex === targetIndex) {
+          existing = toolAccum[i];
+          break;
+        }
+      }
+
+      if (
+        existing &&
+        (!fnName || !existing.name || (existing.name === fnName && !isCompleteJsonObject(existing.args)))
+      ) {
+        if (fnName && !existing.name) existing.name = fnName;
+        existing.args += fnArgs;
+        return;
+      }
+
+      toolAccum.push({
+        streamIndex: targetIndex,
+        name: fnName ?? "",
+        args: fnArgs,
+      });
+    };
+
+    const processSseLine = (rawLine: string): "continue" | "done" | "incomplete" => {
+      const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+      if (line.startsWith(":") || line.trim() === "") return "continue";
+      if (!line.startsWith("data: ")) return "continue";
+      const json = line.slice(6).trim();
+      if (json === "[DONE]") return "done";
+      try {
+        const parsed = JSON.parse(json) as {
+          choices?: Array<{
+            delta?: {
+              content?: string;
+              tool_calls?: StreamToolCallDelta[];
+            };
+          }>;
+        };
+        const delta = parsed.choices?.[0]?.delta;
+        if (delta?.content) upsertAssistant(delta.content);
+        if (Array.isArray(delta?.tool_calls)) {
+          delta.tool_calls.forEach((tc, pos) => accumulateToolDelta(tc, pos));
+        }
+        return "continue";
+      } catch {
+        return "incomplete";
+      }
+    };
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -140,6 +279,7 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${accessToken}`,
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
         },
         signal: controller.signal,
         body: JSON.stringify({
@@ -169,51 +309,48 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
 
       while (!done) {
         const { value, done: streamDone } = await reader.read();
-        if (streamDone) break;
+        if (streamDone) {
+          buffer += decoder.decode();
+          break;
+        }
         buffer += decoder.decode(value, { stream: true });
 
         let nlIdx: number;
         while ((nlIdx = buffer.indexOf("\n")) !== -1) {
-          let line = buffer.slice(0, nlIdx);
+          const line = buffer.slice(0, nlIdx);
           buffer = buffer.slice(nlIdx + 1);
-          if (line.endsWith("\r")) line = line.slice(0, -1);
-          if (line.startsWith(":") || line.trim() === "") continue;
-          if (!line.startsWith("data: ")) continue;
-          const json = line.slice(6).trim();
-          if (json === "[DONE]") {
+          const status = processSseLine(line);
+          if (status === "done") {
             done = true;
             break;
           }
-          try {
-            const parsed = JSON.parse(json);
-            const delta = parsed.choices?.[0]?.delta;
-            if (delta?.content) upsertAssistant(delta.content);
-            if (Array.isArray(delta?.tool_calls)) {
-              for (const tc of delta.tool_calls) {
-                const idx = tc.index ?? 0;
-                if (!toolAccum[idx]) toolAccum[idx] = { name: "", args: "" };
-                if (tc.function?.name) toolAccum[idx].name = tc.function.name;
-                if (tc.function?.arguments) toolAccum[idx].args += tc.function.arguments;
-              }
-            }
-          } catch {
+          if (status === "incomplete") {
             buffer = line + "\n" + buffer;
             break;
           }
         }
       }
 
-      // Fire any tool calls we accumulated
-      const calls: ToolCall[] = Object.values(toolAccum)
+      // Flush any trailing buffered lines after stream close
+      if (!done && buffer.trim()) {
+        for (const trailingLine of buffer.split("\n")) {
+          if (processSseLine(trailingLine) === "done") break;
+        }
+      }
+
+      const calls: ToolCall[] = toolAccum
         .filter((item) => item.name)
         .map((item) => {
           let args: Record<string, unknown> = {};
-          try { args = item.args ? (JSON.parse(item.args) as Record<string, unknown>) : {}; } catch { /* ignore */ }
+          try {
+            args = item.args ? (JSON.parse(item.args) as Record<string, unknown>) : {};
+          } catch {
+            // Ignore malformed tool args
+          }
           return { name: item.name, args };
         });
       if (calls.length) handleToolCalls(calls);
 
-      // If model returned ONLY tool calls with no text, surface a tiny confirmation
       if (!assistantSoFar && calls.length) {
         upsertAssistant("_(done)_");
       }
@@ -230,13 +367,12 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
   const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      send();
+      void send();
     }
   };
 
   return (
     <>
-      {/* Floating bubble */}
       <button
         onClick={() => setOpen(true)}
         aria-label={t("tutor.openAiTutor")}
@@ -310,7 +446,7 @@ export function TutorChat({ vocab, focusWord, onStartQuiz, onWordMarkedKnown }: 
               placeholder={t("tutor.inputPlaceholder")}
               disabled={loading}
             />
-            <Button onClick={send} disabled={loading || !input.trim()} size="icon" className="gradient-primary text-primary-foreground">
+            <Button onClick={() => void send()} disabled={loading || !input.trim()} size="icon" className="gradient-primary text-primary-foreground">
               <Send className="h-4 w-4" />
             </Button>
           </div>

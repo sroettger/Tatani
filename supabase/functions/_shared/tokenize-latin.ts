@@ -34,6 +34,9 @@ export function extractVocabLatin(text: string, lang: string): VocabEntry[] {
       const cur = map.get(key);
       if (cur) {
         cur.count++;
+        if (lang === "de" && !/^\p{Lu}/u.test(token)) {
+          cur.display = key;
+        }
         if (line.length <= 120 && line.length > cur.exampleLen && cur.exampleLen < 40) {
           cur.exampleIdx = i;
           cur.exampleLen = line.length;

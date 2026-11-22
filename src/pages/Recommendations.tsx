@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { Link } from "react-router-dom";
 import { useI18n } from "@/i18n";
 import { formatLevel } from "@/lib/languages";
+import { invalidateLocalSrsCache } from "@/lib/srs-store";
 
 type Recommendation = {
   anilist_id: number;
@@ -28,54 +29,69 @@ type Recommendation = {
 type Platform = "crunchyroll" | "netflix";
 
 export default function Recommendations() {
-  const { user, profile, progress } = useAuth();
+  const { user, profile, progress, learningLanguage, learningLanguageInfo } = useAuth();
   const { t } = useI18n();
   const [items, setItems] = useState<Recommendation[]>([]);
   const [loading, setLoading] = useState(false);
   const [adding, setAdding] = useState<number | null>(null);
   const [filters, setFilters] = useState<Set<Platform>>(new Set());
 
-  const country = (profile as any)?.country as string | null | undefined;
+  const userId = user?.id;
+  const country = profile?.country;
   const netflixLabel = country ? t("rec.netflixWithCountry", { country }) : t("rec.netflix");
 
-  const load = async (overrideFilters?: Set<Platform>) => {
-    if (!user) return;
-    const f = overrideFilters ?? filters;
-    setLoading(true);
-    const { data, error } = await supabase.functions.invoke("recommend-anime", {
-      body: { streaming_filters: Array.from(f) },
-    });
-    setLoading(false);
-    if (error) {
-      toast.error(t("rec.loadFailed"), { description: error.message });
-      return;
-    }
-    if (data?.error) {
-      toast.error(t("rec.loadFailed"), { description: data.error });
-      return;
-    }
-    setItems(data?.results ?? []);
-  };
+  const load = useCallback(
+    async (activeFilters: Set<Platform>) => {
+      if (!userId) return;
+      setLoading(true);
+      const { data, error } = await supabase.functions.invoke("recommend-anime", {
+        body: {
+          streaming_filters: Array.from(activeFilters),
+          learning_language: learningLanguage,
+        },
+      });
+      setLoading(false);
+      const payload = data as { error?: string; results?: Recommendation[] } | null;
+      if (error) {
+        toast.error(t("rec.loadFailed"), { description: error.message });
+        return;
+      }
+      if (payload?.error) {
+        toast.error(t("rec.loadFailed"), { description: payload.error });
+        return;
+      }
+      setItems(payload?.results ?? []);
+    },
+    [userId, learningLanguage, t],
+  );
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [user]);
+  useEffect(() => {
+    void load(new Set());
+    setFilters(new Set());
+  }, [load]);
 
   const toggleFilter = (p: Platform) => {
     const next = new Set(filters);
-    if (next.has(p)) next.delete(p); else next.add(p);
+    if (next.has(p)) next.delete(p);
+    else next.add(p);
     setFilters(next);
-    load(next);
+    void load(next);
   };
 
   const add = async (r: Recommendation) => {
     setAdding(r.anilist_id);
-    const { data, error } = await supabase.functions.invoke("add-anime-to-library", { body: { anime: r } });
+    const { data, error } = await supabase.functions.invoke("add-anime-to-library", {
+      body: { anime: r, learning_language: learningLanguage },
+    });
     setAdding(null);
-    if (error || data?.error) {
-      toast.error(t("rec.addFailed"), { description: error?.message ?? data?.error });
+    const payload = data as { error?: string } | null;
+    if (error || payload?.error) {
+      toast.error(t("rec.addFailed"), { description: error?.message ?? payload?.error });
       return;
     }
+    if (userId) invalidateLocalSrsCache(userId, learningLanguage);
     toast.success(t("rec.added"));
-    setItems(prev => prev.filter(x => x.anilist_id !== r.anilist_id));
+    setItems((prev) => prev.filter((x) => x.anilist_id !== r.anilist_id));
   };
 
   const level = progress?.level && progress.level !== "none" ? t("rec.levelLabel", { level: formatLevel(progress.level) }) : t("rec.title");
@@ -90,7 +106,7 @@ export default function Recommendations() {
 
       <div className="px-5 mb-3 flex items-center justify-between gap-2">
         <h2 className="text-lg font-semibold">{t("rec.picksTitle")}</h2>
-        <Button size="sm" variant="outline" onClick={() => load()} disabled={loading}>
+        <Button size="sm" variant="outline" onClick={() => void load(filters)} disabled={loading}>
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
           {t("rec.refresh")}
         </Button>
@@ -144,7 +160,7 @@ export default function Recommendations() {
             <p className="text-sm text-muted-foreground mb-4">
               {filters.size ? t("rec.noneFilterBody") : t("rec.noneBody")}
             </p>
-            <Button onClick={() => load()} className="gradient-primary text-primary-foreground">
+            <Button onClick={() => void load(filters)} className="gradient-primary text-primary-foreground">
               <RefreshCw className="h-4 w-4" /> {t("rec.generate")}
             </Button>
           </Card>
@@ -159,7 +175,7 @@ export default function Recommendations() {
               </div>
               <div className="flex-1 min-w-0">
                 <div className="font-semibold truncate">{r.title_en ?? r.title_romaji}</div>
-                {r.title_jp && <div className="font-jp text-xs text-muted-foreground truncate">{r.title_jp}</div>}
+                {r.title_jp && learningLanguageInfo.hasRuby && <div className="font-jp text-xs text-muted-foreground truncate">{r.title_jp}</div>}
                 <div className="text-xs text-muted-foreground mt-1">
                   {r.year ?? "—"} • {r.episode_count || "?"} eps
                 </div>
@@ -179,7 +195,7 @@ export default function Recommendations() {
             <div className="mt-3 flex justify-end">
               <Button
                 size="sm"
-                onClick={() => add(r)}
+                onClick={() => void add(r)}
                 disabled={adding === r.anilist_id}
                 className="gradient-primary text-primary-foreground"
               >

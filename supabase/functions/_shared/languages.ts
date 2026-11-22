@@ -1,4 +1,6 @@
 // Language configuration shared by all edge functions.
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+
 export type LearningLangCode = "ja" | "es" | "fr" | "de";
 
 type Info = {
@@ -29,23 +31,42 @@ export const langInfo = (code: string | null | undefined): Info =>
 export const uiLanguageName = (code: string | null | undefined): string =>
   code === "ja" ? "Japanese (日本語)" : "English";
 
-/** Fetch the learner's language settings. `supabase` must be a service-role client. */
+interface LanguageFilterChain {
+  eq: (column: string, value: string) => LanguageFilterChain;
+  maybeSingle: () => PromiseLike<{ data: unknown; error?: unknown }>;
+}
+
+export interface LanguageLookupClient {
+  from: (table: string) => {
+    select: (columns: string) => LanguageFilterChain;
+  };
+}
+
+/** Fetch the learner's language settings. `supabase` should be a service-role or user-scoped client. */
 export async function getUserLanguages(
-  supabase: any,
+  supabase: SupabaseClient | LanguageLookupClient,
   userId: string,
+  overrideLearningLang?: string | null,
 ): Promise<{ learning: Info; uiLanguage: string; level: string }> {
-  const { data: profile } = await supabase
+  const db = supabase as LanguageLookupClient;
+  const { data: rawProfile } = await db
     .from("profiles")
     .select("ui_language, learning_language")
     .eq("user_id", userId)
     .maybeSingle();
-  const learning = langInfo(profile?.learning_language);
-  const { data: prog } = await supabase
+  const profile = rawProfile as { ui_language?: string | null; learning_language?: string | null } | null;
+  const effectiveLangCode =
+    typeof overrideLearningLang === "string" && overrideLearningLang.trim().length > 0
+      ? overrideLearningLang.trim()
+      : profile?.learning_language;
+  const learning = langInfo(effectiveLangCode);
+  const { data: rawProg } = await db
     .from("user_language_progress")
     .select("level")
     .eq("user_id", userId)
     .eq("learning_language", learning.code)
     .maybeSingle();
+  const prog = rawProg as { level?: string | null } | null;
   return {
     learning,
     uiLanguage: profile?.ui_language === "ja" ? "ja" : "en",

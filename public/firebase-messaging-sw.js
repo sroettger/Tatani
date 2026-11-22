@@ -6,6 +6,12 @@ const messaging = firebase.messaging();
 const outbox = self.TataniPushOutbox.createOutbox();
 const SYNC_TAG = 'tatani-push-answers';
 const ICON_URL = new URL('./icon-192.png', self.location).pathname;
+const APP_BASE = (() => {
+  const scopePath = self.registration?.scope ? new URL(self.registration.scope, self.location).pathname : '';
+  if (scopePath.endsWith('/push/')) return scopePath.slice(0, -6);
+  return new URL(self.location).pathname.replace(/\/firebase-messaging-sw\.js$/, '');
+})();
+const resolvePath = (p) => (APP_BASE && typeof p === 'string' && p.startsWith('/notifications/') ? `${APP_BASE}${p}` : p);
 // Activate updated notification handling right away instead of waiting for the old worker to idle.
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
@@ -55,7 +61,7 @@ self.addEventListener('notificationclick', (event) => {
   n.close();
   // Recognize self-check payloads even on notifications created by an older worker.
   if (d.stage === 'quiz' || (d.l_know && d.stage === 'prompt')) {
-    if (event.action !== 'answer_0' && event.action !== 'answer_1' && event.action !== 'answer_dk') return event.waitUntil(self.clients.openWindow(d.path));
+    if (event.action !== 'answer_0' && event.action !== 'answer_1' && event.action !== 'answer_dk') return event.waitUntil(self.clients.openWindow(resolvePath(d.path)));
     event.waitUntil((async () => {
       try {
         const answer = event.action === 'answer_dk' ? -1 : Number(event.action.slice(-1));
@@ -67,7 +73,7 @@ self.addEventListener('notificationclick', (event) => {
           data: { ...d, stage: 'queued' },
         });
       } catch {
-        await self.clients.openWindow(d.path);
+        await self.clients.openWindow(resolvePath(d.path));
         return;
       }
       await requestRetry();
@@ -77,7 +83,7 @@ self.addEventListener('notificationclick', (event) => {
   }
   if (d.stage === 'done') return;
   if (d.stage === 'queued') return event.waitUntil(flushAnswers().catch(requestRetry));
-  if (d.stage === 'failed') return event.waitUntil(self.clients.openWindow(d.path));
+  if (d.stage === 'failed') return event.waitUntil(self.clients.openWindow(resolvePath(d.path)));
   const showAnswer = () => self.registration.showNotification(`${d.word}${d.reading && d.reading !== d.word ? ` (${d.reading})` : ''}`, {
     body: [d.meaning, d.example].filter(Boolean).join('\n'), tag: d.delivery_id, icon: ICON_URL, requireInteraction: true,
     data: { ...d, stage: 'answer' },
@@ -86,9 +92,9 @@ self.addEventListener('notificationclick', (event) => {
   const review = (remembered) => fetch(d.api, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'notification_review', delivery_id: d.delivery_id, token: d.token, remembered }),
-  }).then(response => { if (!response.ok) throw new Error('Review failed'); }).catch(() => self.clients.openWindow(d.path));
+  }).then(response => { if (!response.ok) throw new Error('Review failed'); }).catch(() => self.clients.openWindow(resolvePath(d.path)));
   if (event.action === 'yes' || event.action === 'no') return event.waitUntil(review(event.action === 'yes'));
   // Body tap or Reveal: reveal in place; tapping a revealed card opens the full review page.
   if (d.stage === 'prompt') return event.waitUntil(showAnswer());
-  event.waitUntil(self.clients.openWindow(d.path));
+  event.waitUntil(self.clients.openWindow(resolvePath(d.path)));
 });

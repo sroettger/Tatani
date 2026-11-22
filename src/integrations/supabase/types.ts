@@ -788,7 +788,7 @@ export type Database = {
       episode_status: "not_processed" | "processing" | "ready" | "failed"
       jlpt_level: "N5" | "N4" | "N3" | "N2" | "N1" | "none"
       quiz_type: "jp_to_meaning" | "meaning_to_jp" | "fill_blank"
-      study_mode: "review" | "quiz"
+      study_mode: "review" | "quiz" | "learn_context"
       subtitle_source: "auto" | "upload"
       word_preference: "study" | "kanji_only" | "skip"
       word_state: "unknown" | "learning" | "known"
@@ -923,7 +923,7 @@ export const Constants = {
       episode_status: ["not_processed", "processing", "ready", "failed"],
       jlpt_level: ["N5", "N4", "N3", "N2", "N1", "none"],
       quiz_type: ["jp_to_meaning", "meaning_to_jp", "fill_blank"],
-      study_mode: ["review", "quiz"],
+      study_mode: ["review", "quiz", "learn_context"],
       subtitle_source: ["auto", "upload"],
       word_preference: ["study", "kanji_only", "skip"],
       word_state: ["unknown", "learning", "known"],

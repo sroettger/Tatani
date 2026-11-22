@@ -16,10 +16,10 @@ export function AppShell() {
   const { t } = useI18n();
   return (
     <div className="min-h-screen flex flex-col bg-background overflow-x-hidden">
-      <main className="flex-1 pb-24 min-w-0 w-full">
+      <main className="flex-1 pb-[calc(6rem+env(safe-area-inset-bottom))] min-w-0 w-full">
         <Outlet />
       </main>
-      <nav className="fixed bottom-0 inset-x-0 z-40 border-t border-border bg-card/85 backdrop-blur-xl">
+      <nav className="fixed bottom-0 inset-x-0 z-40 border-t border-border bg-card/85 backdrop-blur-xl pb-[env(safe-area-inset-bottom)]">
         <div className="max-w-2xl mx-auto grid grid-cols-5">
           {tabs.map(({ to, labelKey, Icon }) => (
             <NavLink

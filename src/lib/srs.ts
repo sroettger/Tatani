@@ -40,10 +40,31 @@ export function dueAtFromDays(days: number, nowMs = Date.now()): string {
   return new Date(nowMs + days * 24 * 60 * 60 * 1000).toISOString();
 }
 
-export function nextIntervalDaysForGrade(prev: Pick<WordSrsRecord, "srs_level" | "srs_due_at"> | undefined, remembered: boolean): number {
-  if (!remembered) return SRS_INTERVALS_DAYS[0];
-  if (!prev || !prev.srs_due_at) return SRS_INTERVALS_DAYS[0];
-  const nextIdx = Math.min((prev.srs_level ?? 0) + 1, SRS_INTERVALS_DAYS.length - 1);
+function computeNextSrsLevel(
+  prev: Partial<Pick<WordSrsRecord, "srs_level" | "srs_due_at" | "state">> | undefined,
+  remembered: boolean,
+  nowMs: number,
+): number {
+  if (!remembered) return 0;
+  const wasGraduated = Boolean(prev?.srs_due_at);
+  if (!wasGraduated || prev?.state === "learning" || prev?.state === "unknown") {
+    return 0;
+  }
+  const maxIdx = SRS_INTERVALS_DAYS.length - 1;
+  const clampedPrev = Math.max(0, Math.min(prev?.srs_level ?? 0, maxIdx));
+  const dueMs = Date.parse(prev!.srs_due_at!);
+  if (Number.isFinite(dueMs) && nowMs < dueMs) {
+    return clampedPrev;
+  }
+  return Math.min(clampedPrev + 1, maxIdx);
+}
+
+export function nextIntervalDaysForGrade(
+  prev: Partial<Pick<WordSrsRecord, "srs_level" | "srs_due_at" | "state">> | undefined,
+  remembered: boolean,
+  nowMs = Date.now(),
+): number {
+  const nextIdx = computeNextSrsLevel(prev, remembered, nowMs);
   return SRS_INTERVALS_DAYS[nextIdx];
 }
 
@@ -54,14 +75,10 @@ export function computeNextSrsState(
   nowMs = Date.now(),
 ): WordSrsRecord {
   const nowIso = new Date(nowMs).toISOString();
-  const wasGraduated = Boolean(prev?.srs_due_at);
   const prevStreak = prev?.correct_streak ?? 0;
-  const prevLevel = prev?.srs_level ?? 0;
 
   if (remembered) {
-    const nextLevel = wasGraduated
-      ? Math.min(prevLevel + 1, SRS_INTERVALS_DAYS.length - 1)
-      : 0;
+    const nextLevel = computeNextSrsLevel(prev, true, nowMs);
     const days = SRS_INTERVALS_DAYS[nextLevel];
     return {
       word: meta.word,
@@ -207,4 +224,37 @@ export function splitSentenceWithHighlight(sentence: string, targetWord: string)
 export function extractKanjiCharacters(word: string): string[] {
   const chars = word.match(/[\u4e00-\u9faf\u3400-\u4dbf]/g) ?? [];
   return [...new Set(chars)];
+}
+
+export function computeDailyStreak(
+  timestamps: ReadonlyArray<string | null | undefined>,
+  now = new Date(),
+): number {
+  const toDayKey = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+  const activeDays = new Set<string>();
+  for (const ts of timestamps) {
+    if (!ts) continue;
+    const ms = Date.parse(ts);
+    if (Number.isFinite(ms)) {
+      activeDays.add(toDayKey(new Date(ms)));
+    }
+  }
+  if (activeDays.size === 0) return 0;
+
+  const cursor = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (!activeDays.has(toDayKey(cursor))) {
+    cursor.setDate(cursor.getDate() - 1);
+    if (!activeDays.has(toDayKey(cursor))) {
+      return 0;
+    }
+  }
+
+  let streak = 0;
+  while (activeDays.has(toDayKey(cursor))) {
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
 }

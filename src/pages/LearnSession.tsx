@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -75,17 +75,32 @@ export default function LearnSession() {
   const [drillRevealed, setDrillRevealed] = useState(false);
   const [drillHits, setDrillHits] = useState<Record<string, number>>({});
   const [graduatedCount, setGraduatedCount] = useState(0);
-  const [batchSeed, setBatchSeed] = useState(0);
 
-  const targetEpisodeId = episodeId ?? nextEpisode?.episodeId ?? null;
-
-  // Load explicit episode vocab when episodeId param is supplied and differs from cached nextEpisode
+  const cardsRef = useRef(cards);
   useEffect(() => {
-    if (!user || !targetEpisodeId) {
+    cardsRef.current = cards;
+  }, [cards]);
+
+  const loadedPoolKeyRef = useRef<string>("");
+  const targetEpisodeId = episodeId ?? nextEpisode?.episodeId ?? null;
+  const userId = user?.id;
+
+  // Load raw episode vocab pool once per (userId, targetEpisodeId, learningLanguage) without re-fetching on card mutations
+  useEffect(() => {
+    if (!userId || !targetEpisodeId) {
+      loadedPoolKeyRef.current = "";
+      setEpisodePool(null);
       setLoadingEpisode(false);
       return;
     }
+
+    const poolKey = `${userId}:${targetEpisodeId}:${learningLanguage}`;
+    if (loadedPoolKeyRef.current === poolKey) {
+      return;
+    }
+
     if (nextEpisode && nextEpisode.episodeId === targetEpisodeId && nextEpisode.words.length > 0) {
+      loadedPoolKeyRef.current = poolKey;
       setEpisodePool(nextEpisode.words);
       setLoadingEpisode(false);
       return;
@@ -109,10 +124,6 @@ export default function LearnSession() {
       ]);
       if (cancelled) return;
 
-      const myRank = levelRank(learningLanguage, progress?.level);
-      const isBelowLevel = (lvl: string | null | undefined) =>
-        myRank > 0 && (levelRank(learningLanguage, lvl ?? "none") || 99) < myRank;
-
       type EpisodeWithAnime = {
         episode_number?: number;
         seasons?: { anime?: { title_en?: string | null; title_romaji?: string | null } | null } | null;
@@ -122,13 +133,13 @@ export default function LearnSession() {
       const animeTitle = animeMeta?.title_en ?? animeMeta?.title_romaji ?? "";
       const epNumber = typedEp?.episode_number ?? 1;
       const rawList = ((cache?.vocab ?? []) as RawVocab[]);
+      const snapshotCards = cardsRef.current;
 
       const list: SrsDeckCard[] = [];
       for (const v of rawList) {
         if (!v.word || !v.meaning) continue;
         const lvl = v.level ?? v.jlpt_level ?? null;
-        const existing = cards[v.word];
-        if (!isUnlearnedCandidate(existing, isBelowLevel(lvl))) continue;
+        const existing = snapshotCards[v.word];
         list.push({
           word: v.word,
           reading: v.reading ?? existing?.reading ?? null,
@@ -162,6 +173,7 @@ export default function LearnSession() {
         const rB = levelRank(learningLanguage, b.level ?? "none") || 6;
         return b.frequency * 10 + Math.max(0, 6 - rB) - (a.frequency * 10 + Math.max(0, 6 - rA));
       });
+      loadedPoolKeyRef.current = poolKey;
       setEpisodePool(list);
       setLoadingEpisode(false);
     })();
@@ -169,7 +181,7 @@ export default function LearnSession() {
     return () => {
       cancelled = true;
     };
-  }, [user, targetEpisodeId, nextEpisode, learningLanguage, progress?.level, cards, batchSeed]);
+  }, [userId, targetEpisodeId, nextEpisode, learningLanguage]);
 
   const availableUnlearned = useMemo(() => {
     const source = episodePool ?? nextEpisode?.words ?? [];
@@ -214,14 +226,17 @@ export default function LearnSession() {
     [activeCard],
   );
 
+  const encodeWord = encodeCard?.word ?? null;
+  const encodeSpoken = encodeCard ? (encodeCard.reading || encodeCard.word) : "";
+
   // Auto-play pronunciation on each Encoding card so phonology + orthography + context bind immediately
   useEffect(() => {
-    if (phase === "encode" && encodeCard) {
-      speak(encodeCard.reading || encodeCard.word);
+    if (phase === "encode" && encodeWord && encodeSpoken) {
+      speak(encodeSpoken);
     }
-  }, [phase, encodeCard, speak]);
+  }, [phase, encodeWord, encodeSpoken, speak]);
 
-  const beginDrill = (encodedBatch: SrsDeckCard[]) => {
+  const beginDrill = useCallback((encodedBatch: SrsDeckCard[]) => {
     if (encodedBatch.length === 0) {
       setPhase("done");
       return;
@@ -231,9 +246,9 @@ export default function LearnSession() {
     setDrillHits({});
     setDrillRevealed(false);
     setGraduatedCount(0);
-  };
+  }, []);
 
-  const onAlreadyKnow = () => {
+  const onAlreadyKnow = useCallback(() => {
     if (!encodeCard) return;
     markPriorKnown(encodeCard);
     const batchWords = new Set(batch.map((b) => b.word));
@@ -250,63 +265,66 @@ export default function LearnSession() {
         beginDrill(updatedBatch);
       }
     }
-  };
+  }, [encodeCard, markPriorKnown, batch, availableUnlearned, encodeIdx, beginDrill]);
 
-  const onGotItEncode = () => {
+  const onGotItEncode = useCallback(() => {
     if (!encodeCard) return;
     if (encodeIdx + 1 < batch.length) {
       setEncodeIdx(encodeIdx + 1);
     } else {
       beginDrill(batch);
     }
-  };
+  }, [encodeCard, encodeIdx, batch, beginDrill]);
 
-  const onRevealDrill = () => {
+  const onRevealDrill = useCallback(() => {
     if (!drillCard || drillRevealed) return;
     setDrillRevealed(true);
     speak(drillCard.reading || drillCard.word);
-  };
+  }, [drillCard, drillRevealed, speak]);
 
-  const onGradeDrill = (recalled: boolean) => {
-    if (!drillCard) return;
-    const prevHits = drillHits[drillCard.word] ?? 0;
-    const nextHits = recalled ? prevHits + 1 : 0;
-    setDrillHits((h) => ({ ...h, [drillCard.word]: nextHits }));
-    setDrillRevealed(false);
+  const onGradeDrill = useCallback(
+    (recalled: boolean) => {
+      if (!drillCard) return;
+      const prevHits = drillHits[drillCard.word] ?? 0;
+      const nextHits = recalled ? prevHits + 1 : 0;
+      setDrillHits((h) => ({ ...h, [drillCard.word]: nextHits }));
+      setDrillRevealed(false);
 
-    const [head, ...rest] = drillQueue;
-    if (!head) return;
+      const [head, ...rest] = drillQueue;
+      if (!head) return;
 
-    if (recalled && nextHits >= LEARN_GRADUATION_RECALLS) {
-      // Graduate word into SRS!
-      gradeCard(head, true);
-      const nextGrad = graduatedCount + 1;
-      setGraduatedCount(nextGrad);
-      if (rest.length === 0) {
-        // Record completed study session asynchronously
-        if (user && targetEpisodeId) {
-          void supabase.from("study_sessions").insert({
-            user_id: user.id,
-            episode_id: targetEpisodeId,
-            mode: "learn_context",
-            words_studied: batch.length,
-            words_mastered: nextGrad,
-            learning_language: learningLanguage,
-            finished_at: new Date().toISOString(),
-          });
+      if (recalled && nextHits >= LEARN_GRADUATION_RECALLS) {
+        // Graduate word into SRS!
+        gradeCard(head, true);
+        const nextGrad = graduatedCount + 1;
+        setGraduatedCount(nextGrad);
+        if (rest.length === 0) {
+          // Record completed study session asynchronously
+          if (user && targetEpisodeId) {
+            void supabase.from("study_sessions").insert({
+              user_id: user.id,
+              episode_id: targetEpisodeId,
+              mode: "learn_context",
+              words_studied: batch.length,
+              words_mastered: nextGrad,
+              learning_language: learningLanguage,
+              finished_at: new Date().toISOString(),
+            });
+          }
+          setPhase("done");
         }
-        setPhase("done");
+        setDrillQueue(rest);
+        return;
       }
-      setDrillQueue(rest);
-      return;
-    }
 
-    // Expanding short-lag re-insertion within the micro-batch (Nakata, 2015)
-    const gap = recalled ? Math.min(3, rest.length) : Math.min(2, rest.length);
-    const nextQueue = [...rest];
-    nextQueue.splice(Math.max(rest.length > 0 ? 1 : 0, gap), 0, head);
-    setDrillQueue(nextQueue);
-  };
+      // Expanding short-lag re-insertion within the micro-batch (Nakata, 2015)
+      const gap = recalled ? Math.min(3, rest.length) : Math.min(2, rest.length);
+      const nextQueue = [...rest];
+      nextQueue.splice(Math.max(rest.length > 0 ? 1 : 0, gap), 0, head);
+      setDrillQueue(nextQueue);
+    },
+    [drillCard, drillHits, drillQueue, gradeCard, graduatedCount, user, targetEpisodeId, batch.length, learningLanguage],
+  );
 
   const startNextBatch = () => {
     setBatch([]);
@@ -315,7 +333,6 @@ export default function LearnSession() {
     setDrillHits({});
     setGraduatedCount(0);
     setPhase("encode");
-    setBatchSeed((s) => s + 1);
   };
 
   // Keyboard shortcuts for blazingly fast desktop/hardware-keyboard flow
@@ -347,7 +364,7 @@ export default function LearnSession() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  });
+  }, [phase, encodeCard, drillCard, drillRevealed, onGotItEncode, onAlreadyKnow, onRevealDrill, onGradeDrill]);
 
   if (loadingEpisode || (syncing && batch.length === 0 && availableUnlearned.length === 0)) {
     return (
@@ -553,7 +570,7 @@ export default function LearnSession() {
               id="learn-already-know"
               variant="outline"
               onClick={onAlreadyKnow}
-              className="col-span-2 h-15 py-3 rounded-xl flex flex-col items-center justify-center gap-0.5"
+              className="col-span-2 h-14 py-3 rounded-xl flex flex-col items-center justify-center gap-0.5"
             >
               <span className="inline-flex items-center gap-1 text-sm font-medium">
                 <FastForward className="h-3.5 w-3.5" />
@@ -565,7 +582,7 @@ export default function LearnSession() {
             <Button
               id="learn-got-it"
               onClick={onGotItEncode}
-              className="col-span-3 h-15 py-3 rounded-xl gradient-primary text-primary-foreground font-semibold text-base"
+              className="col-span-3 h-14 py-3 rounded-xl gradient-primary text-primary-foreground font-semibold text-base"
             >
               <span>
                 {encodeIdx + 1 < batch.length ? t("learn.gotIt") : t("learn.startDrill")}

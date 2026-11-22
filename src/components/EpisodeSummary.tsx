@@ -22,7 +22,6 @@ type Summary = {
 const TTS_LANG: Record<string, string> = { ja: "ja-JP", es: "es-ES", fr: "fr-FR", de: "de-DE" };
 const ttsLangFor = (code: string) => TTS_LANG[code] ?? "en-US";
 
-// Render text with **word** highlighted as primary-colored chips.
 function HighlightedText({ text, hasRuby }: { text: string; hasRuby: boolean }) {
   const parts = text.split(/(\*\*[^*]+\*\*)/g);
   return (
@@ -53,19 +52,36 @@ export function EpisodeSummary({ episodeId, studiedWordCount }: Props) {
   const [generating, setGenerating] = useState(false);
   const [showEn, setShowEn] = useState(false);
 
-  // Load cached summary on mount
+  const userId = user?.id;
+
   useEffect(() => {
+    if (!userId || !episodeId) return;
+    let cancelled = false;
     (async () => {
-      if (!user || !episodeId) return;
       setLoading(true);
       const { data } = await supabase
         .from("episode_summaries")
         .select("summary_jp,summary_en,used_words")
-        .eq("user_id", user.id).eq("episode_id", episodeId).eq("learning_language", learningLanguage).maybeSingle();
-      if (data) setSummary(data as any);
+        .eq("user_id", userId)
+        .eq("episode_id", episodeId)
+        .eq("learning_language", learningLanguage)
+        .maybeSingle();
+      if (cancelled) return;
+      if (data) {
+        setSummary({
+          summary_jp: data.summary_jp,
+          summary_en: data.summary_en,
+          used_words: Array.isArray(data.used_words) ? (data.used_words as string[]) : [],
+        });
+      } else {
+        setSummary(null);
+      }
       setLoading(false);
     })();
-  }, [user, episodeId, learningLanguage]);
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, episodeId, learningLanguage]);
 
   const generate = async (force = false) => {
     setGenerating(true);
@@ -77,21 +93,23 @@ export function EpisodeSummary({ episodeId, studiedWordCount }: Props) {
       toast.error(t("summary.failed"), { description: error.message });
       return;
     }
-    if ((data as any)?.error) {
-      toast.error(t("summary.failed"), { description: (data as any).error });
+    const payload = data as ({ error?: string; cached?: boolean } & Partial<Summary>) | null;
+    if (payload?.error) {
+      toast.error(t("summary.failed"), { description: payload.error });
       return;
     }
-    setSummary({
-      summary_jp: data.summary_jp,
-      summary_en: data.summary_en,
-      used_words: data.used_words ?? [],
-    });
-    if (!data.cached) toast.success(t("summary.ready"));
+    if (payload) {
+      setSummary({
+        summary_jp: payload.summary_jp ?? "",
+        summary_en: payload.summary_en ?? "",
+        used_words: payload.used_words ?? [],
+      });
+      if (!payload.cached) toast.success(t("summary.ready"));
+    }
   };
 
   const speak = (text: string) => {
     if (!("speechSynthesis" in window)) return;
-    // Strip ** markers before speaking
     const clean = text.replace(/\*\*/g, "");
     const u = new SpeechSynthesisUtterance(clean);
     u.lang = ttsLangFor(learningLanguage);
@@ -101,7 +119,6 @@ export function EpisodeSummary({ episodeId, studiedWordCount }: Props) {
 
   if (loading) return null;
 
-  // Empty state — prompt user to generate
   if (!summary) {
     return (
       <Card className="p-4 mb-6 gradient-card border-border/50">
@@ -117,7 +134,7 @@ export function EpisodeSummary({ episodeId, studiedWordCount }: Props) {
             <Button
               size="sm"
               className="gradient-primary text-primary-foreground h-9"
-              onClick={() => generate(false)}
+              onClick={() => void generate(false)}
               disabled={generating || studiedWordCount === 0}
               title={studiedWordCount === 0 ? t("summary.studyFirst") : ""}
             >
@@ -146,7 +163,7 @@ export function EpisodeSummary({ episodeId, studiedWordCount }: Props) {
             size="sm"
             variant="ghost"
             className="h-7 px-2 text-xs"
-            onClick={() => generate(true)}
+            onClick={() => void generate(true)}
             disabled={generating}
             title={t("summary.regenerate")}
           >
@@ -162,7 +179,7 @@ export function EpisodeSummary({ episodeId, studiedWordCount }: Props) {
           size="sm"
           variant="outline"
           className="h-7 px-2 text-xs"
-          onClick={() => setShowEn(s => !s)}
+          onClick={() => setShowEn((s) => !s)}
         >
           {showEn ? t("summary.hide") : t("summary.show")} {t("summary.translation")}
         </Button>

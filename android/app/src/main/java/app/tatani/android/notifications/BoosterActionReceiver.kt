@@ -15,9 +15,11 @@ import androidx.core.content.ContextCompat
 import app.tatani.android.MainActivity
 import app.tatani.android.R
 import app.tatani.android.TataniApp
+import app.tatani.android.domain.SrsEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class BoosterActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -31,9 +33,11 @@ class BoosterActionReceiver : BroadcastReceiver() {
                 val app = context.applicationContext as TataniApp
                 val dao = app.database.dao()
                 val card = dao.getWordCard(word, lang) ?: return@launch
-                app.repository.gradeCardOptimistic(card, remembered)
+                val now = System.currentTimeMillis()
+                val nextDays = SrsEngine.nextIntervalDays(card.toSrsSnapshot(), remembered, now)
+                app.repository.gradeCardOptimistic(card, remembered, nowMs = now, autoFlush = false)
 
-                // Re-alert on the same notification ID with reading + translation so feedback stays visible
+                // Re-alert silently on the same notification ID with reading + meaning + example sentence
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
                     ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
                 ) {
@@ -42,6 +46,21 @@ class BoosterActionReceiver : BroadcastReceiver() {
                     } else {
                         card.word
                     }
+                    val summaryLine = "$label — ${card.meaning}"
+                    val contexts = app.repository.decodeContexts(card)
+                    val ctx = SrsEngine.pickContextualSentence(contexts, card.srsLevel)
+                    val bigText = buildString {
+                        append(summaryLine)
+                        if (ctx != null) {
+                            append("\n")
+                            append(ctx.jp)
+                            if (ctx.en.isNotBlank()) {
+                                append("\n")
+                                append(ctx.en)
+                            }
+                        }
+                    }
+
                     val openIntent = PendingIntent.getActivity(
                         context,
                         word.hashCode(),
@@ -49,15 +68,28 @@ class BoosterActionReceiver : BroadcastReceiver() {
                         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                     )
                     val feedback = NotificationCompat.Builder(context, CHANNEL_ID)
-                        .setSmallIcon(R.mipmap.ic_launcher)
-                        .setContentTitle(if (remembered) "Correct" else "Review again")
-                        .setContentText("$label — ${card.meaning}")
+                        .setSmallIcon(R.drawable.ic_stat_tatani)
+                        .setContentTitle(
+                            if (remembered) "Correct · Next in ${nextDays}d"
+                            else "Review again · 1d"
+                        )
+                        .setContentText(summaryLine)
+                        .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
                         .setContentIntent(openIntent)
+                        .setSilent(true)
                         .setAutoCancel(true)
                         .setPriority(NotificationCompat.PRIORITY_HIGH)
                         .build()
 
                     NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, feedback)
+                }
+
+                val flushed = withTimeoutOrNull(7_500L) {
+                    app.repository.flushOutbox()
+                } ?: false
+
+                if (!flushed) {
+                    OutboxSyncWorker.enqueue(context)
                 }
             } finally {
                 pendingResult.finish()

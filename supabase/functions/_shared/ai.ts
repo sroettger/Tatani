@@ -65,3 +65,46 @@ export async function callAiChatCompletions(
     body: JSON.stringify(body),
   });
 }
+
+export type ValidatedChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+export function validateClientMessages(
+  raw: unknown,
+  options?: { allowEmpty?: boolean; maxMessages?: number; maxCharsPerMessage?: number },
+): { ok: true; messages: ValidatedChatMessage[] } | { ok: false; error: string } {
+  const maxMessages = options?.maxMessages ?? 40;
+  const maxChars = options?.maxCharsPerMessage ?? 4_000;
+
+  if (!Array.isArray(raw)) {
+    return { ok: false, error: "messages must be an array" };
+  }
+  if (!options?.allowEmpty && raw.length === 0) {
+    return { ok: false, error: "messages required" };
+  }
+  if (raw.length > maxMessages) {
+    return { ok: false, error: `Too many messages (max ${maxMessages})` };
+  }
+
+  const out: ValidatedChatMessage[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") {
+      return { ok: false, error: "Each message must be an object" };
+    }
+    const { role, content } = item as { role?: unknown; content?: unknown };
+    if (role !== "user" && role !== "assistant") {
+      return { ok: false, error: "Message role must be 'user' or 'assistant'" };
+    }
+    if (typeof content !== "string") {
+      return { ok: false, error: "Message content must be a string" };
+    }
+    if (content.length > maxChars) {
+      return { ok: false, error: `Message exceeds max length of ${maxChars} characters` };
+    }
+    out.push({ role, content });
+  }
+
+  return { ok: true, messages: out };
+}

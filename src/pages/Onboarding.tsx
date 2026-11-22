@@ -11,7 +11,7 @@ import { useI18n } from "@/i18n";
 import { levelsFor, levelRank, levelFromRank, getLearningLanguage, LEARNING_LANGUAGES, LearningLangCode } from "@/lib/languages";
 import { SUPPORTED_LANGUAGES, LangCode } from "@/i18n/strings";
 import { buildPlacementQuiz } from "@/lib/placementBank";
-
+import { invalidateLocalSrsCache } from "@/lib/srs-store";
 
 type Question = {
   prompt: string;
@@ -47,7 +47,6 @@ export default function Onboarding() {
     if (phase === "uiLang" && langProgress?.placement_done) navigate("/", { replace: true });
   }, [langProgress, navigate, phase]);
 
-
   const startQuiz = () => {
     const qs = buildPlacementQuiz(learningLanguage as LearningLangCode, lang);
     if (!qs.length) {
@@ -61,7 +60,6 @@ export default function Onboarding() {
     setPhase("quiz");
   };
 
-
   const current = questions[idx];
 
   const pickAnswer = async (choiceIdx: number) => {
@@ -72,7 +70,6 @@ export default function Onboarding() {
     if (idx + 1 < questions.length) {
       setIdx(idx + 1);
     } else {
-      // compute level: highest level where they got >=50% correct
       const byLevel: Record<string, { c: number; t: number }> = {};
       for (const a of next) {
         const k = qLevel(a.q);
@@ -83,13 +80,17 @@ export default function Onboarding() {
       let bestRank = 1;
       for (let r = levels.length; r >= 1; r--) {
         const stat = byLevel[levels[r - 1]];
-        if (stat && stat.c / stat.t >= 0.5) { bestRank = r; break; }
+        if (stat && stat.c / stat.t >= 0.5) {
+          bestRank = r;
+          break;
+        }
       }
       const level = levelFromRank(learningLanguage, bestRank);
       setResultLevel(level);
 
-      // Seed known words: every word answered correctly + every word at or below level
+      // Seed prior-known words: every word answered correctly + every word at or below level
       if (user) {
+        const nowIso = new Date().toISOString();
         const seedRows = next
           .filter((a) => a.correct || levelRank(learningLanguage, qLevel(a.q)) <= bestRank)
           .map((a) => ({
@@ -97,12 +98,15 @@ export default function Onboarding() {
             word: qWord(a.q),
             reading: a.q.reading ?? null,
             state: "known" as const,
+            known_source: "prior" as const,
+            marked_known_at: nowIso,
             level: qLevel(a.q) || null,
             learning_language: learningLanguage,
           }))
           .filter((r) => r.word);
         if (seedRows.length) {
           await supabase.from("user_word_state").upsert(seedRows, { onConflict: "user_id,word,learning_language" });
+          invalidateLocalSrsCache(user.id, learningLanguage);
         }
         await supabase
           .from("user_language_progress")
@@ -159,7 +163,7 @@ export default function Onboarding() {
                 disabled={busy}
                 variant={lang === l.code ? "default" : "outline"}
                 className="h-12 justify-start"
-                onClick={() => pickUiLanguage(l.code)}
+                onClick={() => void pickUiLanguage(l.code)}
               >
                 {l.native}
               </Button>
@@ -183,7 +187,7 @@ export default function Onboarding() {
                 disabled={busy}
                 variant={learningLanguage === l.code ? "default" : "outline"}
                 className="h-12 justify-start"
-                onClick={() => pickLearnLanguage(l.code)}
+                onClick={() => void pickLearnLanguage(l.code)}
               >
                 <span className="mr-2">{l.flag}</span> {l.native}
               </Button>
@@ -270,7 +274,7 @@ export default function Onboarding() {
               key={i}
               variant="outline"
               className="h-auto min-h-12 py-3 text-left justify-start whitespace-normal"
-              onClick={() => pickAnswer(i)}
+              onClick={() => void pickAnswer(i)}
             >
               <span className="text-muted-foreground mr-3">{String.fromCharCode(65 + i)}.</span>
               <span className="flex-1">{c}</span>
@@ -279,7 +283,7 @@ export default function Onboarding() {
           <Button
             variant="ghost"
             className="h-12 mt-2 text-muted-foreground"
-            onClick={() => pickAnswer(-1)}
+            onClick={() => void pickAnswer(-1)}
           >
             {t("onboarding.dontKnow")}
           </Button>

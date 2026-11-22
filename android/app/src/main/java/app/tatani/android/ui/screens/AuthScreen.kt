@@ -1,5 +1,6 @@
 package app.tatani.android.ui.screens
 
+import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -11,8 +12,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -56,7 +59,8 @@ fun AuthScreen(
             .fillMaxSize()
             .systemBarsPadding()
             .imePadding()
-            .padding(horizontal = 24.dp),
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -75,7 +79,7 @@ fun AuthScreen(
                     style = MaterialTheme.typography.headlineMedium,
                 )
                 Text(
-                    text = "High-speed Japanese SRS & contextual anime vocabulary.",
+                    text = "High-speed contextual SRS & anime vocabulary.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = WashiMuted,
                 )
@@ -140,7 +144,7 @@ fun AuthScreen(
                 OutlinedButton(
                     onClick = {
                         CustomTabsIntent.Builder().build()
-                            .launchUrl(context, viewModel.googleOAuthUri())
+                            .launchUrl(context, Uri.parse(viewModel.googleOAuthUrl()))
                     },
                     enabled = !busy,
                     shape = RoundedCornerShape(14.dp),

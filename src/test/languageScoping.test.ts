@@ -6,6 +6,7 @@ import path from "node:path";
  * Guardrail: every read/write against a language-scoped table must also
  * constrain `learning_language`, otherwise data leaks between the languages
  * a user is learning (e.g. a German anime showing up in the Japanese library).
+ * Likewise, every `episode_vocab_cache` query across `src/` must filter on `language`.
  */
 const SCOPED_TABLES = [
   "user_anime",
@@ -41,15 +42,14 @@ const walk = (dir: string): string[] => {
 type CallSite = { file: string; line: number; table: string; chain: string };
 
 /** Extract each `.from("<table>")` chain up to the end of the statement. */
-const callSites = (file: string): CallSite[] => {
+const callSites = (file: string, tables: readonly string[] = SCOPED_TABLES): CallSite[] => {
   const src = readFileSync(file, "utf8");
   const sites: CallSite[] = [];
   const re = /\.from\(\s*["'`](\w+)["'`]\s*\)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(src))) {
     const table = m[1];
-    if (!SCOPED_TABLES.includes(table)) continue;
-    // Chain ends at the first `;` after the call, or 800 chars in.
+    if (!tables.includes(table)) continue;
     const rest = src.slice(m.index, m.index + 1200);
     const end = rest.indexOf(";");
     const chain = end === -1 ? rest : rest.slice(0, end);
@@ -72,15 +72,24 @@ const scopesLanguage = (chain: string) =>
   Object.keys(ALLOWLIST).some((k) => chain.includes(`/* lint:${k} */`));
 
 describe("language scoping guardrail", () => {
-  const sites = ROOTS.flatMap((r) => walk(r)).flatMap(callSites);
+  const sites = ROOTS.flatMap((r) => walk(r)).flatMap((f) => callSites(f, SCOPED_TABLES));
+  const vocabCacheSites = walk("src").flatMap((f) => callSites(f, ["episode_vocab_cache"]));
 
   it("finds the language-scoped query call sites", () => {
     expect(sites.length).toBeGreaterThan(10);
+    expect(vocabCacheSites.length).toBeGreaterThan(0);
   });
 
   it("every language-scoped query filters on learning_language", () => {
     const offenders = sites
       .filter((s) => !scopesLanguage(s.chain))
+      .map((s) => `${s.file}:${s.line} -> ${s.table}`);
+    expect(offenders).toEqual([]);
+  });
+
+  it("every episode_vocab_cache query in src/ filters on language", () => {
+    const offenders = vocabCacheSites
+      .filter((s) => !/\.eq\(\s*["'`]language["'`]/.test(s.chain))
       .map((s) => `${s.file}:${s.line} -> ${s.table}`);
     expect(offenders).toEqual([]);
   });

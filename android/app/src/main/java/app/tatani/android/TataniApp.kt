@@ -1,9 +1,7 @@
 package app.tatani.android
 
 import android.app.Application
-import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import app.tatani.android.data.TataniRepository
@@ -12,6 +10,7 @@ import app.tatani.android.data.remote.SessionStore
 import app.tatani.android.data.remote.SupabaseClient
 import app.tatani.android.notifications.BoosterActionReceiver
 import app.tatani.android.notifications.DueBoosterWorker
+import app.tatani.android.notifications.OutboxSyncWorker
 import java.util.concurrent.TimeUnit
 
 class TataniApp : Application() {
@@ -29,21 +28,21 @@ class TataniApp : Application() {
         database = TataniDatabase.get(this)
         sessionStore = SessionStore(this)
         supabaseClient = SupabaseClient(sessionStore)
-        repository = TataniRepository(database.dao(), sessionStore, supabaseClient)
+        repository = TataniRepository(
+            dao = database.dao(),
+            sessionStore = sessionStore,
+            supabase = supabaseClient,
+            onOutboxFlushFailed = { OutboxSyncWorker.enqueue(this) },
+        )
 
         BoosterActionReceiver.ensureChannel(this)
 
         val work = PeriodicWorkRequestBuilder<DueBoosterWorker>(1, TimeUnit.HOURS)
-            .setConstraints(
-                Constraints.Builder()
-                    .setRequiredNetworkType(NetworkType.CONNECTED)
-                    .build()
-            )
             .build()
 
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
             "tatani_graduated_srs_booster",
-            ExistingPeriodicWorkPolicy.KEEP,
+            ExistingPeriodicWorkPolicy.UPDATE,
             work
         )
     }

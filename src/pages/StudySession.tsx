@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -7,20 +7,51 @@ import { ChevronLeft, Volume2, Check, X, RotateCw, Languages } from "lucide-reac
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { toast } from "sonner";
 import { TutorChat } from "@/components/TutorChat";
 import { Furigana } from "@/components/Furigana";
 import { useI18n } from "@/i18n";
 import { levelRank } from "@/lib/languages";
+import {
+  computeNextSrsState,
+  KnownSourceKind,
+  WordPreferenceKind,
+  WordSrsRecord,
+  WordStateKind,
+} from "@/lib/srs";
+import { invalidateLocalSrsCache } from "@/lib/srs-store";
+import { fetchBatchedPages } from "@/lib/supabase-pagination";
 import { cn } from "@/lib/utils";
 
 const TTS_LANG: Record<string, string> = { ja: "ja-JP", es: "es-ES", fr: "fr-FR", de: "de-DE" };
 const ttsLangFor = (code: string) => TTS_LANG[code] ?? "en-US";
 
 type VocabItem = {
-  word: string; reading: string; meaning: string; part_of_speech: string;
-  jlpt_level?: string; level?: string; example_sentence_jp: string; example_sentence_en: string;
+  word: string;
+  reading: string;
+  meaning: string;
+  part_of_speech: string;
+  jlpt_level?: string;
+  level?: string;
+  example_sentence_jp: string;
+  example_sentence_en: string;
 };
+
+type StateDbRow = {
+  word: string;
+  reading: string | null;
+  level: string | null;
+  state: string | null;
+  preference: string | null;
+  known_source: string | null;
+  correct_streak: number | null;
+  srs_level: number | null;
+  srs_due_at: string | null;
+  last_reviewed_at: string | null;
+  marked_known_at: string | null;
+};
+
+const KANJI_THRESHOLD = 2;
+const getLevel = (v: VocabItem) => v.level ?? v.jlpt_level ?? "none";
 
 export default function StudySession() {
   const { episodeId } = useParams();
@@ -29,10 +60,9 @@ export default function StudySession() {
   const { t } = useI18n();
   const [vocab, setVocab] = useState<VocabItem[]>([]);
   const [knownWords, setKnownWords] = useState<Set<string>>(new Set());
-  // word -> current correct_streak; words at >=2 show kanji, otherwise hiragana
   const [streaks, setStreaks] = useState<Record<string, number>>({});
-  const KANJI_THRESHOLD = 2;
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const wordRecordsRef = useRef<Record<string, WordSrsRecord>>({});
 
   // review state
   const [reviewIdx, setReviewIdx] = useState(0);
@@ -47,49 +77,95 @@ export default function StudySession() {
   const [done, setDone] = useState<"none" | "review" | "quiz">("none");
   const [showFurigana, setShowFurigana] = useState(false);
 
-  const getLevel = (v: VocabItem) => v.level ?? v.jlpt_level ?? "none";
+  const userId = user?.id;
 
   useEffect(() => {
-    if (!episodeId || !user) return;
+    if (!episodeId || !userId) return;
+    let cancelled = false;
     (async () => {
-      const { data: cache } = await supabase.from("episode_vocab_cache").select("vocab").eq("episode_id", episodeId).maybeSingle();
-      const all = ((cache?.vocab ?? []) as VocabItem[]);
-      const { data: states } = await supabase
-        .from("user_word_state")
-        .select("word,state,correct_streak")
-        .eq("user_id", user.id)
-        .eq("learning_language", learningLanguage);
-      const knownSet = new Set((states ?? []).filter((k: any) => k.state === "known").map((k: any) => k.word));
-      // Words the user has explicitly interacted with (added back, learning, etc.) — never auto-skip these.
-      const trackedSet = new Set((states ?? []).map((k: any) => k.word));
+      const { data: cache } = await supabase
+        .from("episode_vocab_cache")
+        .select("vocab")
+        .eq("episode_id", episodeId)
+        .eq("language", learningLanguage)
+        .maybeSingle();
+      if (cancelled) return;
+
+      const all = (Array.isArray(cache?.vocab) ? cache.vocab : []) as VocabItem[];
+      const epWords = Array.from(new Set(all.map((v) => v.word).filter(Boolean)));
+
+      const { data: stateRows } = epWords.length > 0
+        ? await fetchBatchedPages<string, StateDbRow>(epWords, 200, (slice, from, to) =>
+            supabase
+              .from("user_word_state")
+              .select("word,reading,level,state,preference,known_source,correct_streak,srs_level,srs_due_at,last_reviewed_at,marked_known_at")
+              .eq("user_id", userId)
+              .eq("learning_language", learningLanguage)
+              .in("word", slice)
+              .order("word", { ascending: true })
+              .range(from, to),
+          )
+        : { data: [] as StateDbRow[] };
+      if (cancelled) return;
+
+      const knownSet = new Set<string>();
+      const trackedSet = new Set<string>();
       const streakMap: Record<string, number> = {};
-      (states ?? []).forEach((s: any) => { streakMap[s.word] = s.correct_streak ?? 0; });
+      const recordMap: Record<string, WordSrsRecord> = {};
+
+      for (const s of stateRows) {
+        trackedSet.add(s.word);
+        if (s.state === "known") knownSet.add(s.word);
+        streakMap[s.word] = s.correct_streak ?? 0;
+        recordMap[s.word] = {
+          word: s.word,
+          reading: s.reading ?? null,
+          level: s.level ?? null,
+          state: (s.state ?? "unknown") as WordStateKind,
+          preference: (s.preference ?? "study") as WordPreferenceKind,
+          known_source: (s.known_source ?? null) as KnownSourceKind,
+          correct_streak: s.correct_streak ?? 0,
+          srs_level: s.srs_level ?? 0,
+          srs_due_at: s.srs_due_at ?? null,
+          last_reviewed_at: s.last_reviewed_at ?? null,
+          marked_known_at: s.marked_known_at ?? null,
+        };
+      }
+
+      wordRecordsRef.current = recordMap;
       setKnownWords(knownSet);
       setStreaks(streakMap);
 
-      // Apply same level filter as EpisodeDetail: skip words below the user's level
-      // unless they were explicitly added back / are being tracked.
       const myRank = levelRank(learningLanguage, progress?.level);
       const isBelowLevel = (lvl: string) => myRank > 0 && (levelRank(learningLanguage, lvl) || 99) < myRank;
 
-      setVocab(all.filter(v =>
-        !knownSet.has(v.word) &&
-        (!isBelowLevel(getLevel(v)) || trackedSet.has(v.word))
-      ));
+      setVocab(
+        all.filter(
+          (v) => !knownSet.has(v.word) && (!isBelowLevel(getLevel(v)) || trackedSet.has(v.word)),
+        ),
+      );
 
       const { data: sess } = await supabase
         .from("study_sessions")
-        .insert({ user_id: user.id, episode_id: episodeId, mode: "review", words_studied: 0, words_mastered: 0, learning_language: learningLanguage })
-        .select("id").single();
-      if (sess) setSessionId(sess.id);
+        .insert({
+          user_id: userId,
+          episode_id: episodeId,
+          mode: "review",
+          words_studied: 0,
+          words_mastered: 0,
+          learning_language: learningLanguage,
+        })
+        .select("id")
+        .single();
+      if (!cancelled && sess) setSessionId(sess.id);
     })();
-  }, [episodeId, user, progress?.level, learningLanguage]);
+    return () => {
+      cancelled = true;
+    };
+  }, [episodeId, userId, progress?.level, learningLanguage]);
 
-  // Quiz only shows words the user hasn't already marked as known (either before
-  // this session or during the review tab). Review keeps the original list so users
-  // can still see/skip cards in order.
   const quizVocab = useMemo(
-    () => vocab.filter(v => !knownWords.has(v.word)),
+    () => vocab.filter((v) => !knownWords.has(v.word)),
     [vocab, knownWords],
   );
 
@@ -97,38 +173,84 @@ export default function StudySession() {
   const quizCard = quizVocab[quizIdx];
 
   const recordWordOptimistic = (word: string, reading: string, level: string, gotItRight: boolean) => {
-    const prevStreak = streaks[word] ?? 0;
-    const newStreak = gotItRight ? prevStreak + 1 : 0;
-    setStreaks(prev => ({ ...prev, [word]: newStreak }));
+    const prevRecord = wordRecordsRef.current[word];
+    const nextRecord = computeNextSrsState(
+      prevRecord,
+      {
+        word,
+        reading: reading || null,
+        level: level === "none" ? null : level,
+      },
+      gotItRight,
+    );
+    wordRecordsRef.current[word] = nextRecord;
+    setStreaks((prev) => ({ ...prev, [word]: nextRecord.correct_streak }));
+    if (gotItRight) {
+      setKnownWords((prev) => new Set([...prev, word]));
+    }
     if (!user) return;
 
-    void supabase.from("user_word_state").upsert({
-      user_id: user.id, word, reading, level: level === "none" ? null : level, learning_language: learningLanguage,
-      correct_streak: newStreak, last_reviewed_at: new Date().toISOString(),
-    }, { onConflict: "user_id,word,learning_language" });
+    void supabase
+      .from("user_word_state")
+      .upsert(
+        {
+          user_id: user.id,
+          word: nextRecord.word,
+          reading: nextRecord.reading,
+          level: nextRecord.level,
+          learning_language: learningLanguage,
+          state: nextRecord.state,
+          preference: nextRecord.preference,
+          known_source: nextRecord.known_source,
+          correct_streak: nextRecord.correct_streak,
+          srs_level: nextRecord.srs_level,
+          srs_due_at: nextRecord.srs_due_at,
+          last_reviewed_at: nextRecord.last_reviewed_at,
+          marked_known_at: nextRecord.marked_known_at ?? null,
+        },
+        { onConflict: "user_id,word,learning_language" },
+      )
+      .then(() => {
+        invalidateLocalSrsCache(user.id, learningLanguage);
+      });
+  };
+
+  const finish = async (mode: "review" | "quiz", masteredOverride?: number) => {
+    setDone(mode);
+    if (sessionId) {
+      await supabase.from("study_sessions").update({
+        finished_at: new Date().toISOString(),
+        words_studied: vocab.length,
+        words_mastered: masteredOverride ?? (mode === "review" ? reviewedKnown : quizCorrect),
+        mode,
+      }).eq("id", sessionId);
+    }
+  };
+
+  const nextReview = (nextMastered?: number) => {
+    setFlipped(false);
+    setShowFurigana(false);
+    if (reviewIdx + 1 < vocab.length) setReviewIdx(reviewIdx + 1);
+    else void finish("review", nextMastered);
   };
 
   const onReviewKnow = () => {
     if (!reviewCard) return;
-    setReviewedKnown(c => c + 1);
+    const nextKnown = reviewedKnown + 1;
+    setReviewedKnown(nextKnown);
     recordWordOptimistic(reviewCard.word, reviewCard.reading, getLevel(reviewCard), true);
-    nextReview();
+    nextReview(nextKnown);
   };
+
   const onReviewLearning = () => {
     if (!reviewCard) return;
     recordWordOptimistic(reviewCard.word, reviewCard.reading, getLevel(reviewCard), false);
-    nextReview();
-  };
-  const nextReview = () => {
-    setFlipped(false);
-    setShowFurigana(false);
-    if (reviewIdx + 1 < vocab.length) setReviewIdx(reviewIdx + 1);
-    else void finish("review");
+    nextReview(reviewedKnown);
   };
 
   const distractors = useMemo(() => {
     if (!quizCard) return [];
-    const others = quizVocab.filter(v => v.word !== quizCard.word).map(v => v.meaning);
+    const others = quizVocab.filter((v) => v.word !== quizCard.word).map((v) => v.meaning);
     const shuffled = [...others].sort(() => Math.random() - 0.5).slice(0, 3);
     const all = [quizCard.meaning, ...shuffled];
     return all.sort(() => Math.random() - 0.5);
@@ -140,31 +262,24 @@ export default function StudySession() {
     if (!quizCard || quizChoice !== null) return;
     setQuizChoice(i);
     const correct = i === correctIndex;
-    if (correct) setQuizCorrect(c => c + 1);
+    const nextCorrect = correct ? quizCorrect + 1 : quizCorrect;
+    if (correct) setQuizCorrect(nextCorrect);
     if (sessionId && user) {
       void supabase.from("quiz_results").insert({
-        session_id: sessionId, user_id: user.id, word: quizCard.word,
-        was_correct: correct, quiz_kind: "jp_to_meaning", learning_language: learningLanguage,
+        session_id: sessionId,
+        user_id: user.id,
+        word: quizCard.word,
+        was_correct: correct,
+        quiz_kind: "jp_to_meaning",
+        learning_language: learningLanguage,
       });
     }
     recordWordOptimistic(quizCard.word, quizCard.reading, getLevel(quizCard), correct);
     setTimeout(() => {
       setQuizChoice(null);
       if (quizIdx + 1 < quizVocab.length) setQuizIdx(quizIdx + 1);
-      else void finish("quiz");
+      else void finish("quiz", nextCorrect);
     }, 280);
-  };
-
-  const finish = async (mode: "review" | "quiz") => {
-    setDone(mode);
-    if (sessionId) {
-      await supabase.from("study_sessions").update({
-        finished_at: new Date().toISOString(),
-        words_studied: vocab.length,
-        words_mastered: mode === "review" ? reviewedKnown : quizCorrect,
-        mode,
-      }).eq("id", sessionId);
-    }
   };
 
   const speak = (text: string) => {
@@ -224,13 +339,13 @@ export default function StudySession() {
           <Progress value={(reviewIdx / vocab.length) * 100} className="h-2 mb-4" />
           <div className="text-xs text-muted-foreground text-center mb-4">{reviewIdx + 1} / {vocab.length}</div>
 
-          <div className="flip-card h-72 mb-4" onClick={() => setFlipped(f => !f)}>
+          <div className="flip-card h-72 mb-4" onClick={() => setFlipped((f) => !f)}>
             <div className={`flip-inner h-full ${flipped ? "flipped" : ""}`}>
               <Card className="flip-face absolute inset-0 gradient-card border-border/50 shadow-card grid place-items-center cursor-pointer">
                 <div className="text-center px-6">
                   {(() => {
                     const showKanji = !reviewCard ? false : (streaks[reviewCard.word] ?? 0) >= KANJI_THRESHOLD || reviewCard.word === reviewCard.reading;
-                    const display = learningLanguageInfo.hasRuby ? (showKanji ? reviewCard?.word : reviewCard?.reading) : reviewCard?.word;
+                    const display = learningLanguageInfo.hasRuby ? ((showKanji ? reviewCard?.word : reviewCard?.reading) || reviewCard?.word) : reviewCard?.word;
                     return (
                       <>
                         <div className={cn("text-6xl font-bold mb-2", learningLanguageInfo.hasRuby && "font-jp")}>
@@ -250,7 +365,7 @@ export default function StudySession() {
                   <Button
                     variant={showFurigana ? "default" : "ghost"}
                     size="sm"
-                    onClick={(e) => { e.stopPropagation(); setShowFurigana(v => !v); }}
+                    onClick={(e) => { e.stopPropagation(); setShowFurigana((v) => !v); }}
                     aria-pressed={showFurigana}
                     title={t("study.toggleFurigana")}
                     className="absolute top-2 right-2 h-8 gap-1 px-2 z-10"
@@ -283,7 +398,16 @@ export default function StudySession() {
           </div>
 
           <div className="flex justify-center mb-4">
-            <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); reviewCard && speak(reviewCard.reading || reviewCard.word); }}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (reviewCard) {
+                  speak(reviewCard.reading || reviewCard.word);
+                }
+              }}
+            >
               <Volume2 className="h-4 w-4" /> {t("study.playAudio")}
             </Button>
           </div>
@@ -317,7 +441,7 @@ export default function StudySession() {
                   return (
                     <>
                       <div className={cn("text-5xl font-bold mb-2", learningLanguageInfo.hasRuby && "font-jp")}>
-                        {learningLanguageInfo.hasRuby ? (showKanji ? quizCard?.word : quizCard?.reading) : quizCard?.word}
+                        {learningLanguageInfo.hasRuby ? ((showKanji ? quizCard?.word : quizCard?.reading) || quizCard?.word) : quizCard?.word}
                       </div>
                       {learningLanguageInfo.hasRuby && (showKanji
                         ? <div className="font-jp text-muted-foreground">{quizCard?.reading}</div>
@@ -327,36 +451,36 @@ export default function StudySession() {
                 })()}
               </Card>
 
-          <div className="grid gap-2">
-            {distractors.map((d, i) => {
-              const isPicked = quizChoice === i;
-              const isCorrect = i === correctIndex;
-              const showState = quizChoice !== null;
-              return (
+              <div className="grid gap-2">
+                {distractors.map((d, i) => {
+                  const isPicked = quizChoice === i;
+                  const isCorrect = i === correctIndex;
+                  const showState = quizChoice !== null;
+                  return (
+                    <Button
+                      key={i}
+                      variant="outline"
+                      onClick={(e) => { e.currentTarget.blur(); onQuizAnswer(i); }}
+                      disabled={quizChoice !== null}
+                      className={`h-auto min-h-12 py-3 text-left justify-start whitespace-normal ${
+                        showState && isCorrect ? "border-success bg-success/10" :
+                        showState && isPicked && !isCorrect ? "border-destructive bg-destructive/10" : ""
+                      }`}
+                    >
+                      <span className="text-muted-foreground mr-3">{String.fromCharCode(65 + i)}.</span>
+                      <span className="flex-1">{d}</span>
+                    </Button>
+                  );
+                })}
                 <Button
-                  key={i}
-                  variant="outline"
-                  onClick={(e) => { e.currentTarget.blur(); onQuizAnswer(i); }}
+                  variant="ghost"
+                  onClick={() => onQuizAnswer(-1)}
                   disabled={quizChoice !== null}
-                  className={`h-auto min-h-12 py-3 text-left justify-start whitespace-normal ${
-                    showState && isCorrect ? "border-success bg-success/10" :
-                    showState && isPicked && !isCorrect ? "border-destructive bg-destructive/10" : ""
-                  }`}
+                  className="h-12 mt-2 text-muted-foreground"
                 >
-                  <span className="text-muted-foreground mr-3">{String.fromCharCode(65 + i)}.</span>
-                  <span className="flex-1">{d}</span>
+                  {t("study.dontKnow")}
                 </Button>
-              );
-            })}
-            <Button
-              variant="ghost"
-              onClick={() => onQuizAnswer(-1)}
-              disabled={quizChoice !== null}
-              className="h-12 mt-2 text-muted-foreground"
-            >
-              {t("study.dontKnow")}
-            </Button>
-          </div>
+              </div>
             </>
           )}
         </TabsContent>

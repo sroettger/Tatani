@@ -39,7 +39,10 @@ export function renderWithProviders(ui: ReactElement, opts: ProviderOptions = {}
 
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[route]}>
+      <MemoryRouter
+        initialEntries={[route]}
+        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+      >
         <I18nProvider>
           <Routes>
             <Route path={route} element={ui} />

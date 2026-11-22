@@ -8,6 +8,18 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Sparkles, Eye, EyeOff } from "lucide-react";
 
+function hasUrlRecoveryMarker(searchParams: URLSearchParams): boolean {
+  if (searchParams.get("type") === "recovery") return true;
+  if (searchParams.has("code") || searchParams.has("token_hash")) return true;
+  if (typeof window !== "undefined") {
+    const hash = window.location.hash;
+    if (hash.includes("type=recovery") || hash.includes("access_token=")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export default function ResetPassword() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -15,15 +27,35 @@ export default function ResetPassword() {
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [show, setShow] = useState(false);
-
-  const type = searchParams.get("type");
+  const [checking, setChecking] = useState(() => !hasUrlRecoveryMarker(searchParams));
 
   useEffect(() => {
-    if (type !== "recovery") {
-      toast.error("Invalid reset link");
-      navigate("/auth", { replace: true });
-    }
-  }, [type, navigate]);
+    let active = true;
+    let recovered = hasUrlRecoveryMarker(searchParams);
+
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!active) return;
+      if (event === "PASSWORD_RECOVERY" || (event === "SIGNED_IN" && session)) {
+        recovered = true;
+        setChecking(false);
+      }
+    });
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!active) return;
+      if (session || recovered) {
+        setChecking(false);
+      } else {
+        toast.error("Invalid reset link");
+        navigate("/auth", { replace: true });
+      }
+    });
+
+    return () => {
+      active = false;
+      sub.subscription.unsubscribe();
+    };
+  }, [searchParams, navigate]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,6 +77,14 @@ export default function ResetPassword() {
       navigate("/auth", { replace: true });
     }
   };
+
+  if (checking) {
+    return (
+      <main className="min-h-screen gradient-hero grid place-items-center px-5">
+        <div className="text-sm text-muted-foreground">Verifying reset link…</div>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen gradient-hero grid place-items-center px-5">

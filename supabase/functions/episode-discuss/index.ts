@@ -1,68 +1,103 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-import { callAiChatCompletions } from "../_shared/ai.ts";
+import {
+  corsHeaders,
+  createAdminClient,
+  jsonResponse,
+  requireAuthUser,
+} from "../_shared/auth.ts";
+import { callAiChatCompletions, validateClientMessages } from "../_shared/ai.ts";
 import { getUserLanguages, uiLanguageName } from "../_shared/languages.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+type StudiedWordRow = {
+  word: string;
+  reading: string | null;
+  meaning: string | null;
+};
+
+type CachedSentence = {
+  jp?: string;
+  en?: string;
 };
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_ANON_KEY")!,
-      { global: { headers: { Authorization: authHeader } } },
-    );
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    const auth = await requireAuthUser(req);
+    if (auth instanceof Response) return auth;
+    const { userId } = auth;
+
+    const body = (await req.json()) as {
+      episode_id?: unknown;
+      messages?: unknown;
+      auto_start?: unknown;
+      learning_language?: unknown;
+    };
+    const episode_id = typeof body.episode_id === "string" ? body.episode_id.trim() : "";
+    const autoStart = Boolean(body.auto_start);
+    const requestedLang = typeof body.learning_language === "string" ? body.learning_language : undefined;
+
+    if (!episode_id) {
+      return jsonResponse({ error: "episode_id required" }, 400);
     }
 
-    const { episode_id, messages, auto_start } = await req.json();
-    if (!episode_id || !Array.isArray(messages)) {
-      return new Response(JSON.stringify({ error: "episode_id and messages required" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    const validated = validateClientMessages(body.messages, {
+      allowEmpty: autoStart,
+      maxMessages: 40,
+      maxCharsPerMessage: 4_000,
+    });
+    if (!validated.ok) {
+      return jsonResponse({ error: validated.error }, 400);
     }
+    const messages = validated.messages;
 
-    const { learning, uiLanguage, level } = await getUserLanguages(supabase, user.id);
+    const supabase = createAdminClient();
+    const { learning, uiLanguage, level } = await getUserLanguages(supabase, userId, requestedLang);
     const nativeLang = uiLanguageName(uiLanguage);
+    const translationLabel = nativeLang.replace(/\s*\([^)]*\)/g, "").trim();
+    const includeTranslation = uiLanguage !== learning.code;
     const learnerLevel = level && level !== "none" ? level : learning.levels[0];
 
     // Gather context: episode info, sentences, studied vocab for this episode
     const [{ data: ep }, { data: cache }, { data: chunks }] = await Promise.all([
       supabase.from("episodes").select("episode_number,title_jp,title_en").eq("id", episode_id).maybeSingle(),
-      supabase.from("episode_vocab_cache").select("vocab,sentences").eq("episode_id", episode_id).eq("language", learning.code).maybeSingle(),
-      supabase.from("study_chunks").select("id").eq("user_id", user.id).eq("episode_id", episode_id).eq("learning_language", learning.code).not("studied_at", "is", null),
+      supabase
+        .from("episode_vocab_cache")
+        .select("vocab,sentences")
+        .eq("episode_id", episode_id)
+        .eq("language", learning.code)
+        .maybeSingle(),
+      supabase
+        .from("study_chunks")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("episode_id", episode_id)
+        .eq("learning_language", learning.code)
+        .not("studied_at", "is", null),
     ]);
 
-    const chunkIds = (chunks ?? []).map((c: any) => c.id);
-    let studiedWords: { word: string; reading: string; meaning: string }[] = [];
+    const chunkIds = (chunks ?? []).map((c: { id: string }) => c.id);
+    let studiedWords: StudiedWordRow[] = [];
     if (chunkIds.length > 0) {
       const { data: cw } = await supabase
         .from("study_chunk_words")
         .select("word,reading,meaning")
         .in("chunk_id", chunkIds);
-      studiedWords = (cw ?? []) as any;
+      studiedWords = (cw ?? []) as StudiedWordRow[];
     }
 
-    // Use as many cached sentences as we can — these ARE the episode's plot for the AI.
-    const allSentences = ((cache?.sentences ?? []) as any[]);
-    const sentenceContext = allSentences.map((s: any, i: number) => `[${i + 1}] ${learning.name}: ${s.jp}\n    ${nativeLang}: ${s.en}`).join("\n");
+    const allSentences = Array.isArray(cache?.sentences) ? (cache.sentences as CachedSentence[]) : [];
+    const sentenceContext = allSentences
+      .map((s, i) => `[${i + 1}] ${learning.name}: ${s.jp ?? ""}\n    ${nativeLang}: ${s.en ?? ""}`)
+      .join("\n");
     const wordList = studiedWords.length
-      ? studiedWords.map(w => w.reading ? `- ${w.word}（${w.reading}）= ${w.meaning}` : `- ${w.word} = ${w.meaning}`).join("\n")
+      ? studiedWords
+          .map((w) => (w.reading ? `- ${w.word}（${w.reading}）= ${w.meaning ?? ""}` : `- ${w.word} = ${w.meaning ?? ""}`))
+          .join("\n")
       : "(none yet)";
+
+    const translationInstruction = includeTranslation
+      ? `- After your ${learning.name} reply, on a NEW LINE, add a ${nativeLang} translation in italics using this clean non-nested tag format: *(${translationLabel}: <translation without parentheses>)* — do NOT nest parentheses inside the tag.`
+      : `- Do NOT append a separate translation line after your ${learning.name} reply, because the learner's UI language is already ${learning.name}.`;
 
     const systemPrompt = `You are a conversation partner discussing, in ${learning.name}, an anime episode the learner just watched.
 
@@ -80,7 +115,7 @@ YOUR ROLE:
 - Keep responses SHORT (2-4 sentences max) so it feels like a real conversation.
 - The learner's own language is ${nativeLang}. Any explanation, translation or meta-comment must be written in ${nativeLang}.
 - If the learner writes in ${nativeLang} instead of ${learning.name}, gently encourage ${learning.name}: respond mostly in ${learning.name}.
-- After your ${learning.name} reply, on a NEW LINE, add a ${nativeLang} translation in italics like: *(${nativeLang}: ...)* — this helps the learner check understanding without breaking the ${learning.name} flow.
+${translationInstruction}
 - If you use a vocabulary word from their studied list, you may bold it with **word** so the UI can highlight it.
 - Be warm, curious, and fun — like a friend who just watched the episode with them.
 
@@ -89,7 +124,7 @@ GENTLE CORRECTIONS (only when the learner writes ${learning.name}):
 - Format the correction block on its own lines at the very TOP of your response, like this exactly:
   > 💡 More natural: "<corrected ${learning.name}>"
   > *(You wrote "<their original phrase>" — <very brief reason in ${nativeLang}, max 1 short sentence>)*
-- Then leave a blank line and continue with your normal ${learning.name} reply + ${nativeLang} translation.
+- Then leave a blank line and continue with your normal ${learning.name} reply${includeTranslation ? ` + ${translationLabel} translation` : ""}.
 - Only correct ACTUAL mistakes — never nitpick, never correct stylistic choices, never correct beginners for not using advanced grammar. If their ${learning.name} is fine (even if simple), skip the correction entirely.
 - Never correct messages written in ${nativeLang} — just reply normally and encourage ${learning.name}.
 - At most ONE correction per reply, focused on the single most important issue.
@@ -100,40 +135,32 @@ ${wordList}
 ACTUAL EPISODE DIALOGUE (numbered subtitle lines from this episode — your source of truth):
 ${sentenceContext || "(no subtitles available — ask general questions instead)"}`;
 
-    // Auto-start: model has no user input yet — instruct it to open the conversation
-    // with a specific plot question grounded in the subtitles above.
-    const finalMessages = auto_start && messages.length === 0
-      ? [{
-          role: "user",
-          content: `Start our conversation. Greet me briefly, then ask ONE specific, concrete question in ${learning.name} about something that actually happened in this episode (reference a specific moment, line, or event from the subtitles). IMPORTANT: weave 1-2 of my recently studied words into your greeting/question naturally and bold them with **word**. Keep it short and inviting.`,
-        }]
-      : messages;
+    const finalMessages =
+      autoStart && messages.length === 0
+        ? [
+            {
+              role: "user" as const,
+              content: `Start our conversation. Greet me briefly, then ask ONE specific, concrete question in ${learning.name} about something that actually happened in this episode (reference a specific moment, line, or event from the subtitles). IMPORTANT: weave 1-2 of my recently studied words into your greeting/question naturally and bold them with **word**. Keep it short and inviting.`,
+            },
+          ]
+        : messages;
 
     const aiResp = await callAiChatCompletions({
       model: "gemini-2.5-flash",
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...finalMessages,
-      ],
+      messages: [{ role: "system", content: systemPrompt }, ...finalMessages],
       stream: true,
     });
 
     if (!aiResp.ok) {
       if (aiResp.status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limit exceeded, please try again in a moment." }), {
-          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        return jsonResponse({ error: "Rate limit exceeded, please try again in a moment." }, 429);
       }
       if (aiResp.status === 402) {
-        return new Response(JSON.stringify({ error: "AI quota exhausted." }), {
-          status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        return jsonResponse({ error: "AI quota exhausted." }, 402);
       }
       const t = await aiResp.text();
       console.error("AI error:", aiResp.status, t);
-      return new Response(JSON.stringify({ error: "AI API error" }), {
-        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return jsonResponse({ error: "AI API error" }, 500);
     }
 
     return new Response(aiResp.body, {
@@ -141,8 +168,6 @@ ${sentenceContext || "(no subtitles available — ask general questions instead)
     });
   } catch (e) {
     console.error("episode-discuss error:", e);
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return jsonResponse({ error: e instanceof Error ? e.message : "Unknown error" }, 500);
   }
 });

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -9,6 +9,8 @@ import { useAuth } from "@/context/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import { useI18n } from "@/i18n";
 import { AddAnimeDialog } from "@/components/AddAnimeDialog";
+import { invalidateLocalSrsCache } from "@/lib/srs-store";
+import { fetchAllPages, fetchBatchedPages } from "@/lib/supabase-pagination";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -48,7 +50,21 @@ type AnimeRow = {
   year: number | null;
   episode_count: number;
 };
-type LibraryEntry = { id: string; added_at: string; position: number; anime: AnimeRow; processed: number };
+
+type UserAnimeRow = {
+  id: string;
+  added_at: string;
+  position: number;
+  anime: AnimeRow | null;
+};
+
+type LibraryEntry = {
+  id: string;
+  added_at: string;
+  position: number;
+  anime: AnimeRow;
+  processed: number;
+};
 
 function SortableLibraryCard({
   entry,
@@ -128,11 +144,79 @@ export default function Home() {
   const [removeTarget, setRemoveTarget] = useState<LibraryEntry | null>(null);
   const [removing, setRemoving] = useState(false);
 
+  const userId = user?.id;
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 8 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
+
+  const load = useCallback(async () => {
+    if (!userId) return;
+    setLoading(true);
+    const { data } = await supabase
+      .from("user_anime")
+      .select("id, added_at, position, anime:anime_id(id,title_romaji,title_en,title_jp,cover_url,year,episode_count)")
+      .eq("user_id", userId)
+      .eq("learning_language", learningLanguage)
+      .order("position", { ascending: true })
+      .order("added_at", { ascending: false });
+
+    const validRows = ((data ?? []) as UserAnimeRow[]).filter(
+      (r): r is UserAnimeRow & { anime: AnimeRow } => Boolean(r.anime),
+    );
+    const animeIds = validRows.map((r) => r.anime.id);
+
+    const processedByAnime = new Map<string, number>();
+    if (animeIds.length > 0) {
+      const { data: epRows } = await fetchAllPages<{
+        id: string;
+        seasons: { anime_id: string };
+      }>((from, to) =>
+        supabase
+          .from("episodes")
+          .select("id, seasons!inner(anime_id)")
+          .in("seasons.anime_id", animeIds)
+          .order("id", { ascending: true })
+          .range(from, to),
+      );
+
+      const epIds = epRows.map((e) => e.id);
+      if (epIds.length > 0) {
+        const { data: cachedRows } = await fetchBatchedPages<string, { episode_id: string }>(
+          epIds,
+          200,
+          (slice, from, to) =>
+            supabase
+              .from("episode_vocab_cache")
+              .select("episode_id")
+              .in("episode_id", slice)
+              .eq("language", learningLanguage)
+              .order("episode_id", { ascending: true })
+              .range(from, to),
+        );
+        const cachedEpisodeSet = new Set(cachedRows.map((c) => c.episode_id));
+        for (const ep of epRows) {
+          if (cachedEpisodeSet.has(ep.id)) {
+            const aid = ep.seasons.anime_id;
+            processedByAnime.set(aid, (processedByAnime.get(aid) ?? 0) + 1);
+          }
+        }
+      }
+    }
+
+    const enriched: LibraryEntry[] = validRows.map((r) => ({
+      ...r,
+      processed: processedByAnime.get(r.anime.id) ?? 0,
+    }));
+    setLibrary(enriched);
+    setLoading(false);
+  }, [userId, learningLanguage]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const removeAnime = async () => {
     if (!removeTarget || !user) return;
@@ -147,42 +231,17 @@ export default function Home() {
       toast({ title: t("home.removeFailed"), description: error.message, variant: "destructive" });
       return;
     }
-    setLibrary(prev => prev.filter(e => e.id !== removeTarget.id));
+    setLibrary((prev) => prev.filter((e) => e.id !== removeTarget.id));
+    invalidateLocalSrsCache(user.id, learningLanguage);
     toast({ title: t("home.removed"), description: t("home.removedBody", { title: removeTarget.anime.title_en ?? removeTarget.anime.title_romaji }) });
     setRemoveTarget(null);
   };
 
-  const load = async () => {
-    if (!user) return;
-    setLoading(true);
-    const { data } = await supabase
-      .from("user_anime")
-      .select("id, added_at, position, anime:anime_id(id,title_romaji,title_en,title_jp,cover_url,year,episode_count)")
-      .eq("user_id", user.id)
-      .eq("learning_language", learningLanguage)
-      .order("position", { ascending: true })
-      .order("added_at", { ascending: false });
-
-    const rows = (data ?? []) as any[];
-    const enriched: LibraryEntry[] = await Promise.all(rows.map(async (r) => {
-      const { count } = await supabase
-        .from("episodes")
-        .select("id, seasons!inner(anime_id)", { count: "exact", head: true })
-        .eq("seasons.anime_id", r.anime.id)
-        .eq("processing_status", "ready");
-      return { ...r, processed: count ?? 0 };
-    }));
-    setLibrary(enriched);
-    setLoading(false);
-  };
-
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [user, learningLanguage]);
-
   const onDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id || !user) return;
-    const oldIndex = library.findIndex(e => e.id === active.id);
-    const newIndex = library.findIndex(e => e.id === over.id);
+    const oldIndex = library.findIndex((e) => e.id === active.id);
+    const newIndex = library.findIndex((e) => e.id === over.id);
     if (oldIndex < 0 || newIndex < 0) return;
     const reordered = arrayMove(library, oldIndex, newIndex).map((e, i) => ({ ...e, position: i }));
     setLibrary(reordered);
@@ -199,7 +258,9 @@ export default function Home() {
     const failed = updates.find((r) => r.error);
     if (failed?.error) {
       toast({ title: t("home.orderFailed"), description: failed.error.message, variant: "destructive" });
-      load();
+      void load();
+    } else {
+      invalidateLocalSrsCache(user.id, learningLanguage);
     }
   };
 
@@ -231,7 +292,7 @@ export default function Home() {
           </Card>
         )}
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-          <SortableContext items={library.map(e => e.id)} strategy={verticalListSortingStrategy}>
+          <SortableContext items={library.map((e) => e.id)} strategy={verticalListSortingStrategy}>
             {library.map((entry) => (
               <SortableLibraryCard
                 key={entry.id}
@@ -244,7 +305,14 @@ export default function Home() {
         </DndContext>
       </div>
 
-      <AddAnimeDialog open={addOpen} onOpenChange={setAddOpen} onAdded={load} />
+      <AddAnimeDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        onAdded={() => {
+          if (user) invalidateLocalSrsCache(user.id, learningLanguage);
+          void load();
+        }}
+      />
 
       <AlertDialog open={!!removeTarget} onOpenChange={(o) => !o && setRemoveTarget(null)}>
         <AlertDialogContent>
@@ -257,7 +325,7 @@ export default function Home() {
           <AlertDialogFooter>
             <AlertDialogCancel disabled={removing}>{t("common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
-              onClick={(e) => { e.preventDefault(); removeAnime(); }}
+              onClick={(e) => { e.preventDefault(); void removeAnime(); }}
               disabled={removing}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >

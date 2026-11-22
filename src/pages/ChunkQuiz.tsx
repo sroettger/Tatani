@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,12 +9,38 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { useI18n } from "@/i18n";
+import {
+  computeNextSrsState,
+  KnownSourceKind,
+  WordPreferenceKind,
+  WordSrsRecord,
+  WordStateKind,
+} from "@/lib/srs";
+import { invalidateLocalSrsCache } from "@/lib/srs-store";
+import { fetchBatchedPages } from "@/lib/supabase-pagination";
 import { cn } from "@/lib/utils";
 
 type Chunk = { id: string; chunk_index: number; word_count: number; studied_at: string | null };
 type ChunkWord = {
-  word: string; reading: string | null; meaning: string | null;
-  level: string | null; part_of_speech: string | null;
+  word: string;
+  reading: string | null;
+  meaning: string | null;
+  level: string | null;
+  part_of_speech: string | null;
+};
+
+type StateDbRow = {
+  word: string;
+  reading: string | null;
+  level: string | null;
+  state: string | null;
+  preference: string | null;
+  known_source: string | null;
+  correct_streak: number | null;
+  srs_level: number | null;
+  srs_due_at: string | null;
+  last_reviewed_at: string | null;
+  marked_known_at: string | null;
 };
 
 const KANJI_THRESHOLD = 2;
@@ -33,31 +59,40 @@ export default function ChunkQuiz() {
   // quiz state
   const [words, setWords] = useState<ChunkWord[]>([]);
   const [persistStreak, setPersistStreak] = useState<Record<string, number>>({});
+  const wordRecordsRef = useRef<Record<string, WordSrsRecord>>({});
 
   const [idx, setIdx] = useState(0);
   const [correct, setCorrect] = useState(0);
   const [choice, setChoice] = useState<number | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
 
+  const userId = user?.id;
+
   useEffect(() => {
-    if (!episodeId || !user) return;
+    if (!episodeId || !userId) return;
+    let cancelled = false;
     (async () => {
       setLoading(true);
       const { data } = await supabase
         .from("study_chunks")
         .select("id,chunk_index,word_count,studied_at")
-        .eq("user_id", user.id).eq("episode_id", episodeId).eq("learning_language", learningLanguage)
+        .eq("user_id", userId)
+        .eq("episode_id", episodeId)
+        .eq("learning_language", learningLanguage)
         .not("studied_at", "is", null)
         .order("chunk_index");
+      if (cancelled) return;
       const list = (data ?? []) as Chunk[];
       setChunks(list);
-      // Pre-select all by default
       const sel: Record<string, boolean> = {};
-      list.forEach(c => { sel[c.id] = true; });
+      list.forEach((c) => { sel[c.id] = true; });
       setSelected(sel);
       setLoading(false);
     })();
-  }, [episodeId, user]);
+    return () => {
+      cancelled = true;
+    };
+  }, [episodeId, userId, learningLanguage]);
 
   const selectedIds = useMemo(() => Object.entries(selected).filter(([, v]) => v).map(([k]) => k), [selected]);
   const allSelected = chunks.length > 0 && selectedIds.length === chunks.length;
@@ -67,36 +102,83 @@ export default function ChunkQuiz() {
       toast.error(t("quiz.pickAtLeastOne"));
       return;
     }
-    const { data: w } = await supabase
-      .from("study_chunk_words").select("*").in("chunk_id", selectedIds);
-    const allWords = (w ?? []) as ChunkWord[];
+    const { data: allWords } = await fetchBatchedPages<string, ChunkWord>(
+      selectedIds,
+      50,
+      (slice, from, to) =>
+        supabase
+          .from("study_chunk_words")
+          .select("word,reading,meaning,level,part_of_speech")
+          .in("chunk_id", slice)
+          .order("chunk_id", { ascending: true })
+          .order("position", { ascending: true })
+          .range(from, to),
+    );
     if (allWords.length < 2) {
       toast.error(t("quiz.notEnoughWords"));
       return;
     }
-    // dedupe by word
     const seen = new Set<string>();
     const deduped: ChunkWord[] = [];
     for (const word of allWords) {
-      if (!seen.has(word.word)) { seen.add(word.word); deduped.push(word); }
+      if (!seen.has(word.word)) {
+        seen.add(word.word);
+        deduped.push(word);
+      }
     }
     const shuffled = [...deduped].sort(() => Math.random() - 0.5);
 
-    const wordKeys = shuffled.map(w => w.word);
-    const { data: states } = await supabase
-      .from("user_word_state").select("word,correct_streak").in("word", wordKeys).eq("user_id", user.id).eq("learning_language", learningLanguage);
+    const wordKeys = shuffled.map((w) => w.word);
+    const { data: stateRows } = await fetchBatchedPages<string, StateDbRow>(
+      wordKeys,
+      200,
+      (slice, from, to) =>
+        supabase
+          .from("user_word_state")
+          .select("word,reading,level,state,preference,known_source,correct_streak,srs_level,srs_due_at,last_reviewed_at,marked_known_at")
+          .in("word", slice)
+          .eq("user_id", user.id)
+          .eq("learning_language", learningLanguage)
+          .order("word", { ascending: true })
+          .range(from, to),
+    );
     const pStreak: Record<string, number> = {};
-    (states ?? []).forEach((s: any) => {
+    const recordMap: Record<string, WordSrsRecord> = {};
+    for (const s of stateRows) {
       pStreak[s.word] = s.correct_streak ?? 0;
-    });
+      recordMap[s.word] = {
+        word: s.word,
+        reading: s.reading ?? null,
+        level: s.level ?? null,
+        state: (s.state ?? "unknown") as WordStateKind,
+        preference: (s.preference ?? "study") as WordPreferenceKind,
+        known_source: (s.known_source ?? null) as KnownSourceKind,
+        correct_streak: s.correct_streak ?? 0,
+        srs_level: s.srs_level ?? 0,
+        srs_due_at: s.srs_due_at ?? null,
+        last_reviewed_at: s.last_reviewed_at ?? null,
+        marked_known_at: s.marked_known_at ?? null,
+      };
+    }
+    wordRecordsRef.current = recordMap;
     setPersistStreak(pStreak);
     setWords(shuffled);
-    setIdx(0); setCorrect(0); setChoice(null);
+    setIdx(0);
+    setCorrect(0);
+    setChoice(null);
 
     const { data: sess } = await supabase
       .from("study_sessions")
-      .insert({ user_id: user.id, episode_id: episodeId!, mode: "quiz", words_studied: 0, words_mastered: 0, learning_language: learningLanguage })
-      .select("id").single();
+      .insert({
+        user_id: user.id,
+        episode_id: episodeId!,
+        mode: "quiz",
+        words_studied: 0,
+        words_mastered: 0,
+        learning_language: learningLanguage,
+      })
+      .select("id")
+      .single();
     if (sess) setSessionId(sess.id);
     setPhase("quiz");
   };
@@ -105,7 +187,7 @@ export default function ChunkQuiz() {
 
   const distractors = useMemo(() => {
     if (!card) return [];
-    const others = words.filter(v => v.word !== card.word).map(v => v.meaning).filter(Boolean) as string[];
+    const others = words.filter((v) => v.word !== card.word).map((v) => v.meaning).filter(Boolean) as string[];
     const shuffled = [...others].sort(() => Math.random() - 0.5).slice(0, 3);
     const all = [card.meaning ?? "", ...shuffled];
     return all.sort(() => Math.random() - 0.5);
@@ -124,37 +206,56 @@ export default function ChunkQuiz() {
     if (!card || choice !== null) return;
     setChoice(i);
     const isCorrect = i === correctIndex;
-    if (isCorrect) setCorrect(c => c + 1);
+    if (isCorrect) setCorrect((c) => c + 1);
 
     if (sessionId && user) {
       void supabase.from("quiz_results").insert({
-        session_id: sessionId, user_id: user.id, word: card.word,
-        was_correct: isCorrect, quiz_kind: "jp_to_meaning", learning_language: learningLanguage,
+        session_id: sessionId,
+        user_id: user.id,
+        word: card.word,
+        was_correct: isCorrect,
+        quiz_kind: "jp_to_meaning",
+        learning_language: learningLanguage,
       });
     }
 
     if (user) {
-      const prev = persistStreak[card.word] ?? 0;
-      const newStreak = isCorrect ? prev + 1 : 0;
-      const graduated = isCorrect && newStreak >= 2;
-      const newState = graduated ? "known" : "learning";
-      setPersistStreak(s => ({ ...s, [card.word]: newStreak }));
-      const payload: Record<string, unknown> = {
-        user_id: user.id,
-        word: card.word,
-        reading: card.reading ?? null,
-        level: card.level ?? null,
-        learning_language: learningLanguage,
-        state: newState,
-        correct_streak: newStreak,
-        last_reviewed_at: new Date().toISOString(),
-      };
-      if (graduated) {
-        payload.known_source = "learned";
-        payload.srs_level = 0;
-        payload.srs_due_at = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-      }
-      void supabase.from("user_word_state").upsert(payload as any, { onConflict: "user_id,word,learning_language" });
+      const prevRecord = wordRecordsRef.current[card.word];
+      const nextRecord = computeNextSrsState(
+        prevRecord,
+        {
+          word: card.word,
+          reading: card.reading ?? null,
+          level: card.level === "none" ? null : (card.level ?? null),
+        },
+        isCorrect,
+      );
+      wordRecordsRef.current[card.word] = nextRecord;
+      setPersistStreak((s) => ({ ...s, [card.word]: nextRecord.correct_streak }));
+
+      void supabase
+        .from("user_word_state")
+        .upsert(
+          {
+            user_id: user.id,
+            word: nextRecord.word,
+            reading: nextRecord.reading,
+            level: nextRecord.level,
+            learning_language: learningLanguage,
+            state: nextRecord.state,
+            preference: nextRecord.preference,
+            known_source: nextRecord.known_source,
+            correct_streak: nextRecord.correct_streak,
+            srs_level: nextRecord.srs_level,
+            srs_due_at: nextRecord.srs_due_at,
+            last_reviewed_at: nextRecord.last_reviewed_at,
+            marked_known_at: nextRecord.marked_known_at ?? null,
+          },
+          { onConflict: "user_id,word,learning_language" },
+        )
+        .then(() => {
+          invalidateLocalSrsCache(user.id, learningLanguage);
+        });
     }
 
     setTimeout(() => {
@@ -200,7 +301,7 @@ export default function ChunkQuiz() {
                   checked={allSelected}
                   onCheckedChange={(c) => {
                     const sel: Record<string, boolean> = {};
-                    chunks.forEach(ch => { sel[ch.id] = !!c; });
+                    chunks.forEach((ch) => { sel[ch.id] = !!c; });
                     setSelected(sel);
                   }}
                 />
@@ -208,12 +309,12 @@ export default function ChunkQuiz() {
               </div>
             </Card>
             <div className="grid gap-2 mb-6">
-              {chunks.map(c => (
+              {chunks.map((c) => (
                 <Card key={c.id} className="p-3 gradient-card border-border/50">
                   <label className="flex items-center gap-3 cursor-pointer">
                     <Checkbox
                       checked={!!selected[c.id]}
-                      onCheckedChange={(v) => setSelected(s => ({ ...s, [c.id]: !!v }))}
+                      onCheckedChange={(v) => setSelected((s) => ({ ...s, [c.id]: !!v }))}
                     />
                     <div className="flex-1">
                       <div className="font-medium text-sm">{t("chunk.title", { n: c.chunk_index })}</div>
@@ -224,7 +325,7 @@ export default function ChunkQuiz() {
               ))}
             </div>
             <Button
-              onClick={startQuiz}
+              onClick={() => void startQuiz()}
               disabled={selectedIds.length === 0}
               className="w-full h-12 gradient-primary text-primary-foreground"
             >
@@ -271,7 +372,7 @@ export default function ChunkQuiz() {
       <Card className="p-6 gradient-card border-border/50 shadow-card mb-4 text-center">
         <div className="text-xs text-muted-foreground mb-2">{t("study.whatDoesThisMean")}</div>
         <div className={cn("text-5xl font-bold mb-2", learningLanguageInfo.hasRuby && "font-jp")}>
-          {learningLanguageInfo.hasRuby ? (showKanji ? card?.word : card?.reading) : card?.word}
+          {learningLanguageInfo.hasRuby ? ((showKanji ? card?.word : card?.reading) || card?.word) : card?.word}
         </div>
         {learningLanguageInfo.hasRuby && (showKanji
           ? card?.reading && card.reading !== card.word && <div className="font-jp text-muted-foreground">{card.reading}</div>

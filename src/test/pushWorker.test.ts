@@ -2,29 +2,102 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { describe, it, expect, vi } from "vitest";
 
-function worker(ok = true) {
+type OutboxEntry = {
+  id: string;
+  answer: number;
+  data: Record<string, string>;
+};
+
+type WorkerEventListener = (event: {
+  data?: { type?: string; data?: Record<string, string> };
+  action?: string;
+  tag?: string;
+  notification?: { data?: Record<string, string>; close: () => void };
+  waitUntil: (p: Promise<unknown>) => void;
+}) => void;
+
+type PushOutboxModule = {
+  createOutbox: (
+    store?: {
+      add: (entry: OutboxEntry) => Promise<void>;
+      list: () => Promise<OutboxEntry[]>;
+      remove: (id: string) => Promise<boolean>;
+    },
+    fetchFn?: typeof fetch,
+  ) => unknown;
+};
+
+function worker(ok = true, workerLocation = "https://example.test/firebase-messaging-sw.js", scope?: string) {
   let background: (payload: unknown) => unknown = () => {};
-  let click: (event: unknown) => unknown = () => {};
+  let click: WorkerEventListener = () => {};
   const showNotification = vi.fn().mockResolvedValue(undefined);
   const openWindow = vi.fn().mockResolvedValue(undefined);
-  const fetch = vi.fn().mockResolvedValue({ ok, json: async () => ({ correct: false, meaning: "猫" }) });
-  const entries = new Map<string, any>();
+  const fetchMock = vi.fn().mockResolvedValue({ ok, json: async () => ({ correct: false, meaning: "猫" }) });
+  const entries = new Map<string, OutboxEntry>();
   const register = vi.fn().mockResolvedValue(undefined);
-  const listeners: Record<string, any> = {};
-  const context = {
-    URL, AbortController, setTimeout, clearTimeout, importScripts: () => {}, fetch,
-    firebase: { initializeApp: () => {}, messaging: () => ({ onBackgroundMessage: (handler: typeof background) => { background = handler; } }) },
-    self: { TataniPushOutbox: { createOutbox: () => outbox }, location: "https://example.test/firebase-messaging-sw.js", registration: { showNotification, sync: { register } }, clients: { openWindow }, addEventListener: (type: string, handler: typeof click) => { listeners[type] = handler; if (type === "notificationclick") click = handler; } },
-  };
-  const shared: any = { self: {}, fetch, AbortController, setTimeout, clearTimeout };
+  const listeners: Record<string, WorkerEventListener> = {};
+
+  const shared: {
+    self: { TataniPushOutbox?: PushOutboxModule };
+    fetch: typeof fetchMock;
+    AbortController: typeof AbortController;
+    setTimeout: typeof setTimeout;
+    clearTimeout: typeof clearTimeout;
+  } = { self: {}, fetch: fetchMock, AbortController, setTimeout, clearTimeout };
+
   vm.runInNewContext(readFileSync("public/push-answer-outbox.js", "utf8"), shared);
-  const outbox = shared.self.TataniPushOutbox.createOutbox({
-    add: async (entry: any) => { if (!entries.has(entry.id)) entries.set(entry.id, entry); },
-    list: async () => [...entries.values()], remove: async (id: string) => entries.delete(id),
-  }, fetch);
+  const outbox = shared.self.TataniPushOutbox!.createOutbox(
+    {
+      add: async (entry: OutboxEntry) => {
+        if (!entries.has(entry.id)) entries.set(entry.id, entry);
+      },
+      list: async () => [...entries.values()],
+      remove: async (id: string) => entries.delete(id),
+    },
+    fetchMock as unknown as typeof fetch,
+  );
+
+  const context = {
+    URL,
+    AbortController,
+    setTimeout,
+    clearTimeout,
+    importScripts: () => {},
+    fetch: fetchMock,
+    firebase: {
+      initializeApp: () => {},
+      messaging: () => ({
+        onBackgroundMessage: (handler: typeof background) => {
+          background = handler;
+        },
+      }),
+    },
+    self: {
+      TataniPushOutbox: { createOutbox: () => outbox },
+      location: workerLocation,
+      registration: { showNotification, sync: { register }, ...(scope ? { scope } : {}) },
+      clients: { openWindow },
+      addEventListener: (type: string, handler: WorkerEventListener) => {
+        listeners[type] = handler;
+        if (type === "notificationclick") click = handler;
+      },
+    },
+  };
+
   vm.runInNewContext(readFileSync("public/firebase-messaging-sw.js", "utf8"), context);
-  const data = { delivery_id: "delivery", word: "Katze", quiz_options: '["知ってる","わからない"]', path: "/notifications/review/delivery", token: "secret", api: "https://example.test/review", l_know: "知ってる", l_dont_know: "わからない", l_correct: "正解", l_incorrect: "不正解" };
-  return { background, click, data, showNotification, openWindow, fetch, entries, register, listeners };
+  const data: Record<string, string> = {
+    delivery_id: "delivery",
+    word: "Katze",
+    quiz_options: '["知ってる","わからない"]',
+    path: "/notifications/review/delivery",
+    token: "secret",
+    api: "https://example.test/review",
+    l_know: "知ってる",
+    l_dont_know: "わからない",
+    l_correct: "正解",
+    l_incorrect: "不正解",
+  };
+  return { background, click, data, showNotification, openWindow, fetch: fetchMock, entries, register, listeners };
 }
 
 describe("notification quiz actions", () => {
@@ -74,7 +147,7 @@ describe("notification quiz actions", () => {
   });
   it("keeps the legacy meaning quiz with an extra \"I don't know\" for older deliveries", async () => {
     const w = worker();
-    const legacy = { ...w.data, quiz_options: '["猫","犬"]' };
+    const legacy: Record<string, string> = { ...w.data, quiz_options: '["猫","犬"]' };
     delete legacy.l_know;
     await w.background({ data: legacy });
     expect(w.showNotification.mock.calls[0][1].actions.map((a: { action: string }) => a.action)).toEqual(["answer_0", "answer_1", "answer_dk"]);
@@ -104,18 +177,18 @@ describe("notification quiz actions", () => {
     w.click({ action: "answer_0", notification: { data: { ...w.data, stage: "quiz" }, close: vi.fn() }, waitUntil: (p: Promise<unknown>) => { task = p; } });
     await task;
     expect(w.openWindow).not.toHaveBeenCalled();
-    expect(w.entries.get("delivery").answer).toBe(0);
+    expect(w.entries.get("delivery")!.answer).toBe(0);
     expect(w.register).toHaveBeenCalledWith("tatani-push-answers");
     expect(w.showNotification.mock.calls[0][1].data.stage).toBe("queued");
   });
   it("shows a durable local acknowledgement before a slow response resolves", async () => {
     const w = worker();
     let resolve: (result: unknown) => void = () => {};
-    w.fetch.mockImplementation(() => new Promise(r => { resolve = r; }));
-    let task = Promise.resolve();
-    w.click({ action: "answer_1", notification: { data: { ...w.data, stage: "quiz" }, close: vi.fn() }, waitUntil: (p: Promise<void>) => { task = p; } });
+    w.fetch.mockImplementation(() => new Promise((r) => { resolve = r; }));
+    let task: Promise<unknown> = Promise.resolve();
+    w.click({ action: "answer_1", notification: { data: { ...w.data, stage: "quiz" }, close: vi.fn() }, waitUntil: (p: Promise<unknown>) => { task = p; } });
     await vi.waitFor(() => expect(w.fetch).toHaveBeenCalled());
-    expect(w.entries.get("delivery").answer).toBe(1);
+    expect(w.entries.get("delivery")!.answer).toBe(1);
     expect(w.showNotification.mock.calls[0][1].data.stage).toBe("queued");
     expect(w.openWindow).not.toHaveBeenCalled();
     resolve({ ok: true, json: async () => ({ correct: true, meaning: "犬" }) });
@@ -125,8 +198,8 @@ describe("notification quiz actions", () => {
   });
   it("retries the original choice on a worker wake and clears it only after success", async () => {
     const w = worker(false);
-    let task = Promise.resolve();
-    const waitUntil = (p: Promise<void>) => { task = p; };
+    let task: Promise<unknown> = Promise.resolve();
+    const waitUntil = (p: Promise<unknown>) => { task = p; };
     w.click({ action: "answer_1", notification: { data: { ...w.data, stage: "quiz" }, close: vi.fn() }, waitUntil });
     await task;
     w.fetch.mockResolvedValue({ ok: true, json: async () => ({ correct: false, meaning: "猫" }) });
@@ -138,34 +211,36 @@ describe("notification quiz actions", () => {
   });
   it("never overwrites the first saved choice with a repeated click", async () => {
     const w = worker(false);
-    let task = Promise.resolve();
+    let task: Promise<unknown> = Promise.resolve();
     for (const action of ["answer_0", "answer_1"]) {
-      w.click({ action, notification: { data: { ...w.data, stage: "quiz" }, close: vi.fn() }, waitUntil: (p: Promise<void>) => { task = p; } });
+      w.click({ action, notification: { data: { ...w.data, stage: "quiz" }, close: vi.fn() }, waitUntil: (p: Promise<unknown>) => { task = p; } });
       await task;
     }
-    expect(w.entries.get("delivery").answer).toBe(0);
+    expect(w.entries.get("delivery")!.answer).toBe(0);
     expect(JSON.parse(w.fetch.mock.calls[1][1].body).answer).toBe(0);
   });
   it("bounds slow requests to ten seconds without dropping the saved answer", async () => {
     vi.useFakeTimers();
     try {
       const w = worker();
-      w.fetch.mockImplementation((_: unknown, options: any) => new Promise((_, reject) => {
-        options.signal.addEventListener("abort", () => reject(new Error("timeout")));
+      w.fetch.mockImplementation((_: unknown, options: RequestInit) => new Promise((_, reject) => {
+        options.signal?.addEventListener("abort", () => reject(new Error("timeout")));
       }));
-      let task = Promise.resolve();
-      w.click({ action: "answer_0", notification: { data: { ...w.data, stage: "quiz" }, close: vi.fn() }, waitUntil: (p: Promise<void>) => { task = p; } });
+      let task: Promise<unknown> = Promise.resolve();
+      w.click({ action: "answer_0", notification: { data: { ...w.data, stage: "quiz" }, close: vi.fn() }, waitUntil: (p: Promise<unknown>) => { task = p; } });
       await vi.advanceTimersByTimeAsync(10000);
       await task;
-      expect(w.entries.get("delivery").answer).toBe(0);
+      expect(w.entries.get("delivery")!.answer).toBe(0);
       expect(w.openWindow).not.toHaveBeenCalled();
-    } finally { vi.useRealTimers(); }
+    } finally {
+      vi.useRealTimers();
+    }
   });
   it("stops retrying an expired card without claiming it was graded", async () => {
     const w = worker();
-    w.fetch.mockResolvedValue({ ok: false, status: 410 } as any);
-    let task = Promise.resolve();
-    w.click({ action: "answer_0", notification: { data: { ...w.data, stage: "quiz" }, close: vi.fn() }, waitUntil: (p: Promise<void>) => { task = p; } });
+    w.fetch.mockResolvedValue({ ok: false, status: 410 });
+    let task: Promise<unknown> = Promise.resolve();
+    w.click({ action: "answer_0", notification: { data: { ...w.data, stage: "quiz" }, close: vi.fn() }, waitUntil: (p: Promise<unknown>) => { task = p; } });
     await task;
     expect(w.entries.size).toBe(0);
     expect(w.showNotification.mock.calls[1][1].data.stage).toBe("failed");
@@ -181,5 +256,12 @@ describe("notification quiz actions", () => {
       tag: "delivery",
       actions: [{ action: "answer_0", title: "知ってる" }, { action: "answer_1", title: "わからない" }],
     });
+  });
+  it("prefixes /notifications/ fallback paths with the worker subpath when deployed under /<subpath>/push/", async () => {
+    const w = worker(true, "https://example.test/Tatani/firebase-messaging-sw.js", "https://example.test/Tatani/push/");
+    let task: Promise<unknown> = Promise.resolve();
+    w.click({ action: "", notification: { data: { ...w.data, stage: "quiz" }, close: vi.fn() }, waitUntil: (p: Promise<unknown>) => { task = p; } });
+    await task;
+    expect(w.openWindow).toHaveBeenCalledWith("/Tatani/notifications/review/delivery");
   });
 });

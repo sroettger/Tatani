@@ -9,27 +9,34 @@ import app.tatani.android.data.remote.SessionStore
 import app.tatani.android.data.remote.SupabaseClient
 import app.tatani.android.data.remote.UserWordStateDto
 import app.tatani.android.domain.SrsEngine
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.encodeToString
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicLong
 
 class TataniRepository(
     private val dao: TataniDao,
     val sessionStore: SessionStore,
     val supabase: SupabaseClient,
+    private val bgScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    private val onOutboxFlushFailed: (() -> Unit)? = null,
 ) {
-    private val bgScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val flushMutex = Mutex()
     private val syncMutex = Mutex()
+    private val authEpoch = AtomicLong(0L)
 
     private val _syncing = MutableStateFlow(false)
     val syncing: StateFlow<Boolean> = _syncing.asStateFlow()
@@ -37,7 +44,10 @@ class TataniRepository(
     private val _syncError = MutableStateFlow<String?>(null)
     val syncError: StateFlow<String?> = _syncError.asStateFlow()
 
-    val outboxCount: Flow<Int> = dao.observeOutboxCount()
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val outboxCount: Flow<Int> = sessionStore.session.flatMapLatest { s ->
+        if (s == null) flowOf(0) else dao.observeOutboxCount(s.userId)
+    }
 
     fun observeDeckCards(lang: String): Flow<List<WordCardEntity>> =
         dao.observeDeckCards(lang)
@@ -53,12 +63,13 @@ class TataniRepository(
     }
 
     /**
-     * Optimistic <2ms local SQLite grade + non-blocking background outbox flush.
+     * Optimistic <2ms local SQLite grade + optional non-blocking background outbox flush.
      */
     suspend fun gradeCardOptimistic(
         card: WordCardEntity,
         remembered: Boolean,
         nowMs: Long = System.currentTimeMillis(),
+        autoFlush: Boolean = true,
     ): SrsEngine.SrsSnapshot {
         val previous = card.toSrsSnapshot()
         val next = SrsEngine.computeNextSrsState(
@@ -69,7 +80,7 @@ class TataniRepository(
             remembered = remembered,
             nowMs = nowMs,
         )
-        persistSnapshotOptimistic(card, next, nowMs)
+        persistSnapshotOptimistic(card, next, nowMs, autoFlush = autoFlush)
         return previous
     }
 
@@ -81,30 +92,92 @@ class TataniRepository(
         val next = SrsEngine.computePriorKnownState(
             prev = previous,
             word = card.word,
-            reading = card.reading,
+            reading = card.word.let { card.reading },
             level = card.level,
             nowMs = nowMs,
         )
-        persistSnapshotOptimistic(card, next, nowMs)
+        persistSnapshotOptimistic(card, next, nowMs, autoFlush = true)
         return previous
+    }
+
+    suspend fun restudyCardOptimistic(
+        card: WordCardEntity,
+        nowMs: Long = System.currentTimeMillis(),
+    ) {
+        val resetSnap = SrsEngine.SrsSnapshot(
+            word = card.word,
+            reading = card.reading,
+            level = card.level,
+            state = "unknown",
+            preference = "study",
+            knownSource = null,
+            correctStreak = 0,
+            srsLevel = 0,
+            srsDueAtEpochMs = null,
+            lastReviewedAtIso = null,
+            markedKnownAtIso = null,
+            hasServerState = true,
+        )
+        persistSnapshotOptimistic(card, resetSnap, nowMs, autoFlush = true)
     }
 
     suspend fun restoreSnapshotOptimistic(
         card: WordCardEntity,
         snapshot: SrsEngine.SrsSnapshot,
+        nowMs: Long = System.currentTimeMillis(),
     ) {
-        persistSnapshotOptimistic(card, snapshot, System.currentTimeMillis())
+        if (!snapshot.hasServerState) {
+            val restoredCard = card.copy(
+                reading = snapshot.reading,
+                level = snapshot.level,
+                hasServerState = false,
+                state = "unknown",
+                preference = "study",
+                knownSource = null,
+                correctStreak = 0,
+                srsLevel = 0,
+                srsDueAtEpochMs = null,
+                lastReviewedAtIso = null,
+                markedKnownAtIso = null,
+            )
+            dao.upsertWordCard(restoredCard)
+            val uid = sessionStore.session.value?.userId
+            if (!uid.isNullOrBlank()) {
+                dao.upsertOutboxMutation(
+                    OutboxMutationEntity(
+                        userId = uid,
+                        word = card.word,
+                        learningLanguage = card.learningLanguage,
+                        reading = snapshot.reading,
+                        level = snapshot.level,
+                        state = OUTBOX_DELETE_STATE,
+                        preference = "study",
+                        knownSource = null,
+                        correctStreak = 0,
+                        srsLevel = 0,
+                        srsDueAtEpochMs = null,
+                        lastReviewedAtIso = null,
+                        markedKnownAtIso = null,
+                        queuedAtEpochMs = nowMs,
+                    )
+                )
+                bgScope.launch { flushOutbox() }
+            }
+            return
+        }
+        persistSnapshotOptimistic(card, snapshot, nowMs, autoFlush = true)
     }
 
     private suspend fun persistSnapshotOptimistic(
         card: WordCardEntity,
         snap: SrsEngine.SrsSnapshot,
         nowMs: Long,
+        autoFlush: Boolean,
     ) {
         val updatedCard = card.copy(
             reading = snap.reading,
             level = snap.level,
-            hasServerState = true,
+            hasServerState = snap.hasServerState,
             state = snap.state,
             preference = snap.preference,
             knownSource = snap.knownSource,
@@ -115,56 +188,99 @@ class TataniRepository(
             markedKnownAtIso = snap.markedKnownAtIso,
         )
         dao.upsertWordCard(updatedCard)
-        dao.upsertOutboxMutation(
-            OutboxMutationEntity(
-                word = card.word,
-                learningLanguage = card.learningLanguage,
-                reading = snap.reading,
-                level = snap.level,
-                state = snap.state,
-                preference = snap.preference,
-                knownSource = snap.knownSource,
-                correctStreak = snap.correctStreak,
-                srsLevel = snap.srsLevel,
-                srsDueAtEpochMs = snap.srsDueAtEpochMs,
-                lastReviewedAtIso = snap.lastReviewedAtIso,
-                markedKnownAtIso = snap.markedKnownAtIso,
-                queuedAtEpochMs = nowMs,
+        val uid = sessionStore.session.value?.userId
+        if (!uid.isNullOrBlank()) {
+            dao.upsertOutboxMutation(
+                OutboxMutationEntity(
+                    userId = uid,
+                    word = card.word,
+                    learningLanguage = card.learningLanguage,
+                    reading = snap.reading,
+                    level = snap.level,
+                    state = snap.state,
+                    preference = snap.preference,
+                    knownSource = snap.knownSource,
+                    correctStreak = snap.correctStreak,
+                    srsLevel = snap.srsLevel,
+                    srsDueAtEpochMs = snap.srsDueAtEpochMs,
+                    lastReviewedAtIso = snap.lastReviewedAtIso,
+                    markedKnownAtIso = snap.markedKnownAtIso,
+                    queuedAtEpochMs = nowMs,
+                )
             )
-        )
-        bgScope.launch { flushOutbox() }
+            if (autoFlush) {
+                bgScope.launch { flushOutbox() }
+            }
+        }
     }
 
     suspend fun flushOutbox(): Boolean = flushMutex.withLock {
+        val startEpoch = authEpoch.get()
         val session = sessionStore.session.value ?: return@withLock false
-        val pending = dao.getOutboxMutations()
+        dao.claimUnassignedOutboxMutations(session.userId)
+        val pending = dao.getOutboxMutations(session.userId)
         if (pending.isEmpty()) return@withLock true
 
-        val dtos = pending.map { m ->
-            UserWordStateDto(
-                userId = session.userId,
-                word = m.word,
-                reading = m.reading,
-                level = m.level?.takeIf { it != "none" },
-                learningLanguage = m.learningLanguage,
-                state = m.state,
-                preference = m.preference,
-                knownSource = m.knownSource,
-                correctStreak = m.correctStreak,
-                srsLevel = m.srsLevel,
-                srsDueAt = m.srsDueAtEpochMs?.let { Instant.ofEpochMilli(it).toString() },
-                lastReviewedAt = m.lastReviewedAtIso,
-                markedKnownAt = m.markedKnownAtIso,
-            )
-        }
+        val (toDelete, toUpsert) = pending.partition { it.state == OUTBOX_DELETE_STATE }
+        var allOk = true
 
-        val ok = runCatching { supabase.upsertWordStates(dtos) }.getOrDefault(false)
-        if (ok) {
-            for (sent in pending) {
-                dao.deleteOutboxIfUnchanged(sent.word, sent.learningLanguage, sent.queuedAtEpochMs)
+        if (toUpsert.isNotEmpty()) {
+            val dtos = toUpsert.map { m ->
+                UserWordStateDto(
+                    userId = session.userId,
+                    word = m.word,
+                    reading = m.reading,
+                    level = m.level?.takeIf { it != "none" },
+                    learningLanguage = m.learningLanguage,
+                    state = m.state,
+                    preference = m.preference,
+                    knownSource = m.knownSource,
+                    correctStreak = m.correctStreak,
+                    srsLevel = m.srsLevel,
+                    srsDueAt = m.srsDueAtEpochMs?.let { Instant.ofEpochMilli(it).toString() },
+                    lastReviewedAt = m.lastReviewedAtIso,
+                    markedKnownAt = m.markedKnownAtIso,
+                )
+            }
+            val ok = runCatching { supabase.upsertWordStates(dtos) }.getOrDefault(false)
+            if (ok && authEpoch.get() == startEpoch) {
+                for (sent in toUpsert) {
+                    dao.deleteOutboxIfUnchanged(
+                        sent.userId,
+                        sent.word,
+                        sent.learningLanguage,
+                        sent.queuedAtEpochMs
+                    )
+                }
+            } else if (!ok) {
+                allOk = false
             }
         }
-        ok
+
+        if (toDelete.isNotEmpty()) {
+            for ((lang, langDeletes) in toDelete.groupBy { it.learningLanguage }) {
+                val ok = runCatching {
+                    supabase.deleteWordStates(session.userId, lang, langDeletes.map { it.word })
+                }.getOrDefault(false)
+                if (ok && authEpoch.get() == startEpoch) {
+                    for (sent in langDeletes) {
+                        dao.deleteOutboxIfUnchanged(
+                            sent.userId,
+                            sent.word,
+                            sent.learningLanguage,
+                            sent.queuedAtEpochMs
+                        )
+                    }
+                } else if (!ok) {
+                    allOk = false
+                }
+            }
+        }
+
+        if (!allOk) {
+            onOutboxFlushFailed?.invoke()
+        }
+        allOk
     }
 
     fun triggerBackgroundSync() {
@@ -173,36 +289,53 @@ class TataniRepository(
 
     suspend fun syncAllFromServer() {
         syncMutex.withLock {
+            val startEpoch = authEpoch.get()
             val currentSession = sessionStore.session.value ?: return@withLock
+            fun isSessionStillValid(): Boolean =
+                authEpoch.get() == startEpoch &&
+                    sessionStore.session.value?.userId == currentSession.userId
+
             _syncing.value = true
             try {
                 _syncError.value = null
                 flushOutbox()
+                if (!isSessionStillValid()) return@withLock
+
                 val (lang, userLevel) = supabase.fetchProfileAndProgress(currentSession.userId)
+                if (!isSessionStillValid()) return@withLock
+
                 val userRank = SrsEngine.jlptRank(userLevel)
                 fun isBelowUserLevel(lvl: String?): Boolean =
                     userRank in 1..50 && SrsEngine.jlptRank(lvl) < userRank
 
                 val serverStates = supabase.fetchWordStates(currentSession.userId, lang)
+                if (!isSessionStillValid()) return@withLock
+
                 val stateMap = serverStates.associateBy { it.word }.toMutableMap()
+                val pendingForLang = dao.getOutboxMutations(currentSession.userId)
+                    .filter { it.learningLanguage == lang }
 
                 // Overlay any remaining local outbox entries so local edits never flicker
-                for (pending in dao.getOutboxMutations().filter { it.learningLanguage == lang }) {
-                    stateMap[pending.word] = UserWordStateDto(
-                        userId = currentSession.userId,
-                        word = pending.word,
-                        reading = pending.reading,
-                        level = pending.level,
-                        learningLanguage = lang,
-                        state = pending.state,
-                        preference = pending.preference,
-                        knownSource = pending.knownSource,
-                        correctStreak = pending.correctStreak,
-                        srsLevel = pending.srsLevel,
-                        srsDueAt = pending.srsDueAtEpochMs?.let { Instant.ofEpochMilli(it).toString() },
-                        lastReviewedAt = pending.lastReviewedAtIso,
-                        markedKnownAt = pending.markedKnownAtIso,
-                    )
+                for (pending in pendingForLang) {
+                    if (pending.state == OUTBOX_DELETE_STATE) {
+                        stateMap.remove(pending.word)
+                    } else {
+                        stateMap[pending.word] = UserWordStateDto(
+                            userId = currentSession.userId,
+                            word = pending.word,
+                            reading = pending.reading,
+                            level = pending.level,
+                            learningLanguage = lang,
+                            state = pending.state,
+                            preference = pending.preference,
+                            knownSource = pending.knownSource,
+                            correctStreak = pending.correctStreak,
+                            srsLevel = pending.srsLevel,
+                            srsDueAt = pending.srsDueAtEpochMs?.let { Instant.ofEpochMilli(it).toString() },
+                            lastReviewedAt = pending.lastReviewedAtIso,
+                            markedKnownAt = pending.markedKnownAtIso,
+                        )
+                    }
                 }
 
                 data class MutableCard(
@@ -237,18 +370,24 @@ class TataniRepository(
                         )
                     }
                 }
+                if (!isSessionStillValid()) return@withLock
 
                 // 2. Hydrate from user_anime -> episodes -> episode_vocab_cache
                 val userAnime = supabase.fetchUserAnime(currentSession.userId, lang)
+                if (!isSessionStillValid()) return@withLock
+
                 val animeMetaById = userAnime.mapIndexedNotNull { idx, row ->
                     val anime = row.anime ?: return@mapIndexedNotNull null
                     anime.id to Triple(idx, anime.titleEn ?: anime.titleRomaji, anime)
                 }.toMap()
 
                 val episodes = supabase.fetchEpisodesForAnimeIds(animeMetaById.keys.toList())
+                if (!isSessionStillValid()) return@withLock
+
                 val readyEpisodeIds = episodes.filter { it.processingStatus == "ready" }.map { it.id }
                 val cachesByEpisode = supabase.fetchEpisodeVocabCaches(readyEpisodeIds, lang)
                     .associateBy { it.episodeId }
+                if (!isSessionStillValid()) return@withLock
 
                 val sortedEpisodes = episodes.sortedWith(
                     compareBy<app.tatani.android.data.remote.EpisodeRowDto>(
@@ -335,6 +474,8 @@ class TataniRepository(
                         totalWords = vocabList.size,
                         knownWords = knownCount,
                         unlearnedWords = unlearnedCount,
+                        episodeTitleEn = ep.titleEn,
+                        episodeTitleJp = ep.titleJp,
                     )
                 }
 
@@ -362,7 +503,6 @@ class TataniRepository(
                 val entities = cardBuilder.values.map { item ->
                     val st = stateMap[item.word]
                     val dueMs = st?.srsDueAt?.let { parseIsoMillis(it) }
-                    val defaultKnownByLevel = st == null && isBelowUserLevel(item.level)
                     WordCardEntity(
                         word = item.word,
                         learningLanguage = lang,
@@ -372,9 +512,9 @@ class TataniRepository(
                         level = item.level ?: st?.level,
                         frequency = item.frequency,
                         hasServerState = st != null,
-                        state = st?.state ?: if (defaultKnownByLevel) "known" else "unknown",
+                        state = st?.state ?: "unknown",
                         preference = st?.preference ?: "study",
-                        knownSource = st?.knownSource ?: if (defaultKnownByLevel) "prior" else null,
+                        knownSource = st?.knownSource,
                         correctStreak = st?.correctStreak ?: 0,
                         srsLevel = st?.srsLevel ?: 0,
                         srsDueAtEpochMs = dueMs,
@@ -387,22 +527,76 @@ class TataniRepository(
                         animeTitle = item.animeTitle,
                         contextsJson = supabase.json.encodeToString(item.contexts),
                     )
+                }.toMutableList()
+
+                // Preserve any locally cached graduated SRS cards whose anime was removed from library
+                val builtWords = entities.mapTo(HashSet()) { it.word }
+                val existingGraduated = dao.getDeckCardsSnapshot(lang).filter { existing ->
+                    existing.word !in builtWords &&
+                        (stateMap[existing.word]?.srsDueAt != null || pendingForLang.any { it.word == existing.word })
+                }
+                for (existing in existingGraduated) {
+                    val st = stateMap[existing.word]
+                    val dueMs = st?.srsDueAt?.let { parseIsoMillis(it) }
+                    entities += existing.copy(
+                        hasServerState = st != null,
+                        state = st?.state ?: "unknown",
+                        preference = st?.preference ?: "study",
+                        knownSource = st?.knownSource,
+                        correctStreak = st?.correctStreak ?: 0,
+                        srsLevel = st?.srsLevel ?: 0,
+                        srsDueAtEpochMs = dueMs,
+                        lastReviewedAtIso = st?.lastReviewedAt,
+                        markedKnownAtIso = st?.markedKnownAt,
+                    )
                 }
 
-                if (entities.isNotEmpty()) {
-                    dao.upsertWordCards(entities)
-                }
-                dao.clearLibraryEpisodesForLang(lang)
-                if (libraryEntities.isNotEmpty()) {
-                    dao.upsertLibraryEpisodes(libraryEntities)
-                }
+                val keepWords = HashSet<String>(entities.size + pendingForLang.size)
+                entities.forEach { keepWords += it.word }
+                pendingForLang.forEach { keepWords += it.word }
+
+                if (!isSessionStillValid()) return@withLock
+                dao.replaceLibraryAndPruneOrphans(
+                    lang = lang,
+                    episodes = libraryEntities,
+                    activeWords = entities,
+                    keepWords = keepWords,
+                )
+            } catch (ce: CancellationException) {
+                throw ce
             } catch (e: Throwable) {
                 // Offline-safe: retain cached Room entities and expose diagnostic error
-                runCatching { android.util.Log.w("TataniSync", "syncAllFromServer failed", e) }
-                _syncError.value = e.message ?: e::class.simpleName
+                if (isSessionStillValid()) {
+                    runCatching { android.util.Log.w("TataniSync", "syncAllFromServer failed", e) }
+                    _syncError.value = e.message ?: e::class.simpleName
+                }
             } finally {
                 _syncing.value = false
             }
+        }
+    }
+
+    suspend fun updateUserLevelAndSync(level: String): Result<Unit> {
+        val current = sessionStore.session.value
+            ?: return Result.failure(IllegalStateException("Not signed in"))
+        val prevLevel = current.userLevel
+        sessionStore.updateLanguagePrefs(current.learningLanguage, level)
+        val res = supabase.updateUserLevel(current.userId, current.learningLanguage, level)
+        if (res.isSuccess) {
+            triggerBackgroundSync()
+        } else {
+            sessionStore.updateLanguagePrefs(current.learningLanguage, prevLevel)
+        }
+        return res
+    }
+
+    suspend fun updateLearningLanguageAndSync(lang: String): Result<Unit> {
+        val current = sessionStore.session.value
+            ?: return Result.failure(IllegalStateException("Not signed in"))
+        val res = supabase.updateLearningLanguage(current.userId, lang)
+        return res.map { newLevel ->
+            sessionStore.updateLanguagePrefs(lang, newLevel)
+            syncAllFromServer()
         }
     }
 
@@ -418,6 +612,16 @@ class TataniRepository(
         return res
     }
 
+    suspend fun removeAnimeAndSync(animeId: String): Result<Unit> {
+        val current = sessionStore.session.value
+            ?: return Result.failure(IllegalStateException("Not signed in"))
+        val res = supabase.removeUserAnime(current.userId, animeId, current.learningLanguage)
+        if (res.isSuccess) {
+            syncAllFromServer()
+        }
+        return res
+    }
+
     suspend fun processEpisodeAndSync(episodeId: String): Result<Unit> {
         val res = supabase.autoFetchAndProcessEpisode(episodeId)
         if (res.isSuccess) {
@@ -426,20 +630,42 @@ class TataniRepository(
         return res
     }
 
+    suspend fun processEpisodeManualAndSync(episodeId: String, subtitleText: String): Result<Unit> {
+        val res = supabase.processEpisodeWithSubtitleText(episodeId, subtitleText)
+        if (res.isSuccess) {
+            syncAllFromServer()
+        }
+        return res
+    }
+
     suspend fun deleteAccountDataAndSignOut(): Result<Unit> {
-        val uid = sessionStore.session.value?.userId ?: return Result.failure(IllegalStateException("Not signed in"))
+        val uid = sessionStore.session.value?.userId
+            ?: return Result.failure(IllegalStateException("Not signed in"))
         val res = supabase.deleteAllUserData(uid)
-        signOut()
+        if (res.isSuccess) {
+            dao.clearOutboxForUser(uid)
+            signOut()
+        }
         return res
     }
 
     suspend fun signOut() {
+        authEpoch.incrementAndGet()
         sessionStore.clear()
-        dao.clearAllCards()
-        dao.clearAllOutbox()
-        dao.clearAllEpisodes()
+        syncMutex.withLock {
+            flushMutex.withLock {
+                dao.clearAllCards()
+                dao.clearAllEpisodes()
+                dao.clearUnassignedOutbox()
+                _syncError.value = null
+            }
+        }
     }
 
     private fun parseIsoMillis(iso: String): Long? =
         runCatching { Instant.parse(iso).toEpochMilli() }.getOrNull()
+
+    companion object {
+        const val OUTBOX_DELETE_STATE = "__delete__"
+    }
 }

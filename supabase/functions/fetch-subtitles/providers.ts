@@ -317,14 +317,24 @@ const openSubtitles: SubtitleProvider = {
     }
     if (!best?.attributes?.files?.[0]?.file_id) return null;
 
-    const token = await openSubtitlesToken(apiKey);
+    let token = await openSubtitlesToken(apiKey);
     if (!token) return null;
     const fileId = best.attributes.files[0].file_id;
-    const dl = await fetch("https://api.opensubtitles.com/api/v1/download", {
+    let dl = await fetch("https://api.opensubtitles.com/api/v1/download", {
       method: "POST",
       headers: { ...headers, Authorization: `Bearer ${token}` },
       body: JSON.stringify({ file_id: fileId }),
     });
+    if (dl.status === 401) {
+      osTokenCache = null;
+      token = await openSubtitlesToken(apiKey);
+      if (!token) return null;
+      dl = await fetch("https://api.opensubtitles.com/api/v1/download", {
+        method: "POST",
+        headers: { ...headers, Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ file_id: fileId }),
+      });
+    }
     if (!dl.ok) throw new Error(`download ${dl.status}`);
     const link = (await dl.json())?.link;
     if (!link) return null;

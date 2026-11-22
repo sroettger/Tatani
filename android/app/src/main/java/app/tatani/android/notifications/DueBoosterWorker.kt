@@ -15,6 +15,7 @@ import app.tatani.android.MainActivity
 import app.tatani.android.R
 import app.tatani.android.TataniApp
 import app.tatani.android.domain.SrsEngine
+import java.time.LocalTime
 
 class DueBoosterWorker(
     appContext: Context,
@@ -23,9 +24,17 @@ class DueBoosterWorker(
 
     override suspend fun doWork(): Result {
         val app = applicationContext as TataniApp
-        val session = app.sessionStore.session.value ?: return Result.success()
+        if (!app.sessionStore.boostersEnabled.value) return Result.success()
+
+        val localHour = LocalTime.now().hour
+        if (localHour !in 9..20) return Result.success()
+
+        if (app.sessionStore.session.value == null) return Result.success()
 
         app.repository.syncAllFromServer()
+
+        val session = app.sessionStore.session.value ?: return Result.success()
+        if (!app.sessionStore.boostersEnabled.value) return Result.success()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -50,14 +59,9 @@ class DueBoosterWorker(
         val card = dueGraduated.random()
         val contexts = app.repository.decodeContexts(card)
         val example = SrsEngine.pickContextualSentence(contexts, card.srsLevel)?.jp
+        val promptBody = example ?: "Due in SRS · Tap to open Sprint"
 
         BoosterActionReceiver.ensureChannel(applicationContext)
-
-        val title = if (!card.reading.isNullOrBlank() && card.reading != card.word) {
-            "${card.word} (${card.reading})"
-        } else {
-            card.word
-        }
 
         fun buildActionIntent(remembered: Boolean, reqCode: Int): PendingIntent {
             val i = Intent(applicationContext, BoosterActionReceiver::class.java).apply {
@@ -81,10 +85,10 @@ class DueBoosterWorker(
         )
 
         val builder = NotificationCompat.Builder(applicationContext, BoosterActionReceiver.CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(title)
-            .setContentText(example ?: "Due in SRS · Tap to open Sprint")
-            .setStyle(NotificationCompat.BigTextStyle().bigText(example ?: "Due in SRS · Tap to open Sprint"))
+            .setSmallIcon(R.drawable.ic_stat_tatani)
+            .setContentTitle(card.word)
+            .setContentText(promptBody)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(promptBody))
             .setContentIntent(tapIntent)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)

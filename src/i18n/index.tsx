@@ -27,15 +27,15 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   const { user, profile, refreshProfile } = useAuth();
   const [lang, setLangState] = useState<LangCode>(readStored);
 
+  const profileUiLang = profile?.ui_language;
+
   // Profile is the source of truth once loaded.
   useEffect(() => {
-    const fromProfile = (profile as any)?.ui_language;
-    if (isLang(fromProfile) && fromProfile !== lang) {
-      setLangState(fromProfile);
-      window.localStorage.setItem(STORAGE_KEY, fromProfile);
+    if (isLang(profileUiLang)) {
+      setLangState((prev) => (prev === profileUiLang ? prev : profileUiLang));
+      window.localStorage.setItem(STORAGE_KEY, profileUiLang);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile]);
+  }, [profileUiLang]);
 
   useEffect(() => {
     document.documentElement.lang = lang;
@@ -46,7 +46,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       setLangState(next);
       window.localStorage.setItem(STORAGE_KEY, next);
       if (user) {
-        const { error } = await supabase.from("profiles").update({ ui_language: next } as any).eq("user_id", user.id);
+        const { error } = await supabase.from("profiles").update({ ui_language: next }).eq("user_id", user.id);
         if (error) throw error;
         await refreshProfile();
       }

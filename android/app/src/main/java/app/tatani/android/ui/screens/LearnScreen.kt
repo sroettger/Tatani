@@ -1,5 +1,6 @@
 package app.tatani.android.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -14,7 +15,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
@@ -23,6 +26,7 @@ import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.FastForward
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -84,10 +88,13 @@ fun LearnScreen(
     val session by viewModel.session.collectAsState()
 
     val targetEpId = episodeId ?: nextLearnTarget?.episodeId
+    val skippedInSession = remember { mutableStateListOf<String>() }
 
-    val availableUnlearned = remember(deckCards, targetEpId, session?.userLevel) {
+    val availableUnlearned = remember(deckCards, targetEpId, session?.userLevel, skippedInSession.size) {
+        val skippedSet = skippedInSession.toHashSet()
         val userRank = SrsEngine.jlptRank(session?.userLevel)
         deckCards.filter { c ->
+            if (c.word in skippedSet) return@filter false
             val matchesEp = targetEpId == null || c.primaryEpisodeId == targetEpId ||
                 viewModel.repository.decodeContexts(c).any { it.episodeId == targetEpId }
             val below = userRank in 1..50 && SrsEngine.jlptRank(c.level) < userRank
@@ -100,7 +107,7 @@ fun LearnScreen(
                 isBelowUserLevel = below,
             )
         }.sortedByDescending { c ->
-            c.frequency * 10 + (6 - SrsEngine.jlptRank(c.level).coerceAtMost(6)).coerceAtLeast(0)
+            c.frequency * 10 + (7 - SrsEngine.jlptRank(c.level).coerceAtMost(7)).coerceAtLeast(0)
         }
     }
 
@@ -111,6 +118,12 @@ fun LearnScreen(
     val drillHits = remember { mutableStateMapOf<String, Int>() }
     var drillRevealed by remember { mutableStateOf(false) }
     var graduatedCount by remember { mutableIntStateOf(0) }
+    var confirmExitDrill by remember { mutableStateOf(false) }
+
+    val activeDrillInProgress = phase == LearnPhase.DRILL && drillQueue.isNotEmpty()
+    BackHandler(enabled = activeDrillInProgress) {
+        confirmExitDrill = true
+    }
 
     LaunchedEffect(availableUnlearned, phase) {
         if (batch.isEmpty() && availableUnlearned.isNotEmpty() && phase == LearnPhase.ENCODE) {
@@ -160,9 +173,12 @@ fun LearnScreen(
     fun onAlreadyKnow() {
         val card = encodeCard ?: return
         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        if (card.word !in skippedInSession) {
+            skippedInSession.add(card.word)
+        }
         viewModel.markPriorKnown(card)
-        val batchWords = batch.map { it.word }.toSet()
-        val replacement = availableUnlearned.firstOrNull { it.word != card.word && it.word !in batchWords }
+        val excluded = (batch.map { it.word } + skippedInSession).toHashSet()
+        val replacement = availableUnlearned.firstOrNull { it.word !in excluded }
         batch.removeAt(encodeIdx)
         if (replacement != null) {
             batch.add(encodeIdx, replacement)
@@ -221,19 +237,28 @@ fun LearnScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = onBack, modifier = Modifier.size(36.dp)) {
+                IconButton(
+                    onClick = {
+                        if (activeDrillInProgress) confirmExitDrill = true else onBack()
+                    },
+                    modifier = Modifier.size(36.dp),
+                ) {
                     Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
                 }
                 Text(
                     text = when (phase) {
                         LearnPhase.ENCODE -> "Step 1/2 · Contextual Encoding"
                         LearnPhase.DRILL -> "Step 2/2 · Short-Lag Recall ($graduatedCount/${batch.size})"
-                        LearnPhase.DONE -> "Batch Graduated"
+                        LearnPhase.DONE -> if (graduatedCount > 0) "Batch Graduated" else "Batch Complete"
                     },
                     style = MaterialTheme.typography.labelMedium,
                     color = WashiMuted,
                 )
-                TextButton(onClick = onGoSprint) {
+                TextButton(
+                    onClick = {
+                        if (activeDrillInProgress) confirmExitDrill = true else onGoSprint()
+                    }
+                ) {
                     Icon(
                         imageVector = Icons.Outlined.Bolt,
                         contentDescription = null,
@@ -298,9 +323,17 @@ fun LearnScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
-                        Text("Batch graduated to SRS", style = MaterialTheme.typography.headlineMedium)
                         Text(
-                            "$graduatedCount words encoded in context and scheduled for fast Sprint reviews.",
+                            text = if (graduatedCount > 0) "Batch graduated to SRS" else "All words marked known",
+                            style = MaterialTheme.typography.headlineMedium,
+                            textAlign = TextAlign.Center,
+                        )
+                        Text(
+                            text = when (graduatedCount) {
+                                0 -> "Skipped known vocabulary — no SRS drills needed for this batch."
+                                1 -> "1 word encoded in context and scheduled for fast Sprint reviews."
+                                else -> "$graduatedCount words encoded in context and scheduled for fast Sprint reviews."
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             color = WashiMuted,
                             textAlign = TextAlign.Center,
@@ -390,9 +423,13 @@ fun LearnScreen(
 
                         // Guided Errorless Encoding: Reading + Kanji + Meaning + Breakdown
                         Column(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp)
+                                .verticalScroll(rememberScrollState()),
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
                         ) {
                             if (!encodeCard.reading.isNullOrBlank() && encodeCard.reading != encodeCard.word) {
                                 Text(
@@ -547,15 +584,49 @@ fun LearnScreen(
                         verticalArrangement = Arrangement.SpaceBetween,
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Text(
-                            text = "Recall reading & meaning from context",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = WashiMuted,
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "Recall reading & meaning",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = WashiMuted,
+                            )
+                            Surface(
+                                onClick = {
+                                    viewModel.tts.speak(
+                                        drillCard.reading ?: drillCard.word,
+                                        session?.learningLanguage ?: "ja"
+                                    )
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                color = SumiElevated,
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Outlined.VolumeUp,
+                                        contentDescription = "Audio",
+                                        modifier = Modifier.size(15.dp),
+                                    )
+                                    Text("Audio", style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
+                        }
 
                         Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp)
+                                .verticalScroll(rememberScrollState()),
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 if (drillRevealed && !drillCard.reading.isNullOrBlank() && drillCard.reading != drillCard.word) {
@@ -600,11 +671,29 @@ fun LearnScreen(
                             }
 
                             if (drillRevealed) {
-                                Text(
-                                    text = drillCard.meaning,
-                                    style = MaterialTheme.typography.headlineMedium,
-                                    textAlign = TextAlign.Center,
-                                )
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    Text(
+                                        text = drillCard.meaning,
+                                        style = MaterialTheme.typography.headlineMedium,
+                                        textAlign = TextAlign.Center,
+                                    )
+                                    if (drillCard.partOfSpeech.isNotBlank()) {
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = SumiElevated,
+                                        ) {
+                                            Text(
+                                                text = drillCard.partOfSpeech,
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = WashiMuted,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -668,5 +757,35 @@ fun LearnScreen(
                 }
             }
         }
+    }
+
+    if (confirmExitDrill) {
+        AlertDialog(
+            onDismissRequest = { confirmExitDrill = false },
+            containerColor = SumiSurface,
+            title = { Text("Leave recall drill?") },
+            text = {
+                Text(
+                    "Words still in this drill haven't graduated to SRS yet ($graduatedCount/${batch.size} graduated).",
+                    color = WashiMuted,
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmExitDrill = false
+                        onBack()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = CrimsonAgain),
+                ) {
+                    Text("Leave drill")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmExitDrill = false }) {
+                    Text("Keep drilling")
+                }
+            },
+        )
     }
 }

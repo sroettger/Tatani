@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ChevronLeft, Loader2, Upload, Sparkles, BookOpen, BrainCircuit, Volume2, Plus, Mic, Layers, Check, Type, CheckCircle2, RotateCw, Tv, GraduationCap, Repeat } from "lucide-react";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { ChevronLeft, Loader2, Sparkles, BookOpen, BrainCircuit, Volume2, Plus, Mic, Layers, Check, CheckCircle2, RotateCw, Tv, GraduationCap, Repeat } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/context/AuthContext";
@@ -15,13 +14,15 @@ import { EpisodeDiscussion } from "@/components/EpisodeDiscussion";
 import { cn } from "@/lib/utils";
 import { useStudyPrefs } from "@/hooks/use-study-prefs";
 import { useI18n } from "@/i18n";
-import { levelRank, scaleLabel, formatLevel } from "@/lib/languages";
+import type { StringKey } from "@/i18n/strings";
+import { levelRank, formatLevel } from "@/lib/languages";
+import { SRS_INTERVALS_DAYS } from "@/lib/srs";
+import { invalidateLocalSrsCache } from "@/lib/srs-store";
+import { fetchBatchedPages } from "@/lib/supabase-pagination";
 
 const TTS_LANG: Record<string, string> = { ja: "ja-JP", es: "es-ES", fr: "fr-FR", de: "de-DE" };
 const ttsLangFor = (code: string) => TTS_LANG[code] ?? "en-US";
 
-// SRS intervals in days (Leitner-style). Index = srs_level.
-const SRS_INTERVALS_DAYS = [1, 3, 7, 14, 30, 60, 120, 240, 480];
 const dueAtForLevel = (level: number) => {
   const days = SRS_INTERVALS_DAYS[Math.min(level, SRS_INTERVALS_DAYS.length - 1)];
   return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
@@ -42,7 +43,39 @@ type SentenceItem = { jp: string; en: string };
 type WordPref = "study" | "kanji_only" | "skip";
 type WordState = "unknown" | "learning" | "known";
 type KnownSource = "prior" | "learned" | null;
-type WordRow = { word: string; state: WordState; preference: WordPref; known_source: KnownSource; srs_level: number; srs_due_at: string | null };
+type WordRow = {
+  word: string;
+  state: WordState;
+  preference: WordPref;
+  known_source: KnownSource;
+  srs_level: number;
+  srs_due_at: string | null;
+};
+type EpisodeRow = {
+  id: string;
+  episode_number: number;
+  processing_status: string;
+  processing_chunks_total: number;
+  processing_chunks_done: number;
+};
+type ChunkSummaryRow = {
+  id: string;
+  chunk_index: number;
+  word_count: number;
+  studied_at: string | null;
+};
+
+const getLevel = (v: VocabItem) => v.level ?? v.jlpt_level ?? "none";
+
+const matchesQuery = (v: VocabItem, q: string) => {
+  const needle = q.trim().toLowerCase();
+  if (!needle) return true;
+  return (
+    v.word.toLowerCase().includes(needle) ||
+    (v.reading ?? "").toLowerCase().includes(needle) ||
+    (v.meaning ?? "").toLowerCase().includes(needle)
+  );
+};
 
 export default function EpisodeDetail() {
   const { episodeId } = useParams();
@@ -51,7 +84,7 @@ export default function EpisodeDetail() {
   const { t } = useI18n();
   const { chunkSize: CHUNK_SIZE, queueSize: QUEUE_SIZE } = useStudyPrefs();
   const pollRef = useRef<number | null>(null);
-  const [episode, setEpisode] = useState<{ id: string; episode_number: number; processing_status: string; processing_chunks_total: number; processing_chunks_done: number } | null>(null);
+  const [episode, setEpisode] = useState<EpisodeRow | null>(null);
   const [vocab, setVocab] = useState<VocabItem[]>([]);
   const [sentences, setSentences] = useState<SentenceItem[]>([]);
   const [wordStates, setWordStates] = useState<Map<string, WordRow>>(new Map());
@@ -61,68 +94,140 @@ export default function EpisodeDetail() {
   const [showAll, setShowAll] = useState(false);
   const [showKnown, setShowKnown] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
-  const [chunks, setChunks] = useState<{ id: string; chunk_index: number; word_count: number; studied_at: string | null }[]>([]);
+  const [chunks, setChunks] = useState<ChunkSummaryRow[]>([]);
   const [chunkifying, setChunkifying] = useState(false);
   const [allQuery, setAllQuery] = useState("");
   const [knownQuery, setKnownQuery] = useState("");
 
-  const getLevel = (v: VocabItem) => v.level ?? v.jlpt_level ?? "none";
+  const userId = user?.id;
 
-  const matchesQuery = (v: VocabItem, q: string) => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return true;
-    return (
-      v.word.toLowerCase().includes(needle) ||
-      (v.reading ?? "").toLowerCase().includes(needle) ||
-      (v.meaning ?? "").toLowerCase().includes(needle)
-    );
-  };
+  const load = useCallback(async (): Promise<EpisodeRow | null> => {
+    if (!episodeId || !userId) return null;
 
-  const load = async () => {
-    if (!episodeId || !user) return;
-    const { data: ep } = await supabase.from("episodes").select("id,episode_number,processing_status,processing_chunks_total,processing_chunks_done").eq("id", episodeId).maybeSingle();
-    setEpisode(ep as any);
-    const { data: cache } = await supabase.from("episode_vocab_cache").select("vocab,sentences").eq("episode_id", episodeId).maybeSingle();
-    setVocab(((cache?.vocab ?? []) as VocabItem[]));
-    setSentences(((cache?.sentences ?? []) as SentenceItem[]));
-    const { data: words } = await supabase.from("user_word_state").select("word,state,preference,known_source,srs_level,srs_due_at").eq("user_id", user.id).eq("learning_language", learningLanguage);
-    const map = new Map<string, WordRow>();
-    (words ?? []).forEach((w: any) => map.set(w.word, {
-      word: w.word, state: w.state, preference: w.preference,
-      known_source: (w.known_source ?? null) as KnownSource,
-      srs_level: w.srs_level ?? 0,
-      srs_due_at: w.srs_due_at ?? null,
-    }));
-    setWordStates(map);
-    // Words seen in any quiz OR any studied chunk → "Known" defaults to SRS-tracked.
-    const [{ data: quizzed }, { data: studiedChunks }] = await Promise.all([
-      supabase.from("quiz_results").select("word").eq("user_id", user.id).eq("learning_language", learningLanguage),
-      supabase.from("study_chunks").select("id").eq("user_id", user.id).eq("learning_language", learningLanguage).not("studied_at", "is", null),
+    const [{ data: ep }, { data: cache }, { data: ch }, { data: studiedChunks }] = await Promise.all([
+      supabase
+        .from("episodes")
+        .select("id,episode_number,processing_status,processing_chunks_total,processing_chunks_done")
+        .eq("id", episodeId)
+        .maybeSingle(),
+      supabase
+        .from("episode_vocab_cache")
+        .select("vocab,sentences")
+        .eq("episode_id", episodeId)
+        .eq("language", learningLanguage)
+        .maybeSingle(),
+      supabase
+        .from("study_chunks")
+        .select("id,chunk_index,word_count,studied_at")
+        .eq("user_id", userId)
+        .eq("episode_id", episodeId)
+        .eq("learning_language", learningLanguage)
+        .order("chunk_index"),
+      supabase
+        .from("study_chunks")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("learning_language", learningLanguage)
+        .not("studied_at", "is", null),
     ]);
-    const studiedSet = new Set<string>((quizzed ?? []).map((r: any) => r.word));
-    const chunkIds = (studiedChunks ?? []).map((c: any) => c.id);
-    if (chunkIds.length > 0) {
-      const { data: chunkWords } = await supabase
-        .from("study_chunk_words")
-        .select("word")
-        .in("chunk_id", chunkIds);
-      (chunkWords ?? []).forEach((r: any) => studiedSet.add(r.word));
+
+    const typedEp = (ep as EpisodeRow | null) ?? null;
+    setEpisode(typedEp);
+
+    const vocabList = (Array.isArray(cache?.vocab) ? cache.vocab : []) as VocabItem[];
+    const sentenceList = (Array.isArray(cache?.sentences) ? cache.sentences : []) as SentenceItem[];
+    setVocab(vocabList);
+    setSentences(sentenceList);
+    setChunks((ch ?? []) as ChunkSummaryRow[]);
+
+    const epWords = Array.from(new Set(vocabList.map((v) => v.word).filter(Boolean)));
+    const map = new Map<string, WordRow>();
+    const studiedSet = new Set<string>();
+
+    if (epWords.length > 0) {
+      const [{ data: stateRows }, { data: quizzedRows }] = await Promise.all([
+        fetchBatchedPages<string, {
+          word: string;
+          state: WordState;
+          preference: WordPref;
+          known_source: string | null;
+          srs_level: number | null;
+          srs_due_at: string | null;
+        }>(epWords, 200, (slice, from, to) =>
+          supabase
+            .from("user_word_state")
+            .select("word,state,preference,known_source,srs_level,srs_due_at")
+            .eq("user_id", userId)
+            .eq("learning_language", learningLanguage)
+            .in("word", slice)
+            .order("word", { ascending: true })
+            .range(from, to),
+        ),
+        fetchBatchedPages<string, { word: string }>(epWords, 200, (slice, from, to) =>
+          supabase
+            .from("quiz_results")
+            .select("word")
+            .eq("user_id", userId)
+            .eq("learning_language", learningLanguage)
+            .in("word", slice)
+            .order("id", { ascending: true })
+            .range(from, to),
+        ),
+      ]);
+
+      for (const w of stateRows) {
+        const ks = (w.known_source ?? null) as KnownSource;
+        map.set(w.word, {
+          word: w.word,
+          state: w.state,
+          preference: w.preference,
+          known_source: ks,
+          srs_level: w.srs_level ?? 0,
+          srs_due_at: w.srs_due_at ?? null,
+        });
+        if (w.known_source === "learned" || w.state === "learning") {
+          studiedSet.add(w.word);
+        }
+      }
+
+      for (const q of quizzedRows) {
+        studiedSet.add(q.word);
+      }
     }
+
+    const chunkIds = ((studiedChunks ?? []) as Array<{ id: string }>).map((c) => c.id);
+    if (chunkIds.length > 0 && epWords.length > 0) {
+      const { data: chunkWords } = await fetchBatchedPages<string, { word: string }>(
+        chunkIds,
+        50,
+        (slice, from, to) =>
+          supabase
+            .from("study_chunk_words")
+            .select("word")
+            .in("chunk_id", slice)
+            .order("chunk_id", { ascending: true })
+            .order("position", { ascending: true })
+            .range(from, to),
+      );
+      for (const cw of chunkWords) {
+        studiedSet.add(cw.word);
+      }
+    }
+
+    setWordStates(map);
     setStudiedWords(studiedSet);
-    const { data: ch } = await supabase
-      .from("study_chunks")
-      .select("id,chunk_index,word_count,studied_at")
-      .eq("user_id", user.id).eq("episode_id", episodeId).eq("learning_language", learningLanguage)
-      .order("chunk_index");
-    setChunks((ch ?? []) as any);
-    return ep;
-  };
+    return typedEp;
+  }, [episodeId, userId, learningLanguage]);
 
   useEffect(() => {
-    load();
-    return () => { if (pollRef.current) window.clearInterval(pollRef.current); };
-    // eslint-disable-next-line
-  }, [episodeId, user]);
+    void load();
+    return () => {
+      if (pollRef.current) {
+        window.clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [load]);
 
   // Poll while processing
   useEffect(() => {
@@ -131,18 +236,18 @@ export default function EpisodeDetail() {
       setProgressStage(t("episode.extracting"));
       pollRef.current = window.setInterval(async () => {
         const ep = await load();
-        if ((ep as any)?.processing_status === "ready") {
+        if (ep?.processing_status === "ready") {
           if (pollRef.current) { window.clearInterval(pollRef.current); pollRef.current = null; }
           setBusy(false); setProgressStage("");
           toast.success(t("episode.processed"));
-        } else if ((ep as any)?.processing_status === "failed") {
+        } else if (ep?.processing_status === "failed") {
           if (pollRef.current) { window.clearInterval(pollRef.current); pollRef.current = null; }
           setBusy(false); setProgressStage("");
           toast.error(t("episode.processFailed"), { description: t("episode.tryAgain") });
         }
       }, 3000);
     }
-  }, [episode?.processing_status]);
+  }, [episode?.processing_status, load, t]);
 
   const startProcess = async (subText: string) => {
     if (!episodeId) return;
@@ -151,12 +256,13 @@ export default function EpisodeDetail() {
     const { data, error } = await supabase.functions.invoke("process-episode", {
       body: { episode_id: episodeId, subtitle_text: subText },
     });
+    const payload = data as { error?: string; cached?: boolean } | null;
     if (error) { setBusy(false); setProgressStage(""); toast.error(t("episode.processFailed"), { description: error.message }); return; }
-    if ((data as any)?.error) { setBusy(false); setProgressStage(""); toast.error(t("episode.processFailed"), { description: (data as any).error }); return; }
-    if ((data as any)?.cached) {
+    if (payload?.error) { setBusy(false); setProgressStage(""); toast.error(t("episode.processFailed"), { description: payload.error }); return; }
+    if (payload?.cached) {
       setBusy(false); setProgressStage("");
       toast.success(t("episode.loadedFromCache"));
-      load();
+      void load();
       return;
     }
     setProgressStage(t("episode.extractingLong"));
@@ -169,10 +275,11 @@ export default function EpisodeDetail() {
     setProgressStage(t("episode.fetchingSubs"));
     const { data, error } = await supabase.functions.invoke("fetch-subtitles", { body: { episode_id: episodeId } });
     if (error) { setBusy(false); setProgressStage(""); toast.error(t("episode.fetchFailed"), { description: error.message }); return; }
-    if (!data?.found) {
+    const payload = data as { found?: boolean; content?: string; attempts?: Array<{ provider: string }> } | null;
+    if (!payload?.found || !payload.content) {
       setBusy(false); setProgressStage("");
-      const tried = Array.isArray((data as any)?.attempts)
-        ? (data as any).attempts.map((a: any) => a.provider).join(", ")
+      const tried = Array.isArray(payload?.attempts)
+        ? payload.attempts.map((a) => a.provider).join(", ")
         : "";
       toast.error(t("episode.noSubsFound"), {
         description: tried ? t("episode.noSubsTried", { providers: tried }) : t("episode.tryAgainLater"),
@@ -180,7 +287,7 @@ export default function EpisodeDetail() {
       return;
     }
 
-    await startProcess(data.content);
+    await startProcess(payload.content);
   };
 
   const speak = (text: string) => {
@@ -193,39 +300,37 @@ export default function EpisodeDetail() {
 
   // Level-based defaulting: words below the user's level default to "known" unless user overrode.
   const myRank = levelRank(learningLanguage, progress?.level);
-  const isBelowLevel = (lvl: string) => myRank > 0 && (levelRank(learningLanguage, lvl) || 99) < myRank;
 
-  // Effective bucket for a word: "known" | "new" (with preference)
-  const bucketOf = (v: VocabItem): "known" | "new" => {
-    const s = wordStates.get(v.word);
-    if (s?.state === "known") return "known";
-    if (s) return "new"; // user explicitly set it as not-known
-    if (isBelowLevel(getLevel(v))) return "known"; // auto-skip default
-    return "new";
-  };
+  const bucketOf = useCallback(
+    (v: VocabItem): "known" | "new" => {
+      const s = wordStates.get(v.word);
+      if (s?.state === "known") return "known";
+      if (s) return "new";
+      const below = myRank > 0 && (levelRank(learningLanguage, getLevel(v)) || 99) < myRank;
+      if (below) return "known";
+      return "new";
+    },
+    [wordStates, learningLanguage, myRank],
+  );
 
-  const prefOf = (word: string): WordPref => wordStates.get(word)?.preference ?? "study";
+  const prefOf = useCallback(
+    (word: string): WordPref => wordStates.get(word)?.preference ?? "study",
+    [wordStates],
+  );
 
-  // Importance score: how central is this word to the episode's story.
-  // Signals: (a) how often it appears across the AI-extracted example sentences for THIS episode,
-  // (b) level commonness (lower/easier level = more common word = more likely to recur).
-  // Higher = more important.
-  const levelCommonness = (lvl: string) => {
-    const rank = levelRank(learningLanguage, lvl);
-    if (!rank) return 0;
-    const total = 6;
-    return Math.max(0, total - rank);
-  };
   const { importance, frequency } = useMemo(() => {
+    const levelCommonness = (lvl: string) => {
+      const rank = levelRank(learningLanguage, lvl);
+      if (!rank) return 0;
+      return Math.max(0, 6 - rank);
+    };
     const corpus = [
-      ...vocab.flatMap(v => [v.example_sentence_jp ?? ""]),
-      ...sentences.map(s => s.jp ?? ""),
+      ...vocab.flatMap((v) => [v.example_sentence_jp ?? ""]),
+      ...sentences.map((s) => s.jp ?? ""),
     ].join("\n");
     const score = new Map<string, number>();
     const freqMap = new Map<string, number>();
     for (const v of vocab) {
-      // Prefer the tokenizer's true subtitle frequency; fall back to corpus regex match
-      // for older cached entries that don't carry `frequency`.
       let freq = typeof v.frequency === "number" ? v.frequency : 0;
       if (!freq) {
         const w = v.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -238,29 +343,36 @@ export default function EpisodeDetail() {
       score.set(v.word, freq * 10 + levelCommonness(getLevel(v)));
     }
     return { importance: score, frequency: freqMap };
-  }, [vocab, sentences]);
+  }, [vocab, sentences, learningLanguage]);
 
-  const byImportance = (a: VocabItem, b: VocabItem) =>
-    (importance.get(b.word) ?? 0) - (importance.get(a.word) ?? 0);
-
-  const sortedVocab = useMemo(() => [...vocab].sort(byImportance), [vocab, importance]);
-  const newVocab = useMemo(() => sortedVocab.filter(v => bucketOf(v) === "new"), [sortedVocab, wordStates, myRank]);
-  const knownVocab = useMemo(() => sortedVocab.filter(v => bucketOf(v) === "known"), [sortedVocab, wordStates, myRank]);
-  // Queue = up to QUEUE_SIZE most-important words to learn next (study/kanji_only preference, not skipped).
+  const sortedVocab = useMemo(
+    () => [...vocab].sort((a, b) => (importance.get(b.word) ?? 0) - (importance.get(a.word) ?? 0)),
+    [vocab, importance],
+  );
+  const newVocab = useMemo(() => sortedVocab.filter((v) => bucketOf(v) === "new"), [sortedVocab, bucketOf]);
+  const knownVocab = useMemo(() => sortedVocab.filter((v) => bucketOf(v) === "known"), [sortedVocab, bucketOf]);
   const queueVocab = useMemo(
-    () => newVocab.filter(v => prefOf(v.word) !== "skip").slice(0, QUEUE_SIZE),
-    [newVocab, wordStates]
+    () => newVocab.filter((v) => prefOf(v.word) !== "skip").slice(0, QUEUE_SIZE),
+    [newVocab, prefOf, QUEUE_SIZE],
   );
 
-  // Chunkify-staleness: chunks reflect the current "to learn" queue (max QUEUE_SIZE words).
   const studyableCount = queueVocab.length;
   const chunkedCount = chunks.reduce((s, c) => s + c.word_count, 0);
   const chunksStale = chunks.length > 0 && chunkedCount !== studyableCount;
 
+  const studiedWordCount = useMemo(() => {
+    const chunkStudiedCount = chunks.filter((c) => c.studied_at).reduce((s, c) => s + c.word_count, 0);
+    const learnedInEpisodeCount = vocab.filter((v) => {
+      const s = wordStates.get(v.word);
+      return s?.known_source === "learned" || s?.state === "learning";
+    }).length;
+    return Math.max(chunkStudiedCount, learnedInEpisodeCount);
+  }, [chunks, vocab, wordStates]);
+
   const upsertWord = async (
     v: VocabItem,
     patch: Partial<Pick<WordRow, "state" | "preference" | "known_source" | "srs_level" | "srs_due_at">>,
-    extra?: { marked_known_at?: string | null }
+    extra?: { marked_known_at?: string | null },
   ) => {
     if (!user) return;
     const prev = wordStates.get(v.word);
@@ -272,72 +384,73 @@ export default function EpisodeDetail() {
       srs_level: patch.srs_level ?? prev?.srs_level ?? 0,
       srs_due_at: patch.srs_due_at !== undefined ? patch.srs_due_at : (prev?.srs_due_at ?? null),
     };
-    setWordStates(m => {
+    setWordStates((m) => {
       const nm = new Map(m);
       nm.set(v.word, next);
       return nm;
     });
-    const payload: any = {
+    const lvl = getLevel(v);
+    const payload = {
       user_id: user.id,
       word: v.word,
       reading: v.reading,
-      level: getLevel(v) === "none" ? null : getLevel(v),
+      level: lvl === "none" ? null : lvl,
       learning_language: learningLanguage,
       state: next.state,
       preference: next.preference,
       known_source: next.known_source,
       srs_level: next.srs_level,
       srs_due_at: next.srs_due_at,
+      ...(extra?.marked_known_at !== undefined ? { marked_known_at: extra.marked_known_at } : {}),
     };
-    if (extra?.marked_known_at !== undefined) payload.marked_known_at = extra.marked_known_at;
     const { error: upsertErr } = await supabase.from("user_word_state").upsert(payload, { onConflict: "user_id,word,learning_language" });
-    if (upsertErr) console.error("user_word_state upsert failed:", upsertErr, payload);
+    if (upsertErr) {
+      console.error("user_word_state upsert failed:", upsertErr, payload);
+    } else {
+      invalidateLocalSrsCache(user.id, learningLanguage);
+    }
   };
 
-  // Default "Known" action = "Learned it" (SRS-tracked, will resurface in future episodes).
   const markKnownLearned = (v: VocabItem) =>
     upsertWord(v, { state: "known", known_source: "learned", srs_level: 0, srs_due_at: dueAtForLevel(0) }, { marked_known_at: new Date().toISOString() });
-  // "Already knew it" = permanent, never resurfaces.
   const markKnownPrior = (v: VocabItem) =>
     upsertWord(v, { state: "known", known_source: "prior", srs_level: 0, srs_due_at: null }, { marked_known_at: new Date().toISOString() });
   const markNew = (v: VocabItem) =>
     upsertWord(v, { state: "unknown", known_source: null, srs_due_at: null });
-  // (kanji-only feature removed)
 
-  // Demote any "learned" known word that's now due back into the "learning" queue,
-  // bumping its SRS level. "prior" words are never demoted.
+  // Manual rewatch: move due SRS-learned words back into the episode queue without inflating srs_level.
   const demoteDueWords = async (words: VocabItem[]): Promise<number> => {
     if (!user || words.length === 0) return 0;
     const now = Date.now();
-    const due = words.filter(v => {
+    const due = words.filter((v) => {
       const s = wordStates.get(v.word);
       if (!s || s.state !== "known" || s.known_source !== "learned") return false;
       if (!s.srs_due_at) return false;
       return new Date(s.srs_due_at).getTime() <= now;
     });
     if (due.length === 0) return 0;
-    const updates = due.map(v => {
+    const updates = due.map((v) => {
       const s = wordStates.get(v.word)!;
-      const newLevel = Math.min(s.srs_level + 1, SRS_INTERVALS_DAYS.length - 1);
+      const lvl = getLevel(v);
       return {
         user_id: user.id,
         word: v.word,
         reading: v.reading,
-        level: getLevel(v) === "none" ? null : getLevel(v),
+        level: lvl === "none" ? null : lvl,
         learning_language: learningLanguage,
         state: "learning" as WordState,
         preference: s.preference,
-        known_source: "learned" as KnownSource,
-        srs_level: newLevel,
-        srs_due_at: dueAtForLevel(newLevel),
+        known_source: "learned" as const,
+        srs_level: s.srs_level,
+        srs_due_at: s.srs_due_at,
         correct_streak: 0,
       };
     });
-    await supabase.from("user_word_state").upsert(updates as any, { onConflict: "user_id,word,learning_language" });
-    setWordStates(m => {
+    await supabase.from("user_word_state").upsert(updates, { onConflict: "user_id,word,learning_language" });
+    invalidateLocalSrsCache(user.id, learningLanguage);
+    setWordStates((m) => {
       const nm = new Map(m);
       for (const u of updates) {
-        const prev = nm.get(u.word);
         nm.set(u.word, {
           word: u.word,
           state: u.state,
@@ -352,7 +465,6 @@ export default function EpisodeDetail() {
     return due.length;
   };
 
-  // Manual rewatch: re-evaluate this episode's vocab right now.
   const [rewatching, setRewatching] = useState(false);
   const handleRewatch = async () => {
     setRewatching(true);
@@ -362,18 +474,6 @@ export default function EpisodeDetail() {
     else toast.message(t("episode.nothingDueYet"), { description: t("episode.nothingDueBody") });
   };
 
-  // Auto-demote on first open: only if user has never created chunks for this episode
-  // (i.e. truly first time viewing). This keeps already-opened episodes stable.
-  const autoDemoteRanRef = useRef(false);
-  useEffect(() => {
-    if (autoDemoteRanRef.current) return;
-    if (!user || vocab.length === 0) return;
-    if (chunks.length > 0) { autoDemoteRanRef.current = true; return; }
-    autoDemoteRanRef.current = true;
-    demoteDueWords(vocab);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vocab, chunks, user]);
-
   const chunkify = async () => {
     if (!user || !episodeId) return;
     const studyable = queueVocab;
@@ -382,29 +482,67 @@ export default function EpisodeDetail() {
       return;
     }
     setChunkifying(true);
-    await supabase.from("study_chunks").delete().eq("user_id", user.id).eq("episode_id", episodeId).eq("learning_language", learningLanguage);
+    await supabase
+      .from("study_chunks")
+      .delete()
+      .eq("user_id", user.id)
+      .eq("episode_id", episodeId)
+      .eq("learning_language", learningLanguage);
+
     const groups: VocabItem[][] = [];
-    for (let i = 0; i < studyable.length; i += CHUNK_SIZE) groups.push(studyable.slice(i, i + CHUNK_SIZE));
-    for (let idx = 0; idx < groups.length; idx++) {
-      const { data: chunk, error: cErr } = await supabase
-        .from("study_chunks")
-        .insert({ user_id: user.id, episode_id: episodeId, chunk_index: idx + 1, word_count: groups[idx].length, learning_language: learningLanguage })
-        .select("id").single();
-      if (cErr || !chunk) { toast.error(t("episode.chunkCreateFailed")); setChunkifying(false); return; }
-      const wordRows = groups[idx].map((v, pos) => ({
-        chunk_id: chunk.id,
-        word: v.word,
-        reading: v.reading,
-        meaning: v.meaning,
-        level: getLevel(v) === "none" ? null : getLevel(v),
-        part_of_speech: v.part_of_speech,
-        example_sentence_jp: v.example_sentence_jp,
-        example_sentence_en: v.example_sentence_en,
-        position: pos,
-      }));
-      const { error: wErr } = await supabase.from("study_chunk_words").insert(wordRows);
-      if (wErr) { toast.error(t("episode.chunkWordsFailed")); setChunkifying(false); return; }
+    for (let i = 0; i < studyable.length; i += CHUNK_SIZE) {
+      groups.push(studyable.slice(i, i + CHUNK_SIZE));
     }
+
+    const { data: insertedChunks, error: cErr } = await supabase
+      .from("study_chunks")
+      .insert(
+        groups.map((group, idx) => ({
+          user_id: user.id,
+          episode_id: episodeId,
+          chunk_index: idx + 1,
+          word_count: group.length,
+          learning_language: learningLanguage,
+        })),
+      )
+      .select("id,chunk_index");
+
+    if (cErr || !insertedChunks || insertedChunks.length !== groups.length) {
+      toast.error(t("episode.chunkCreateFailed"));
+      setChunkifying(false);
+      return;
+    }
+
+    const chunkIdByIndex = new Map<number, string>(
+      insertedChunks.map((c) => [c.chunk_index, c.id]),
+    );
+
+    const allWordRows = groups.flatMap((group, idx) => {
+      const chunkId = chunkIdByIndex.get(idx + 1)!;
+      return group.map((v, pos) => {
+        const lvl = getLevel(v);
+        return {
+          chunk_id: chunkId,
+          word: v.word,
+          reading: v.reading,
+          meaning: v.meaning,
+          level: lvl === "none" ? null : lvl,
+          part_of_speech: v.part_of_speech,
+          example_sentence_jp: v.example_sentence_jp,
+          example_sentence_en: v.example_sentence_en,
+          position: pos,
+        };
+      });
+    });
+
+    const { error: wErr } = await supabase.from("study_chunk_words").insert(allWordRows);
+    if (wErr) {
+      toast.error(t("episode.chunkWordsFailed"));
+      setChunkifying(false);
+      return;
+    }
+
+    invalidateLocalSrsCache(user.id, learningLanguage);
     toast.success(t("episode.chunksCreated", { n: groups.length }));
     setChunkifying(false);
     await load();
@@ -478,21 +616,21 @@ export default function EpisodeDetail() {
               value={`${queueVocab.length}/${newVocab.length}`}
               accent="text-primary"
               active={showQueue}
-              onClick={() => { setShowQueue(s => !s); setShowAll(false); setShowKnown(false); }}
+              onClick={() => { setShowQueue((s) => !s); setShowAll(false); setShowKnown(false); }}
             />
             <StatBox
               label={t("episode.known")}
               value={knownVocab.length}
               accent="text-success"
               active={showKnown}
-              onClick={() => { setShowKnown(s => !s); setShowAll(false); setShowQueue(false); }}
+              onClick={() => { setShowKnown((s) => !s); setShowAll(false); setShowQueue(false); }}
             />
             <StatBox
               label={t("episode.all")}
               value={vocab.length}
               accent="text-foreground"
               active={showAll}
-              onClick={() => { setShowAll(s => !s); setShowKnown(false); setShowQueue(false); }}
+              onClick={() => { setShowAll((s) => !s); setShowKnown(false); setShowQueue(false); }}
             />
           </div>
 
@@ -656,7 +794,7 @@ export default function EpisodeDetail() {
                   </div>
                 )}
                 <div className="grid gap-2">
-                  {chunks.map(c => (
+                  {chunks.map((c) => (
                     <Card
                       key={c.id}
                       onClick={() => navigate(`/study/chunk/${c.id}`)}
@@ -680,7 +818,7 @@ export default function EpisodeDetail() {
                   variant="outline"
                   className="w-full h-11 mt-1"
                   onClick={() => navigate(`/episode/${episodeId}/quiz`)}
-                  disabled={!chunks.some(c => c.studied_at)}
+                  disabled={!chunks.some((c) => c.studied_at)}
                 >
                   <BrainCircuit className="h-4 w-4" /> {t("episode.quizStudiedChunks")}
                 </Button>
@@ -706,14 +844,14 @@ export default function EpisodeDetail() {
           {episodeId && (
             <EpisodeSummary
               episodeId={episodeId}
-              studiedWordCount={chunks.filter(c => c.studied_at).reduce((s, c) => s + c.word_count, 0)}
+              studiedWordCount={studiedWordCount}
             />
           )}
 
           {episodeId && (
             <EpisodeDiscussion
               episodeId={episodeId}
-              studiedWordCount={chunks.filter(c => c.studied_at).reduce((s, c) => s + c.word_count, 0)}
+              studiedWordCount={studiedWordCount}
             />
           )}
 
@@ -735,7 +873,7 @@ export default function EpisodeDetail() {
       <TutorChat
         vocab={vocab}
         onStartQuiz={() => navigate(`/study/${episodeId}`)}
-        onWordMarkedKnown={(w) => setWordStates(prev => {
+        onWordMarkedKnown={(w) => setWordStates((prev) => {
           const next = new Map(prev);
           const existing = next.get(w);
           next.set(w, {
@@ -767,7 +905,6 @@ function StatBox({ label, value, accent, active, onClick }: { label: string; val
 }
 
 function FreqBadge({ freq, title }: { freq: number; title: string }) {
-  // Visual heat: 0 = neutral, 1 = subtle, 2 = warm, 3+ = hot.
   const tone =
     freq >= 3 ? "bg-primary/15 text-primary"
     : freq === 2 ? "bg-accent/15 text-accent"
@@ -787,7 +924,7 @@ function renderQueueRow(
   v: VocabItem,
   markKnown: (v: VocabItem) => void,
   freq: number,
-  t: (k: any, vars?: any) => string,
+  t: (k: StringKey, vars?: Record<string, string | number>) => string,
   hasRuby: boolean,
 ) {
   return (

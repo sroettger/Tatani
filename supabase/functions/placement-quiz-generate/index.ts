@@ -1,11 +1,33 @@
 // Generate a placement quiz (~20 adaptive questions across the learner's level scale) via Gemini API.
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  corsHeaders,
+  createAdminClient,
+  jsonResponse,
+  requireAuthUser,
+} from "../_shared/auth.ts";
 import { callAiChatCompletions, getAiApiKey } from "../_shared/ai.ts";
 import { getUserLanguages, uiLanguageName } from "../_shared/languages.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+type RawQuizQuestion = {
+  prompt?: unknown;
+  word?: unknown;
+  jp_word?: unknown;
+  reading?: unknown;
+  choices?: unknown;
+  correct_index?: unknown;
+  level?: unknown;
+  jlpt_level?: unknown;
+};
+
+type NormalizedQuizQuestion = {
+  prompt: string;
+  word: string;
+  jp_word: string;
+  reading: string;
+  choices: string[];
+  correct_index: number;
+  level: string;
+  jlpt_level: string;
 };
 
 const buildTool = (targetName: string, scale: string, levels: string[]) => ({
@@ -21,9 +43,18 @@ const buildTool = (targetName: string, scale: string, levels: string[]) => ({
           items: {
             type: "object",
             properties: {
-              prompt: { type: "string", description: "The question shown to the learner, written in their own language." },
-              word: { type: "string", description: `The ${targetName} word being tested (dictionary form).` },
-              reading: { type: "string", description: "Phonetic reading; empty string for languages that don't need one." },
+              prompt: {
+                type: "string",
+                description: "The question shown to the learner, written in their own language.",
+              },
+              word: {
+                type: "string",
+                description: `The ${targetName} word being tested (dictionary form).`,
+              },
+              reading: {
+                type: "string",
+                description: "Phonetic reading; empty string for languages that don't need one.",
+              },
               choices: { type: "array", items: { type: "string" }, minItems: 4, maxItems: 4 },
               correct_index: { type: "integer", minimum: 0, maximum: 3 },
               level: { type: "string", enum: levels, description: `${scale} level of the word.` },
@@ -39,85 +70,129 @@ const buildTool = (targetName: string, scale: string, levels: string[]) => ({
   },
 });
 
+function normalizeBatchQuestions(
+  rawList: unknown,
+  fallbackLevel: string,
+): NormalizedQuizQuestion[] {
+  if (!Array.isArray(rawList)) return [];
+  const out: NormalizedQuizQuestion[] = [];
+  for (const item of rawList as RawQuizQuestion[]) {
+    if (!item || typeof item !== "object") continue;
+    const word = String(item.word ?? item.jp_word ?? "").trim();
+    const prompt = String(item.prompt ?? "").trim();
+    const reading = typeof item.reading === "string" ? item.reading.trim() : "";
+    const level = String(item.level ?? item.jlpt_level ?? fallbackLevel).trim() || fallbackLevel;
+    const choices = Array.isArray(item.choices)
+      ? item.choices.filter((c): c is string => typeof c === "string" && c.trim().length > 0)
+      : [];
+    const correctIndex = Number(item.correct_index);
+    if (!word || !prompt || choices.length !== 4 || !Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex > 3) {
+      continue;
+    }
+    out.push({
+      prompt,
+      word,
+      jp_word: word,
+      reading,
+      choices,
+      correct_index: correctIndex,
+      level,
+      jlpt_level: level,
+    });
+  }
+  return out;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   try {
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-    const supa = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY") ?? Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ?? "", { global: { headers: { Authorization: authHeader } } });
-    const { data: claims, error: claimsErr } = await supa.auth.getClaims(authHeader.replace("Bearer ", ""));
-    if (claimsErr || !claims?.claims) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
+    const auth = await requireAuthUser(req);
+    if (auth instanceof Response) return auth;
+    const { userId } = auth;
 
-    const userId = (claims.claims as any).sub as string;
-    const service = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const service = createAdminClient();
     const { learning, uiLanguage } = await getUserLanguages(service, userId);
     const nativeLang = uiLanguageName(uiLanguage);
     const scale = learning.scale === "jlpt" ? "JLPT" : "CEFR";
     const levels = learning.levels;
-    const perLevel = Math.round(20 / levels.length);
 
     const aiApiKey = getAiApiKey();
 
-    const genForLevels = async (batchLevels: string[], count: number) => {
-      const aiResp = await callAiChatCompletions({
-        model: "gemini-2.5-flash",
-        reasoning_effort: "low",
-        messages: [
-          {
-            role: "system",
-            content: `You write ${learning.name} placement quizzes. Return exactly ${count} multiple-choice questions at ${scale} level(s) ${batchLevels.join(", ")}. Each question tests vocabulary recognition (${learning.name} word → its meaning). Write the prompt and all four answer choices in ${nativeLang}. ${learning.morphological ? "Include the kana reading for each word." : "Leave the reading field as an empty string."} Provide 4 plausible distractors.`,
-          },
-          { role: "user", content: "Generate the questions now." },
-        ],
-        tools: [buildTool(learning.name, scale, batchLevels)],
-        tool_choice: { type: "function", function: { name: "build_placement_quiz" } },
-      }, aiApiKey);
-      if (!aiResp.ok) {
-        const t = await aiResp.text();
-        console.error("AI API error", aiResp.status, t);
-        return { status: aiResp.status, questions: [] as any[] };
-      }
-      const aiJson = await aiResp.json();
-      const call = aiJson?.choices?.[0]?.message?.tool_calls?.[0];
-      if (!call?.function?.arguments) return { status: 502, questions: [] as any[] };
+    const genForLevelsOnce = async (
+      batchLevels: string[],
+      count: number,
+    ): Promise<{ status: number; questions: NormalizedQuizQuestion[] }> => {
       try {
-        const parsed = JSON.parse(call.function.arguments);
-        return { status: 200, questions: (parsed?.questions ?? []).map((q: any) => ({ ...q, level: q.level ?? batchLevels[0] })) };
-      } catch {
-        return { status: 502, questions: [] as any[] };
+        const aiResp = await callAiChatCompletions(
+          {
+            model: "gemini-2.5-flash",
+            reasoning_effort: "low",
+            messages: [
+              {
+                role: "system",
+                content: `You write ${learning.name} placement quizzes. Return exactly ${count} multiple-choice questions at ${scale} level(s) ${batchLevels.join(", ")}. Each question tests vocabulary recognition (${learning.name} word → its meaning). Write the prompt and all four answer choices in ${nativeLang}. ${learning.morphological ? "Include the kana reading for each word." : "Leave the reading field as an empty string."} Provide 4 plausible distractors.`,
+              },
+              { role: "user", content: "Generate the questions now." },
+            ],
+            tools: [buildTool(learning.name, scale, batchLevels)],
+            tool_choice: { type: "function", function: { name: "build_placement_quiz" } },
+          },
+          aiApiKey,
+        );
+        if (!aiResp.ok) {
+          const t = await aiResp.text();
+          console.error("AI API error", aiResp.status, t);
+          return { status: aiResp.status, questions: [] };
+        }
+        const aiJson = (await aiResp.json()) as {
+          choices?: Array<{ message?: { tool_calls?: Array<{ function?: { arguments?: string } }> } }>;
+        };
+        const call = aiJson?.choices?.[0]?.message?.tool_calls?.[0];
+        if (!call?.function?.arguments) return { status: 502, questions: [] };
+        const parsed = JSON.parse(call.function.arguments) as { questions?: unknown };
+        const questions = normalizeBatchQuestions(parsed?.questions, batchLevels[0]);
+        if (questions.length === 0) return { status: 502, questions: [] };
+        return { status: 200, questions };
+      } catch (err) {
+        console.warn("Placement batch parse/network failure:", err);
+        return { status: 502, questions: [] };
       }
     };
 
-    // One request per level, run in parallel — far faster than a single 20-question call.
-    const results = await Promise.all(levels.map((lvl) => genForLevels([lvl], perLevel)));
-    const failed = results.find((r) => r.status !== 200);
-    const rawQuestions = results.flatMap((r) => r.questions);
-    if (!rawQuestions.length) {
-      const status = failed?.status ?? 502;
-      if (status === 429) return new Response(JSON.stringify({ error: "Rate limit exceeded." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      if (status === 402) return new Response(JSON.stringify({ error: "AI credits exhausted." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      return new Response(JSON.stringify({ error: "Quiz generation failed" }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    // Retry failed level batches once before giving up.
+    const genForLevelsWithRetry = async (
+      batchLevels: string[],
+      count: number,
+    ): Promise<{ status: number; questions: NormalizedQuizQuestion[] }> => {
+      const first = await genForLevelsOnce(batchLevels, count);
+      if (first.status === 200 && first.questions.length > 0) return first;
+      if (first.status === 402) return first;
+      await new Promise((r) => setTimeout(r, 500));
+      return await genForLevelsOnce(batchLevels, count);
+    };
+
+    // Distribute exactly 20 questions across all levels (e.g. [4,4,4,4,4] for 5 JLPT levels, [4,4,3,3,3,3] for 6 CEFR levels).
+    const basePerLevel = Math.floor(20 / levels.length);
+    const remainder = 20 % levels.length;
+    const results = await Promise.all(
+      levels.map((lvl, idx) => genForLevelsWithRetry([lvl], basePerLevel + (idx < remainder ? 1 : 0))),
+    );
+
+    const succeededLevels = results.filter((r) => r.status === 200 && r.questions.length > 0).length;
+    const majorityLevels = Math.floor(levels.length / 2) + 1;
+    const questions = results.flatMap((r) => r.questions);
+
+    if (succeededLevels < majorityLevels || questions.length === 0) {
+      const rateLimited = results.find((r) => r.status === 429);
+      const quotaExhausted = results.find((r) => r.status === 402);
+      if (quotaExhausted) return jsonResponse({ error: "AI credits exhausted." }, 402);
+      if (rateLimited) return jsonResponse({ error: "Rate limit exceeded." }, 429);
+      return jsonResponse({ error: "Quiz generation failed" }, 502);
     }
 
-    const questions = rawQuestions.map((q: any) => ({
-      ...q,
-      word: q.word ?? q.jp_word ?? "",
-      level: q.level ?? q.jlpt_level ?? levels[0],
-      jp_word: q.word ?? q.jp_word ?? "",
-      jlpt_level: q.level ?? q.jlpt_level ?? levels[0],
-      reading: q.reading ?? "",
-    }));
-    return new Response(JSON.stringify({ questions }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return jsonResponse({ questions });
   } catch (e) {
     console.error(e);
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "unknown" }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return jsonResponse({ error: e instanceof Error ? e.message : "unknown" }, 500);
   }
 });

@@ -2,7 +2,6 @@ package app.tatani.android.domain
 
 import kotlinx.serialization.Serializable
 import java.time.Instant
-import kotlin.math.abs
 
 object SrsEngine {
     val SRS_INTERVALS_DAYS = intArrayOf(1, 3, 7, 14, 30, 60, 120, 240, 480)
@@ -32,6 +31,7 @@ object SrsEngine {
         val srsDueAtEpochMs: Long?,
         val lastReviewedAtIso: String?,
         val markedKnownAtIso: String?,
+        val hasServerState: Boolean = true,
     )
 
     data class SentenceSegment(
@@ -39,10 +39,49 @@ object SrsEngine {
         val highlighted: Boolean,
     )
 
-    fun nextIntervalDaysForGrade(prevSrsLevel: Int, prevSrsDueAtEpochMs: Long?, remembered: Boolean): Int {
+    private fun computeNextRememberedLevel(prev: SrsSnapshot?, nowMs: Long): Int {
+        val maxIdx = SRS_INTERVALS_DAYS.lastIndex
+        val dueMs = prev?.srsDueAtEpochMs ?: return 0
+        if (prev.state == "learning") return 0
+        val prevLevel = prev.srsLevel.coerceIn(0, maxIdx)
+        return when {
+            prev.state == "known" && nowMs < dueMs -> prevLevel
+            prev.state == "known" -> (prevLevel + 1).coerceAtMost(maxIdx)
+            else -> 0
+        }
+    }
+
+    fun nextIntervalDays(
+        prev: SrsSnapshot?,
+        remembered: Boolean,
+        nowMs: Long = System.currentTimeMillis(),
+    ): Int {
+        if (!remembered) return SRS_INTERVALS_DAYS[0]
+        return SRS_INTERVALS_DAYS[computeNextRememberedLevel(prev, nowMs)]
+    }
+
+    fun nextIntervalDaysForGrade(
+        prevSrsLevel: Int,
+        prevSrsDueAtEpochMs: Long?,
+        remembered: Boolean,
+        prevState: String = "known",
+        nowMs: Long = System.currentTimeMillis(),
+    ): Int {
         if (!remembered || prevSrsDueAtEpochMs == null) return SRS_INTERVALS_DAYS[0]
-        val nextIdx = (prevSrsLevel + 1).coerceAtMost(SRS_INTERVALS_DAYS.lastIndex)
-        return SRS_INTERVALS_DAYS[nextIdx]
+        val snap = SrsSnapshot(
+            word = "",
+            reading = null,
+            level = null,
+            state = prevState,
+            preference = "study",
+            knownSource = "learned",
+            correctStreak = 0,
+            srsLevel = prevSrsLevel,
+            srsDueAtEpochMs = prevSrsDueAtEpochMs,
+            lastReviewedAtIso = null,
+            markedKnownAtIso = null,
+        )
+        return nextIntervalDays(snap, remembered, nowMs)
     }
 
     fun computeNextSrsState(
@@ -54,16 +93,10 @@ object SrsEngine {
         nowMs: Long = System.currentTimeMillis(),
     ): SrsSnapshot {
         val nowIso = Instant.ofEpochMilli(nowMs).toString()
-        val wasGraduated = prev?.srsDueAtEpochMs != null
         val prevStreak = prev?.correctStreak ?: 0
-        val prevLevel = prev?.srsLevel ?: 0
 
         if (remembered) {
-            val nextLevel = if (wasGraduated) {
-                (prevLevel + 1).coerceAtMost(SRS_INTERVALS_DAYS.lastIndex)
-            } else {
-                0
-            }
+            val nextLevel = computeNextRememberedLevel(prev, nowMs)
             val dueMs = nowMs + SRS_INTERVALS_DAYS[nextLevel] * DAY_MS
             return SrsSnapshot(
                 word = word,
@@ -77,6 +110,7 @@ object SrsEngine {
                 srsDueAtEpochMs = dueMs,
                 lastReviewedAtIso = nowIso,
                 markedKnownAtIso = prev?.markedKnownAtIso ?: nowIso,
+                hasServerState = true,
             )
         }
 
@@ -92,6 +126,7 @@ object SrsEngine {
             srsDueAtEpochMs = nowMs + SRS_INTERVALS_DAYS[0] * DAY_MS,
             lastReviewedAtIso = nowIso,
             markedKnownAtIso = prev?.markedKnownAtIso,
+            hasServerState = true,
         )
     }
 
@@ -115,6 +150,7 @@ object SrsEngine {
             srsDueAtEpochMs = null,
             lastReviewedAtIso = prev?.lastReviewedAtIso,
             markedKnownAtIso = nowIso,
+            hasServerState = true,
         )
     }
 
@@ -160,7 +196,7 @@ object SrsEngine {
     ): EpisodeContext? {
         val valid = contexts.filter { it.jp.isNotBlank() }
         if (valid.isEmpty()) return null
-        return valid[abs(seed) % valid.size]
+        return valid[seed.mod(valid.size)]
     }
 
     fun splitSentenceWithHighlight(sentence: String, targetWord: String): List<SentenceSegment> {
@@ -168,13 +204,21 @@ object SrsEngine {
         val trimmed = targetWord.trim()
         if (trimmed.isEmpty()) return listOf(SentenceSegment(sentence, false))
 
-        val exactIdx = sentence.indexOf(trimmed)
+        val exactIdx = sentence.indexOf(trimmed, ignoreCase = true)
         if (exactIdx == -1) {
-            val kanjiPrefix = trimmed.takeWhile { isKanji(it) }
-            if (kanjiPrefix.isNotEmpty()) {
-                val stemIdx = sentence.indexOf(kanjiPrefix)
-                if (stemIdx != -1) {
-                    var end = stemIdx + kanjiPrefix.length
+            val lastKanjiIdx = trimmed.indexOfLast { isKanji(it) }
+            if (lastKanjiIdx >= 0) {
+                val kanjiStem = trimmed.substring(0, lastKanjiIdx + 1)
+                val firstKanjiIdx = trimmed.indexOfFirst { isKanji(it) }
+                val matchedStem = when {
+                    sentence.indexOf(kanjiStem) != -1 -> kanjiStem
+                    firstKanjiIdx > 0 -> trimmed.substring(firstKanjiIdx, lastKanjiIdx + 1)
+                        .takeIf { sentence.indexOf(it) != -1 }
+                    else -> null
+                }
+                if (!matchedStem.isNullOrEmpty()) {
+                    val stemIdx = sentence.indexOf(matchedStem)
+                    var end = stemIdx + matchedStem.length
                     while (end < sentence.length && isHiragana(sentence[end]) && end - stemIdx < trimmed.length + 3) {
                         end++
                     }
@@ -191,7 +235,7 @@ object SrsEngine {
         val segments = mutableListOf<SentenceSegment>()
         var cursor = 0
         while (cursor < sentence.length) {
-            val found = sentence.indexOf(trimmed, cursor)
+            val found = sentence.indexOf(trimmed, cursor, ignoreCase = true)
             if (found == -1) {
                 segments.add(SentenceSegment(sentence.substring(cursor), false))
                 break
@@ -199,8 +243,9 @@ object SrsEngine {
             if (found > cursor) {
                 segments.add(SentenceSegment(sentence.substring(cursor, found), false))
             }
-            segments.add(SentenceSegment(trimmed, true))
-            cursor = found + trimmed.length
+            val end = (found + trimmed.length).coerceAtMost(sentence.length)
+            segments.add(SentenceSegment(sentence.substring(found, end), true))
+            cursor = end
         }
         return segments
     }
@@ -213,7 +258,8 @@ object SrsEngine {
         "N4", "A2" -> 2
         "N3", "B1" -> 3
         "N2", "B2" -> 4
-        "N1", "C1", "C2" -> 5
+        "N1", "C1" -> 5
+        "C2" -> 6
         else -> 99
     }
 

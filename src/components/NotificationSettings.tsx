@@ -19,11 +19,12 @@ export function NotificationSettings() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const key = `tatani-push-device-${user?.id}`;
+  const userId = user?.id;
+  const key = `tatani-push-device-${userId}`;
   useEffect(() => {
     let active = true;
     setDevice(null);
-    if (!user) return;
+    if (!userId) return;
     const id = localStorage.getItem(key);
     if (!id) return;
     notificationRequest<{ device: DeviceSchedule | null }>({ action: "settings", device_id: id }).then(({ device }) => {
@@ -31,7 +32,7 @@ export function NotificationSettings() {
       setDevice(device); setStart(device.start_hour); setEnd(device.end_hour); setCount(device.cards_per_hour); setCountText(String(device.cards_per_hour));
     }).catch(() => { if (active) setMessage(t("push.failed")); });
     return () => { active = false; };
-  }, [user?.id, key, t]);
+  }, [userId, key, t]);
   const enable = async () => {
     setBusy(true); setMessage("");
     try {
