@@ -78,7 +78,7 @@ export default function LearnSession() {
   const [drillQueue, setDrillQueue] = useState<SrsDeckCard[]>([]);
   const [drillRevealed, setDrillRevealed] = useState(false);
   const [drillReadingPeeked, setDrillReadingPeeked] = useState(false);
-  const [wrongBlitzPick, setWrongBlitzPick] = useState<string | null>(null);
+  const [wrongBlitzIdx, setWrongBlitzIdx] = useState<number | null>(null);
   const [drillHits, setDrillHits] = useState<Record<string, number>>({});
   const [graduatedCount, setGraduatedCount] = useState(0);
 
@@ -242,7 +242,7 @@ export default function LearnSession() {
     setDrillHits({});
     setDrillRevealed(false);
     setDrillReadingPeeked(false);
-    setWrongBlitzPick(null);
+    setWrongBlitzIdx(null);
     setGraduatedCount(0);
   }, []);
 
@@ -287,7 +287,7 @@ export default function LearnSession() {
       setDrillHits((h) => ({ ...h, [drillCard.word]: nextHits }));
       setDrillRevealed(false);
       setDrillReadingPeeked(false);
-      setWrongBlitzPick(null);
+      setWrongBlitzIdx(null);
 
       const [head, ...rest] = drillQueue;
       if (!head) return;
@@ -332,7 +332,7 @@ export default function LearnSession() {
     setDrillHits({});
     setDrillRevealed(false);
     setDrillReadingPeeked(false);
-    setWrongBlitzPick(null);
+    setWrongBlitzIdx(null);
     setGraduatedCount(0);
     setPhase("encode");
   };
@@ -361,17 +361,23 @@ export default function LearnSession() {
   );
 
   const onSelectBlitzChoice = useCallback(
-    (meaning: string, isCorrect: boolean) => {
-      if (wrongBlitzPick !== null) return;
+    (idx: number, isCorrect: boolean) => {
+      if (wrongBlitzIdx !== null) return;
       if (isCorrect) {
         onGradeDrill(true);
       } else {
-        setWrongBlitzPick(meaning);
+        setWrongBlitzIdx(idx);
         setDrillRevealed(true);
       }
     },
-    [wrongBlitzPick, onGradeDrill],
+    [wrongBlitzIdx, onGradeDrill],
   );
+
+  const onBlitzDontKnow = useCallback(() => {
+    if (wrongBlitzIdx !== null) return;
+    setWrongBlitzIdx(-1);
+    setDrillRevealed(true);
+  }, [wrongBlitzIdx]);
 
   // Keyboard shortcuts for blazingly fast desktop/hardware-keyboard flow
   useEffect(() => {
@@ -387,15 +393,20 @@ export default function LearnSession() {
         }
       } else if (phase === "drill" && drillCard) {
         if (isBlitzMode) {
-          if (wrongBlitzPick !== null && (e.key === " " || e.key === "Enter")) {
+          if (wrongBlitzIdx !== null && (e.key === " " || e.key === "Enter")) {
             e.preventDefault();
             onGradeDrill(false);
-          } else if (wrongBlitzPick === null && ["1", "2", "3", "4"].includes(e.key)) {
-            const idx = Number(e.key) - 1;
-            const picked = blitzChoices[idx];
-            if (picked) {
+          } else if (wrongBlitzIdx === null) {
+            if (["1", "2", "3", "4"].includes(e.key)) {
+              const idx = Number(e.key) - 1;
+              const picked = blitzChoices[idx];
+              if (picked) {
+                e.preventDefault();
+                onSelectBlitzChoice(idx, picked.isCorrect);
+              }
+            } else if (e.key === "0" || e.key === " ") {
               e.preventDefault();
-              onSelectBlitzChoice(picked.meaning, picked.isCorrect);
+              onBlitzDontKnow();
             }
           }
         } else if (!drillRevealed) {
@@ -425,7 +436,7 @@ export default function LearnSession() {
     drillCard,
     drillRevealed,
     isBlitzMode,
-    wrongBlitzPick,
+    wrongBlitzIdx,
     blitzChoices,
     hasDistinctDrillReading,
     onGotItEncode,
@@ -433,6 +444,7 @@ export default function LearnSession() {
     onRevealDrill,
     onGradeDrill,
     onSelectBlitzChoice,
+    onBlitzDontKnow,
   ]);
 
   const episodeSourceList = episodePool ?? nextEpisode?.words ?? [];
@@ -778,15 +790,15 @@ export default function LearnSession() {
               {isBlitzMode ? (
                 <div className="max-w-md mx-auto grid gap-2 text-left pt-1">
                   {blitzChoices.map((choice, idx) => {
-                    const isWrongSelected = wrongBlitzPick === choice.meaning;
-                    const showFeedback = wrongBlitzPick !== null;
+                    const isWrongSelected = wrongBlitzIdx === idx;
+                    const showFeedback = wrongBlitzIdx !== null;
                     return (
                       <button
-                        key={choice.meaning}
+                        key={`${idx}-${choice.meaning}`}
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          onSelectBlitzChoice(choice.meaning, choice.isCorrect);
+                          onSelectBlitzChoice(idx, choice.isCorrect);
                         }}
                         disabled={showFeedback}
                         className={cn(
@@ -818,7 +830,7 @@ export default function LearnSession() {
 
             <div className="h-4 text-center text-[11px] text-muted-foreground/70">
               {isBlitzMode
-                ? wrongBlitzPick === null
+                ? wrongBlitzIdx === null
                   ? t("learn.blitzHint")
                   : ""
                 : !drillRevealed
@@ -828,7 +840,7 @@ export default function LearnSession() {
           </section>
 
           {isBlitzMode ? (
-            wrongBlitzPick !== null ? (
+            wrongBlitzIdx !== null ? (
               <Button
                 id="learn-blitz-continue"
                 onClick={() => onGradeDrill(false)}
@@ -836,7 +848,16 @@ export default function LearnSession() {
               >
                 {t("learn.blitzReviewWrong")}
               </Button>
-            ) : null
+            ) : (
+              <Button
+                id="learn-blitz-dont-know"
+                variant="outline"
+                onClick={onBlitzDontKnow}
+                className="w-full h-14 rounded-xl font-semibold text-muted-foreground hover:text-foreground border-border/80"
+              >
+                {t("study.dontKnow")}
+              </Button>
+            )
           ) : !drillRevealed ? (
             <Button
               id="learn-drill-reveal"

@@ -131,7 +131,7 @@ fun LearnScreen(
     val drillHits = remember { mutableStateMapOf<String, Int>() }
     var drillRevealed by remember { mutableStateOf(false) }
     var drillReadingPeeked by remember { mutableStateOf(false) }
-    var wrongBlitzPick by remember { mutableStateOf<String?>(null) }
+    var wrongBlitzIdx by remember { mutableStateOf<Int?>(null) }
     var graduatedCount by remember { mutableIntStateOf(0) }
     var confirmExitDrill by remember { mutableStateOf(false) }
 
@@ -174,7 +174,7 @@ fun LearnScreen(
         drillHits.clear()
         drillRevealed = false
         drillReadingPeeked = false
-        wrongBlitzPick = null
+        wrongBlitzIdx = null
         graduatedCount = 0
     }
 
@@ -209,7 +209,7 @@ fun LearnScreen(
         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
         drillRevealed = false
         drillReadingPeeked = false
-        wrongBlitzPick = null
+        wrongBlitzIdx = null
         val nextHits = if (recalled) (drillHits[head.word] ?: 0) + 1 else 0
         drillHits[head.word] = nextHits
 
@@ -791,9 +791,9 @@ fun LearnScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
-                                    for (choice in blitzChoices) {
-                                        val isWrongSelected = wrongBlitzPick == choice.meaning
-                                        val showAnswerColors = wrongBlitzPick != null
+                                    blitzChoices.forEachIndexed { idx, choice ->
+                                        val isWrongSelected = wrongBlitzIdx == idx
+                                        val showAnswerColors = wrongBlitzIdx != null
                                         val borderColor = when {
                                             showAnswerColors && choice.isCorrect -> JadeSuccess
                                             isWrongSelected -> CrimsonAgain
@@ -806,12 +806,12 @@ fun LearnScreen(
                                         }
                                         Surface(
                                             onClick = {
-                                                if (wrongBlitzPick != null) return@Surface
+                                                if (wrongBlitzIdx != null) return@Surface
                                                 if (choice.isCorrect) {
                                                     onDrillGrade(true)
                                                 } else {
                                                     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                                    wrongBlitzPick = choice.meaning
+                                                    wrongBlitzIdx = idx
                                                     drillRevealed = true
                                                 }
                                             },
@@ -859,7 +859,7 @@ fun LearnScreen(
 
                         Text(
                             text = when {
-                                isBlitzMode && wrongBlitzPick == null -> "Tap the matching English meaning"
+                                isBlitzMode && wrongBlitzIdx == null -> "Tap the matching meaning, or tap I don't know"
                                 isBlitzMode -> "Review the correct meaning in green, then continue"
                                 !drillRevealed -> "Recall English meaning · Tap card to reveal"
                                 else -> ""
@@ -871,7 +871,7 @@ fun LearnScreen(
                 }
 
                 if (isBlitzMode) {
-                    if (wrongBlitzPick != null) {
+                    if (wrongBlitzIdx != null) {
                         Button(
                             onClick = { onDrillGrade(false) },
                             shape = RoundedCornerShape(16.dp),
@@ -879,6 +879,23 @@ fun LearnScreen(
                             modifier = Modifier.fillMaxWidth().height(60.dp),
                         ) {
                             Text("Got it — Re-queue", fontWeight = FontWeight.SemiBold)
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                wrongBlitzIdx = -1
+                                drillRevealed = true
+                            },
+                            shape = RoundedCornerShape(16.dp),
+                            border = BorderStroke(1.dp, SumiBorder),
+                            modifier = Modifier.fillMaxWidth().height(60.dp),
+                        ) {
+                            Text(
+                                text = "I don't know",
+                                color = WashiMuted,
+                                fontWeight = FontWeight.SemiBold,
+                            )
                         }
                     }
                 } else if (!drillRevealed) {
