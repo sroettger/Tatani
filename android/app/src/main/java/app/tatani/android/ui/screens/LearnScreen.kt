@@ -129,6 +129,9 @@ fun LearnScreen(
     var encodeIdx by remember { mutableIntStateOf(0) }
     val drillQueue = remember { mutableStateListOf<WordCardEntity>() }
     val drillHits = remember { mutableStateMapOf<String, Int>() }
+    val graduatedInBatch = remember { mutableStateListOf<WordCardEntity>() }
+    val activeSpacerWords = remember { mutableStateMapOf<String, Boolean>() }
+    var spacerCursor by remember { mutableIntStateOf(0) }
     var drillRevealed by remember { mutableStateOf(false) }
     var drillReadingPeeked by remember { mutableStateOf(false) }
     var wrongBlitzIdx by remember { mutableStateOf<Int?>(null) }
@@ -172,6 +175,9 @@ fun LearnScreen(
         drillQueue.clear()
         drillQueue.addAll(batch)
         drillHits.clear()
+        graduatedInBatch.clear()
+        activeSpacerWords.clear()
+        spacerCursor = 0
         drillRevealed = false
         drillReadingPeeked = false
         wrongBlitzIdx = null
@@ -210,20 +216,60 @@ fun LearnScreen(
         drillRevealed = false
         drillReadingPeeked = false
         wrongBlitzIdx = null
-        val nextHits = if (recalled) (drillHits[head.word] ?: 0) + 1 else 0
-        drillHits[head.word] = nextHits
 
-        if (recalled && nextHits >= SrsEngine.LEARN_GRADUATION_RECALLS) {
-            viewModel.gradeCard(head, true)
-            graduatedCount++
+        // 1-pass working-memory spacer card: exits immediately after its single turn
+        if (activeSpacerWords.remove(head.word) == true) {
             if (drillQueue.isEmpty()) {
                 phase = LearnPhase.DONE
             }
             return
         }
 
-        val gap = if (recalled) 3.coerceAtMost(drillQueue.size) else 2.coerceAtMost(drillQueue.size)
-        val idx = if (drillQueue.isNotEmpty()) gap.coerceAtLeast(1) else 0
+        val prevHits = drillHits[head.word] ?: 0
+        val step = SrsEngine.computeLearnDrillStep(prevHits = prevHits, recalled = recalled)
+        drillHits[head.word] = step.nextHits
+
+        if (step.graduated) {
+            viewModel.gradeCard(head, true)
+            graduatedInBatch += head
+            graduatedCount++
+            // Clear any leftover spacers if all real batch words have now graduated
+            if (drillQueue.all { activeSpacerWords[it.word] == true }) {
+                drillQueue.clear()
+                activeSpacerWords.clear()
+                phase = LearnPhase.DONE
+            }
+            return
+        }
+
+        // Prevent tail working-memory collapse: ensure >= 2 intervening retrievals before head re-appears
+        if (drillQueue.size < SrsEngine.LEARN_MIN_INTERVENING_CARDS) {
+            val spacerPool = if (graduatedInBatch.isNotEmpty()) {
+                graduatedInBatch.toList()
+            } else {
+                deckCards.filter { it.srsDueAtEpochMs != null }
+            }
+            val queuedWords = drillQueue.mapTo(HashSet()) { it.word }
+            val (spacers, nextCur) = SrsEngine.selectSpacerItems(
+                currentQueueSize = drillQueue.size,
+                targetWord = head.word,
+                queuedWords = queuedWords,
+                pool = spacerPool,
+                cursor = spacerCursor,
+                wordOf = { it.word },
+            )
+            spacerCursor = nextCur
+            for (sp in spacers) {
+                activeSpacerWords[sp.word] = true
+                drillQueue.add(sp)
+            }
+        }
+
+        val idx = if (drillQueue.isNotEmpty()) {
+            step.targetGap.coerceAtMost(drillQueue.size).coerceAtLeast(1)
+        } else {
+            0
+        }
         drillQueue.add(idx, head)
     }
 
@@ -359,8 +405,8 @@ fun LearnScreen(
                         Text(
                             text = when (graduatedCount) {
                                 0 -> "Skipped known vocabulary — no SRS drills needed for this batch."
-                                1 -> "1 word encoded in context and scheduled for fast Sprint reviews."
-                                else -> "$graduatedCount words encoded in context and scheduled for fast Sprint reviews."
+                                1 -> "1 word encoded and scheduled for ${SrsEngine.INITIAL_CONSOLIDATION_HOURS}h consolidation, then daily Sprint reviews."
+                                else -> "$graduatedCount words encoded and scheduled for ${SrsEngine.INITIAL_CONSOLIDATION_HOURS}h consolidation, then daily Sprint reviews."
                             },
                             style = MaterialTheme.typography.bodyMedium,
                             color = WashiMuted,
@@ -639,7 +685,8 @@ fun LearnScreen(
             }
 
             phase == LearnPhase.DRILL && drillCard != null -> {
-                val hits = drillHits[drillCard.word] ?: 0
+                val isSpacer = activeSpacerWords[drillCard.word] == true
+                val hits = if (isSpacer) 0 else (drillHits[drillCard.word] ?: 0)
                 val blitzChoices = remember(drillCard.word, hits, distractorPool, drillQueue.size, graduatedCount) {
                     if (hits == 0) {
                         SrsEngine.buildMeaningChoices(
@@ -655,7 +702,9 @@ fun LearnScreen(
                 }
                 val isBlitzMode = hits == 0 && blitzChoices.size == 4
                 val hasDistinctReading = !drillCard.reading.isNullOrBlank() && drillCard.reading != drillCard.word
-                val showDrillReading = hasDistinctReading && (drillRevealed || drillReadingPeeked || hits == 0)
+                // Keep kana reading visible on Hit 1 (Blitz) & Hit 2 (Sound Recall), fading on Hit 3 (Kanji Recall)
+                val showDrillReading = hasDistinctReading && (drillRevealed || drillReadingPeeked || hits < 2)
+                val reqHits = SrsEngine.LEARN_GRADUATION_RECALLS
 
                 Card(
                     modifier = Modifier
@@ -683,10 +732,11 @@ fun LearnScreen(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                text = if (isBlitzMode) {
-                                    "Speed Blitz · Pick meaning (1/2)"
-                                } else {
-                                    "Final Recall · Kanji → Meaning (2/2)"
+                                text = when {
+                                    isSpacer -> "Quick Spacer · Clears working memory"
+                                    isBlitzMode -> "Speed Blitz · Pick meaning (1/$reqHits)"
+                                    hits < 2 -> "Sound Recall · Word + Kana → Meaning (${hits + 1}/$reqHits)"
+                                    else -> "Final Recall · Kanji → Meaning ($reqHits/$reqHits)"
                                 },
                                 style = MaterialTheme.typography.labelMedium,
                                 color = WashiMuted,
@@ -878,7 +928,10 @@ fun LearnScreen(
                             colors = ButtonDefaults.buttonColors(containerColor = VermilionPrimary),
                             modifier = Modifier.fillMaxWidth().height(60.dp),
                         ) {
-                            Text("Got it — Re-queue", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                text = if (isSpacer) "Got it — Continue" else "Got it — Re-queue",
+                                fontWeight = FontWeight.SemiBold,
+                            )
                         }
                     } else {
                         OutlinedButton(
@@ -914,6 +967,7 @@ fun LearnScreen(
                         Text("Tap to Reveal", style = MaterialTheme.typography.titleMedium)
                     }
                 } else {
+                    val nextHitNum = hits + 1
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -938,7 +992,11 @@ fun LearnScreen(
                             Icon(Icons.Outlined.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.size(4.dp))
                             Text(
-                                "Graduate (${hits + 1}/${SrsEngine.LEARN_GRADUATION_RECALLS})",
+                                text = if (nextHitNum >= reqHits) {
+                                    "Graduate ($nextHitNum/$reqHits)"
+                                } else {
+                                    "Recalled ($nextHitNum/$reqHits)"
+                                },
                                 fontWeight = FontWeight.SemiBold,
                             )
                         }

@@ -9,10 +9,11 @@ import org.junit.Test
 
 class SrsEngineTest {
     private val fixedNow = 1_795_176_000_000L // fixed epoch ms
-    private val dayMs = 24L * 3600_000L
+    private val hourMs = 3600_000L
+    private val dayMs = 24L * hourMs
 
     @Test
-    fun graduatesNewlyEncodedWordAtLevelZero() {
+    fun graduatesNewlyEncodedWordToFourHourConsolidationAndBlocksEarlySkip() {
         val grad = SrsEngine.computeNextSrsState(
             prev = null,
             word = "探知",
@@ -21,17 +22,31 @@ class SrsEngineTest {
             remembered = true,
             nowMs = fixedNow,
         )
-        assertEquals("known", grad.state)
+        assertEquals("learning", grad.state)
         assertEquals("learned", grad.knownSource)
         assertEquals(0, grad.srsLevel)
-        assertEquals(fixedNow + dayMs, grad.srsDueAtEpochMs)
+        assertEquals(1, grad.correctStreak)
+        assertEquals(fixedNow + 4L * hourMs, grad.srsDueAtEpochMs)
         assertTrue(grad.hasServerState)
         assertTrue(SrsEngine.isGraduatedForSrs(grad.preference, grad.knownSource, grad.srsDueAtEpochMs))
+
+        // Cramming 5 minutes after Learn must NOT bypass the 4-hour consolidation spacing window
+        val earlyCram = SrsEngine.computeNextSrsState(
+            prev = grad,
+            word = "探知",
+            reading = "たんち",
+            level = "N2",
+            remembered = true,
+            nowMs = fixedNow + 5L * 60_000L,
+        )
+        assertEquals("learning", earlyCram.state)
+        assertEquals(fixedNow + 4L * hourMs, earlyCram.srsDueAtEpochMs)
+        assertEquals("4h", SrsEngine.nextIntervalLabel(grad, remembered = true, nowMs = fixedNow + 60_000L))
     }
 
     @Test
-    fun advancesDueGraduatedWordAndResetsOnLapse() {
-        val step0 = SrsEngine.computeNextSrsState(
+    fun advancesFromFourHourConsolidationToOneDayToThreeDaysAndResetsToFourHoursOnLapse() {
+        val step4h = SrsEngine.computeNextSrsState(
             prev = null,
             word = "魔法",
             reading = "まほう",
@@ -39,32 +54,51 @@ class SrsEngineTest {
             remembered = true,
             nowMs = fixedNow,
         )
-        val dueNow = step0.srsDueAtEpochMs!!
-        assertEquals(3, SrsEngine.nextIntervalDays(step0, remembered = true, nowMs = dueNow))
+        val due4h = step4h.srsDueAtEpochMs!!
+        assertEquals("1d", SrsEngine.nextIntervalLabel(step4h, remembered = true, nowMs = due4h))
 
-        val step1 = SrsEngine.computeNextSrsState(
-            prev = step0,
+        // Reviewing once 4h consolidation is due promotes to known at 1d (level 0)
+        val step1d = SrsEngine.computeNextSrsState(
+            prev = step4h,
             word = "魔法",
             reading = "まほう",
             level = "N4",
             remembered = true,
-            nowMs = dueNow,
+            nowMs = due4h,
         )
-        assertEquals(1, step1.srsLevel)
-        assertEquals(dueNow + 3L * dayMs, step1.srsDueAtEpochMs)
+        assertEquals("known", step1d.state)
+        assertEquals(0, step1d.srsLevel)
+        assertEquals(due4h + dayMs, step1d.srsDueAtEpochMs)
 
+        // Reviewing 1 day later promotes to 3d (level 1)
+        val due1d = step1d.srsDueAtEpochMs!!
+        assertEquals(3, SrsEngine.nextIntervalDays(step1d, remembered = true, nowMs = due1d))
+        val step3d = SrsEngine.computeNextSrsState(
+            prev = step1d,
+            word = "魔法",
+            reading = "まほう",
+            level = "N4",
+            remembered = true,
+            nowMs = due1d,
+        )
+        assertEquals("known", step3d.state)
+        assertEquals(1, step3d.srsLevel)
+        assertEquals(due1d + 3L * dayMs, step3d.srsDueAtEpochMs)
+
+        // Lapsing drops back to 4h consolidation with streak 0 (re-scaffolding kana)
         val lapsed = SrsEngine.computeNextSrsState(
-            prev = step1,
+            prev = step3d,
             word = "魔法",
             reading = "まほう",
             level = "N4",
             remembered = false,
-            nowMs = dueNow,
+            nowMs = due1d,
         )
         assertEquals("learning", lapsed.state)
         assertEquals(0, lapsed.srsLevel)
         assertEquals(0, lapsed.correctStreak)
-        assertEquals(dueNow + dayMs, lapsed.srsDueAtEpochMs)
+        assertEquals(due1d + 4L * hourMs, lapsed.srsDueAtEpochMs)
+        assertEquals("4h", SrsEngine.nextIntervalLabel(step3d, remembered = false, nowMs = due1d))
     }
 
     @Test
@@ -86,6 +120,7 @@ class SrsEngineTest {
             nowMs = fixedNow + dayMs,
         )
         assertEquals("learning", lapsed.state)
+        assertEquals(0, lapsed.correctStreak)
 
         // Re-drilled 2 minutes later in Sprint after lapse: must graduate back at 1d (level 0), NOT 3d (level 1)!
         val retryTime = fixedNow + dayMs + 120_000L
@@ -102,6 +137,45 @@ class SrsEngineTest {
         assertEquals("known", recovered.state)
         assertEquals(0, recovered.srsLevel)
         assertEquals(retryTime + dayMs, recovered.srsDueAtEpochMs)
+    }
+
+    @Test
+    fun threeStageDrillProgressionExpandsLagStepsDownOneRungAndSelectsSpacers() {
+        assertEquals(8, SrsEngine.LEARN_BATCH_SIZE)
+        assertEquals(3, SrsEngine.LEARN_GRADUATION_RECALLS)
+
+        val hit1 = SrsEngine.computeLearnDrillStep(prevHits = 0, recalled = true)
+        assertEquals(1, hit1.nextHits)
+        assertFalse(hit1.graduated)
+        assertEquals(4, hit1.targetGap)
+
+        val hit2 = SrsEngine.computeLearnDrillStep(prevHits = 1, recalled = true)
+        assertEquals(2, hit2.nextHits)
+        assertFalse(hit2.graduated)
+        assertEquals(5, hit2.targetGap)
+
+        // Missing Kanji-first Hit 3 steps back ONE rung to Kana-assisted Hit 2 (not back to 0) with short lag 2
+        val missOnHit3 = SrsEngine.computeLearnDrillStep(prevHits = 2, recalled = false)
+        assertEquals(1, missOnHit3.nextHits)
+        assertFalse(missOnHit3.graduated)
+        assertEquals(2, missOnHit3.targetGap)
+
+        val hit3 = SrsEngine.computeLearnDrillStep(prevHits = 2, recalled = true)
+        assertEquals(3, hit3.nextHits)
+        assertTrue(hit3.graduated)
+
+        // Spacer cushion guarantees >= 2 intervening retrievals when queue shrinks at end of batch
+        val pool = listOf("魔法", "約束", "冒険", "探知")
+        val (spacers, nextCursor) = SrsEngine.selectSpacerItems(
+            currentQueueSize = 0,
+            targetWord = "探知",
+            queuedWords = emptySet(),
+            pool = pool,
+            cursor = 2,
+            wordOf = { it },
+        )
+        assertEquals(listOf("冒険", "魔法"), spacers)
+        assertEquals(1, nextCursor)
     }
 
     @Test

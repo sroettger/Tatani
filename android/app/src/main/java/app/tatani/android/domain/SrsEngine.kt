@@ -7,11 +7,20 @@ import java.time.ZoneId
 
 object SrsEngine {
     val SRS_INTERVALS_DAYS = intArrayOf(1, 3, 7, 14, 30, 60, 120, 240, 480)
-    const val LEARN_BATCH_SIZE = 6
-    const val LEARN_GRADUATION_RECALLS = 2
+    const val INITIAL_CONSOLIDATION_HOURS = 4L
+    const val LEARN_BATCH_SIZE = 8
+    const val LEARN_GRADUATION_RECALLS = 3
+    const val LEARN_MIN_INTERVENING_CARDS = 2
     const val SPRINT_LAPSE_REINSERT_GAP = 4
     const val WATCH_READY_COVERAGE_PCT = 85
-    private const val DAY_MS = 24L * 60L * 60L * 1000L
+    private const val HOUR_MS = 60L * 60L * 1000L
+    private const val DAY_MS = 24L * HOUR_MS
+
+    data class DrillStepResult(
+        val nextHits: Int,
+        val graduated: Boolean,
+        val targetGap: Int,
+    )
 
     data class MeaningChoice(
         val meaning: String,
@@ -53,6 +62,62 @@ object SrsEngine {
         val highlighted: Boolean,
     )
 
+    /**
+     * 3-stage scaffolded acquisition ladder (Pyc & Rawson, 2009; Nakata, 2015; Renkl & Atkinson, 2003):
+     * - Hit 0 -> 1: Speed Blitz recognition (lag 4)
+     * - Hit 1 -> 2: Phonological + contextual active recall with kana shown (lag 5)
+     * - Hit 2 -> 3: Kanji-first active recall -> graduates to 4h intraday consolidation!
+     * On miss: steps down one rung `(prevHits - 1).coerceAtLeast(0)` with short lag 2 (Karpicke & Roediger, 2007).
+     */
+    fun computeLearnDrillStep(prevHits: Int, recalled: Boolean): DrillStepResult {
+        if (recalled) {
+            val nextHits = prevHits + 1
+            val graduated = nextHits >= LEARN_GRADUATION_RECALLS
+            val gap = when (prevHits) {
+                0 -> 4
+                1 -> 5
+                else -> 6
+            }
+            return DrillStepResult(nextHits = nextHits, graduated = graduated, targetGap = gap)
+        }
+        return DrillStepResult(
+            nextHits = (prevHits - 1).coerceAtLeast(0),
+            graduated = false,
+            targetGap = 2,
+        )
+    }
+
+    /**
+     * Selects up to `LEARN_MIN_INTERVENING_CARDS - currentQueueSize` distinct spacer items so the
+     * tail words of a batch are never tested back-to-back from phonological working memory.
+     */
+    fun <T> selectSpacerItems(
+        currentQueueSize: Int,
+        targetWord: String,
+        queuedWords: Set<String>,
+        pool: List<T>,
+        cursor: Int,
+        wordOf: (T) -> String,
+    ): Pair<List<T>, Int> {
+        val needed = (LEARN_MIN_INTERVENING_CARDS - currentQueueSize).coerceAtLeast(0)
+        if (needed == 0 || pool.isEmpty()) return emptyList<T>() to cursor
+
+        val chosen = ArrayList<T>(needed)
+        val chosenWords = HashSet<String>(needed)
+        var idx = cursor.mod(pool.size)
+        var scanned = 0
+        while (scanned < pool.size && chosen.size < needed) {
+            val candidate = pool[idx]
+            val w = wordOf(candidate)
+            if (w != targetWord && w !in queuedWords && chosenWords.add(w)) {
+                chosen += candidate
+            }
+            idx = (idx + 1) % pool.size
+            scanned++
+        }
+        return chosen to idx
+    }
+
     private fun computeNextRememberedLevel(prev: SrsSnapshot?, nowMs: Long): Int {
         val maxIdx = SRS_INTERVALS_DAYS.lastIndex
         val dueMs = prev?.srsDueAtEpochMs ?: return 0
@@ -83,6 +148,22 @@ object SrsEngine {
     ): Int {
         if (!remembered) return SRS_INTERVALS_DAYS[0]
         return SRS_INTERVALS_DAYS[computeNextRememberedLevel(prev, nowMs)]
+    }
+
+    fun nextIntervalLabel(
+        prev: SrsSnapshot?,
+        remembered: Boolean,
+        nowMs: Long = System.currentTimeMillis(),
+    ): String {
+        if (!remembered) return "${INITIAL_CONSOLIDATION_HOURS}h"
+        val dueMs = prev?.srsDueAtEpochMs
+        if (dueMs == null || prev.state == "unknown") {
+            return "${INITIAL_CONSOLIDATION_HOURS}h"
+        }
+        if (prev.state == "learning" && prev.correctStreak >= 1 && nowMs < dueMs) {
+            return "${INITIAL_CONSOLIDATION_HOURS}h"
+        }
+        return "${nextIntervalDays(prev, true, nowMs)}d"
     }
 
     fun nextIntervalDaysForGrade(
@@ -119,22 +200,59 @@ object SrsEngine {
     ): SrsSnapshot {
         val nowIso = Instant.ofEpochMilli(nowMs).toString()
         val prevStreak = prev?.correctStreak ?: 0
+        val consolidationMs = INITIAL_CONSOLIDATION_HOURS * HOUR_MS
 
         if (remembered) {
+            val prevDueMs = prev?.srsDueAtEpochMs
+            // Initial graduation from Learn -> 4-hour intraday consolidation step (Cepeda et al., 2008; Dumay & Gaskell, 2007)
+            if (prevDueMs == null || prev.state == "unknown") {
+                return SrsSnapshot(
+                    word = word,
+                    reading = reading ?: prev?.reading,
+                    level = level ?: prev?.level,
+                    state = "learning",
+                    preference = prev?.preference ?: "study",
+                    knownSource = "learned",
+                    correctStreak = 1,
+                    srsLevel = 0,
+                    srsDueAtEpochMs = nowMs + consolidationMs,
+                    lastReviewedAtIso = nowIso,
+                    markedKnownAtIso = prev?.markedKnownAtIso ?: nowIso,
+                    hasServerState = true,
+                )
+            }
+            // Early cram review during the initial 4h consolidation window must not skip 4h spacing
+            if (prev.state == "learning" && prevStreak >= 1 && nowMs < prevDueMs) {
+                return SrsSnapshot(
+                    word = word,
+                    reading = reading ?: prev.reading,
+                    level = level ?: prev.level,
+                    state = "learning",
+                    preference = prev.preference,
+                    knownSource = "learned",
+                    correctStreak = prevStreak + 1,
+                    srsLevel = 0,
+                    srsDueAtEpochMs = prevDueMs,
+                    lastReviewedAtIso = nowIso,
+                    markedKnownAtIso = prev.markedKnownAtIso ?: nowIso,
+                    hasServerState = true,
+                )
+            }
+
             val nextLevel = computeNextRememberedLevel(prev, nowMs)
             val dueMs = nowMs + fuzzedIntervalMs(word, nextLevel)
             return SrsSnapshot(
                 word = word,
-                reading = reading ?: prev?.reading,
-                level = level ?: prev?.level,
+                reading = reading ?: prev.reading,
+                level = level ?: prev.level,
                 state = "known",
-                preference = prev?.preference ?: "study",
+                preference = prev.preference,
                 knownSource = "learned",
                 correctStreak = prevStreak + 1,
                 srsLevel = nextLevel,
                 srsDueAtEpochMs = dueMs,
                 lastReviewedAtIso = nowIso,
-                markedKnownAtIso = prev?.markedKnownAtIso ?: nowIso,
+                markedKnownAtIso = prev.markedKnownAtIso ?: nowIso,
                 hasServerState = true,
             )
         }
@@ -148,7 +266,7 @@ object SrsEngine {
             knownSource = "learned",
             correctStreak = 0,
             srsLevel = 0,
-            srsDueAtEpochMs = nowMs + SRS_INTERVALS_DAYS[0] * DAY_MS,
+            srsDueAtEpochMs = nowMs + consolidationMs,
             lastReviewedAtIso = nowIso,
             markedKnownAtIso = prev?.markedKnownAtIso,
             hasServerState = true,
@@ -217,12 +335,10 @@ object SrsEngine {
 
     /**
      * Guidance-fading phonological scaffold (Renkl & Atkinson, 2003; Share, 1995):
-     * - Returns true when a card has a distinct kana reading and is ungraduated or
-     *   recovering from a lapse (state != "known" || (srsLevel == 0 && correctStreak == 0)),
-     *   re-anchoring phonology + orthography -> meaning after errors.
-     * - Returns false once graduated (state == "known", correctStreak >= 1) or when
-     *   preference == "kanji_only", fading to Kanji-first with zero-penalty 1-tap reading peek
-     *   so permanent furigana does not block orthographic Kanji acquisition.
+     * - Returns true when a card has a distinct kana reading and is unencoded or recovering
+     *   from a lapse (`state == "unknown"` or `correctStreak == 0`), repairing phonology -> meaning.
+     * - Returns false once graduated (`correctStreak >= 1`, including 4h consolidation & 1d+ SRS)
+     *   or when `preference == "kanji_only"`, fading to Kanji-first with zero-penalty 1-tap peek.
      */
     fun shouldShowReadingUpfront(
         word: String,
@@ -234,7 +350,7 @@ object SrsEngine {
     ): Boolean {
         if (reading.isNullOrBlank() || reading == word) return false
         if (preference == "kanji_only") return false
-        return state != "known" || (srsLevel == 0 && correctStreak == 0)
+        return state == "unknown" || correctStreak == 0
     }
 
     fun pickContextualSentence(

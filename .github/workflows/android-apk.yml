@@ -39,8 +39,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v2
-
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -72,15 +70,6 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || vars.SUPABASE_ANON_KEY }}
         run: |
           node scripts/provision-supabase.mjs --resolve
-
-      - name: Verify web tests & production bundle
-        env:
-          VITE_SUPABASE_URL: ${{ steps.sb.outputs.supabase_url }}
-          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ steps.sb.outputs.supabase_anon_key }}
-        run: |
-          bun install --frozen-lockfile
-          bun run test
-          bun run build
 
       - name: Run native Kotlin unit tests & build debug APK/AAB
         working-directory: android

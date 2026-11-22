@@ -375,9 +375,14 @@ fun SprintScreen(
         }
 
         if (current != null) {
-            val nextDays = SrsEngine.nextIntervalDays(
-                prev = current.toSrsSnapshot(),
+            val currentSnap = current.toSrsSnapshot()
+            val knowLabel = SrsEngine.nextIntervalLabel(
+                prev = currentSnap,
                 remembered = true,
+            )
+            val againLabel = SrsEngine.nextIntervalLabel(
+                prev = currentSnap,
+                remembered = false,
             )
             val latestRevealed by rememberUpdatedState(revealed)
             val latestGradeCurrent by rememberUpdatedState(::gradeCurrent)
@@ -647,8 +652,8 @@ fun SprintScreen(
 
                     val footerHint = when {
                         !revealed -> "Recall English meaning · Tap card to reveal"
-                        swipeProgress >= 0.35f -> "Release right · Know (+${nextDays}d)"
-                        swipeProgress <= -0.35f -> "Release left · Again (1d)"
+                        swipeProgress >= 0.35f -> "Release right · Know (+$knowLabel)"
+                        swipeProgress <= -0.35f -> "Release left · Again ($againLabel)"
                         else -> "Swipe left/right or tap below"
                     }
                     val footerColor = when {
@@ -712,7 +717,7 @@ fun SprintScreen(
                                 )
                             }
                             Text(
-                                text = "Re-drill · 1d",
+                                text = "Re-drill · $againLabel",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = WashiMuted,
                             )
@@ -746,7 +751,7 @@ fun SprintScreen(
                                 )
                             }
                             Text(
-                                text = "Next · ${nextDays}d",
+                                text = "Next · $knowLabel",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = WashiForeground.copy(alpha = 0.88f),
                             )
