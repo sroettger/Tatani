@@ -138,6 +138,9 @@ dependencies {
     // Browser Custom Tabs for Google OAuth & Privacy Policy
     implementation("androidx.browser:browser:1.8.0")
 
+    // Google Play In-App Updates (Flexible background download + instant apply)
+    implementation("com.google.android.play:app-update-ktx:2.1.0")
+
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     debugImplementation("androidx.compose.ui:ui-tooling")

@@ -4,16 +4,27 @@ on:
   workflow_dispatch:
     inputs:
       publish_play_internal:
-        description: "Upload signed release AAB to Google Play Internal Testing (requires PLAY_SERVICE_ACCOUNT_JSON)"
+        description: "Upload signed release AAB to Google Play (requires PLAY_SERVICE_ACCOUNT_JSON)"
         type: boolean
         default: true
+      play_track:
+        description: "Google Play track to publish to"
+        type: choice
+        default: internal
+        options:
+          - internal
+          - alpha
+          - beta
+          - production
       version_code_override:
         description: "Optional explicit integer versionCode override"
         type: string
         default: ""
   push:
     branches: [main, native-android-play-store]
-    tags: ["v*-android.*"]
+    paths:
+      - "android/**"
+      - ".github/workflows/android-apk.yml"
   pull_request:
     paths:
       - "android/**"
@@ -30,7 +41,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
@@ -127,7 +138,9 @@ jobs:
             tatani-r8-mapping.txt
           if-no-files-found: ignore
 
-      - name: Upload signed AAB to Google Play Internal Testing
+      - name: Upload signed AAB to Google Play (auto-rollout)
+        id: play_completed
+        continue-on-error: true
         if: >-
           steps.signing.outputs.has_keystore == 'true' &&
           steps.signing.outputs.has_play_json == 'true' &&
@@ -138,8 +151,25 @@ jobs:
           packageName: com.tsuro.tatani
           releaseFiles: tatani-android-release.aab
           mappingFile: tatani-r8-mapping.txt
-          track: internal
+          track: ${{ inputs.play_track || 'internal' }}
+          inAppUpdatePriority: 3
           status: completed
+
+      - name: Fallback Play upload as draft (if app is in Play Console Draft state)
+        if: >-
+          steps.play_completed.outcome == 'failure' &&
+          steps.signing.outputs.has_keystore == 'true' &&
+          steps.signing.outputs.has_play_json == 'true' &&
+          (github.event_name != 'workflow_dispatch' || inputs.publish_play_internal == true)
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.tsuro.tatani
+          releaseFiles: tatani-android-release.aab
+          mappingFile: tatani-r8-mapping.txt
+          track: ${{ inputs.play_track || 'internal' }}
+          inAppUpdatePriority: 3
+          status: draft
 
       - name: Publish GitHub Pre-release
         if: startsWith(github.ref, 'refs/tags/v')
