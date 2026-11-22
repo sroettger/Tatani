@@ -1,6 +1,13 @@
 package app.tatani.android.ui.screens
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -27,9 +34,11 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
+import androidx.core.content.ContextCompat
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -545,19 +554,59 @@ fun LibraryScreen(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AccountSettingsModal(
+internal fun AccountSettingsModal(
     viewModel: TataniViewModel,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
     val session by viewModel.session.collectAsState()
     val boostersEnabled by viewModel.boostersEnabled.collectAsState()
+    val boosterIntervalMinutes by viewModel.boosterIntervalMinutes.collectAsState()
     val scope = rememberCoroutineScope()
 
     var savingPrefs by remember { mutableStateOf(false) }
     var settingsError by remember { mutableStateOf<String?>(null) }
+    var testNotice by remember { mutableStateOf<String?>(null) }
+    var testBlockedInSettings by remember { mutableStateOf(false) }
+    var pendingTestAfterPermission by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
+
+    fun fireTestNotification() {
+        viewModel.sendTestBoosterNotification()
+            .onSuccess { msg ->
+                testBlockedInSettings = false
+                testNotice = msg
+            }
+            .onFailure { err ->
+                testBlockedInSettings = true
+                testNotice = err.message ?: "Notifications are disabled in Android Settings."
+            }
+    }
+
+    val notifPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            testBlockedInSettings = false
+            if (pendingTestAfterPermission) {
+                pendingTestAfterPermission = false
+                fireTestNotification()
+            }
+        } else {
+            pendingTestAfterPermission = false
+            testBlockedInSettings = true
+            testNotice = "Notification permission is turned off. Enable it in Android Settings to try SRS cards."
+        }
+    }
+
+    fun openAndroidNotificationSettings() {
+        val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+            putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { context.startActivity(intent) }
+    }
 
     val currentLang = session?.learningLanguage ?: "ja"
     val currentLevel = session?.userLevel ?: "none"
@@ -577,6 +626,15 @@ private fun AccountSettingsModal(
         } else {
             listOf("none", "A1", "A2", "B1", "B2", "C1", "C2")
         }
+    }
+
+    val intervalOptions = remember {
+        listOf(
+            15 to "15m",
+            30 to "30m",
+            60 to "1h",
+            120 to "2h",
+        )
     }
 
     AlertDialog(
@@ -687,28 +745,106 @@ private fun AccountSettingsModal(
 
                 HorizontalDivider(color = SumiBorder)
 
-                // Booster Notification Toggle
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                        Text(
-                            text = "Due Booster Notifications",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            text = "Hourly self-check cards during daytime (9:00–20:59)",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = WashiMuted,
+                // Booster Notification Section + Instant Test
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(
+                                text = "Due Booster Notifications",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                text = "Self-check SRS cards during daytime (9:00–20:59)",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = WashiMuted,
+                            )
+                        }
+                        Switch(
+                            checked = boostersEnabled,
+                            onCheckedChange = { enabled ->
+                                viewModel.setBoostersEnabled(enabled)
+                                if (enabled &&
+                                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                    ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.POST_NOTIFICATIONS
+                                    ) != PackageManager.PERMISSION_GRANTED
+                                ) {
+                                    pendingTestAfterPermission = false
+                                    notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                            },
                         )
                     }
-                    Switch(
-                        checked = boostersEnabled,
-                        onCheckedChange = { viewModel.setBoostersEnabled(it) },
-                    )
+
+                    if (boostersEnabled) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            for ((mins, label) in intervalOptions) {
+                                val selected = boosterIntervalMinutes == mins
+                                FilterChip(
+                                    selected = selected,
+                                    onClick = { viewModel.setBoosterIntervalMinutes(mins) },
+                                    label = { Text("Every $label") },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = VermilionPrimary.copy(alpha = 0.22f),
+                                        selectedLabelColor = WashiForeground,
+                                    ),
+                                )
+                            }
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.POST_NOTIFICATIONS
+                                ) != PackageManager.PERMISSION_GRANTED
+                            ) {
+                                pendingTestAfterPermission = true
+                                notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            } else {
+                                fireTestNotification()
+                            }
+                        },
+                        border = BorderStroke(1.dp, VermilionPrimary.copy(alpha = 0.65f)),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Notifications,
+                            contentDescription = null,
+                            tint = VermilionPrimary,
+                            modifier = Modifier.size(17.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text("Send test notification", color = WashiForeground, fontWeight = FontWeight.SemiBold)
+                    }
+
+                    if (!testNotice.isNullOrBlank()) {
+                        Text(
+                            text = testNotice!!,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (testBlockedInSettings) MaterialTheme.colorScheme.error else JadeSuccess,
+                        )
+                    }
+
+                    if (testBlockedInSettings) {
+                        TextButton(
+                            onClick = ::openAndroidNotificationSettings,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Open Android Notification Settings")
+                        }
+                    }
                 }
 
                 HorizontalDivider(color = SumiBorder)

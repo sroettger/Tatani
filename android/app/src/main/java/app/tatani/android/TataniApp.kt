@@ -1,9 +1,6 @@
 package app.tatani.android
 
 import android.app.Application
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.PeriodicWorkRequestBuilder
-import androidx.work.WorkManager
 import app.tatani.android.data.TataniRepository
 import app.tatani.android.data.local.TataniDatabase
 import app.tatani.android.data.remote.SessionStore
@@ -11,7 +8,6 @@ import app.tatani.android.data.remote.SupabaseClient
 import app.tatani.android.notifications.BoosterActionReceiver
 import app.tatani.android.notifications.DueBoosterWorker
 import app.tatani.android.notifications.OutboxSyncWorker
-import java.util.concurrent.TimeUnit
 
 class TataniApp : Application() {
     lateinit var database: TataniDatabase
@@ -36,14 +32,10 @@ class TataniApp : Application() {
         )
 
         BoosterActionReceiver.ensureChannel(this)
-
-        val work = PeriodicWorkRequestBuilder<DueBoosterWorker>(1, TimeUnit.HOURS)
-            .build()
-
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "tatani_graduated_srs_booster",
-            ExistingPeriodicWorkPolicy.UPDATE,
-            work
+        DueBoosterWorker.syncSchedule(
+            context = this,
+            enabled = sessionStore.boostersEnabled.value,
+            intervalMinutes = sessionStore.boosterIntervalMinutes.value,
         )
     }
 }

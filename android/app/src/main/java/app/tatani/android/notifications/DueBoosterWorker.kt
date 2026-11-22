@@ -1,21 +1,15 @@
 package app.tatani.android.notifications
 
-import android.Manifest
-import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
-import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import app.tatani.android.MainActivity
-import app.tatani.android.R
 import app.tatani.android.TataniApp
 import app.tatani.android.domain.SrsEngine
 import java.time.LocalTime
+import java.util.concurrent.TimeUnit
 
 class DueBoosterWorker(
     appContext: Context,
@@ -35,10 +29,7 @@ class DueBoosterWorker(
 
         val session = app.sessionStore.session.value ?: return Result.success()
         if (!app.sessionStore.boostersEnabled.value) return Result.success()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
+        if (!BoosterActionReceiver.canPostNotifications(applicationContext)) {
             return Result.success()
         }
 
@@ -54,64 +45,36 @@ class DueBoosterWorker(
                 )
             }
 
-        if (dueGraduated.isEmpty()) return Result.success()
-
-        val card = dueGraduated.random()
+        val card = dueGraduated.randomOrNull() ?: return Result.success()
         val contexts = app.repository.decodeContexts(card)
-        val example = SrsEngine.pickContextualSentence(contexts, card.srsLevel)?.jp
-        val promptBody = example ?: "Due in SRS · Tap to open Sprint"
-
-        BoosterActionReceiver.ensureChannel(applicationContext)
-
-        fun buildActionIntent(remembered: Boolean, reqCode: Int): PendingIntent {
-            val i = Intent(applicationContext, BoosterActionReceiver::class.java).apply {
-                putExtra(BoosterActionReceiver.EXTRA_WORD, card.word)
-                putExtra(BoosterActionReceiver.EXTRA_LANG, card.learningLanguage)
-                putExtra(BoosterActionReceiver.EXTRA_REMEMBERED, remembered)
-            }
-            return PendingIntent.getBroadcast(
-                applicationContext,
-                reqCode,
-                i,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-        }
-
-        val tapIntent = PendingIntent.getActivity(
-            applicationContext,
-            100,
-            Intent(applicationContext, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        BoosterActionReceiver.postCardPrompt(
+            context = applicationContext,
+            card = card,
+            contexts = contexts,
+            forcePeekReading = false,
+            silentUpdate = false,
         )
-
-        val showReadingInPrompt = SrsEngine.shouldShowReadingUpfront(
-            word = card.word,
-            reading = card.reading,
-            state = card.state,
-            srsLevel = card.srsLevel,
-            correctStreak = card.correctStreak,
-            preference = card.preference,
-        )
-        val promptTitle = if (showReadingInPrompt) {
-            "${card.word}（${card.reading}）"
-        } else {
-            card.word
-        }
-
-        val builder = NotificationCompat.Builder(applicationContext, BoosterActionReceiver.CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_tatani)
-            .setContentTitle(promptTitle)
-            .setContentText(promptBody)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(promptBody))
-            .setContentIntent(tapIntent)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setAutoCancel(true)
-            .addAction(0, "I know", buildActionIntent(true, 201))
-            .addAction(0, "I don't know", buildActionIntent(false, 202))
-
-        NotificationManagerCompat.from(applicationContext)
-            .notify(BoosterActionReceiver.NOTIFICATION_ID, builder.build())
 
         return Result.success()
+    }
+
+    companion object {
+        private const val WORK_NAME = "tatani_graduated_srs_booster"
+
+        fun syncSchedule(context: Context, enabled: Boolean, intervalMinutes: Int) {
+            val wm = WorkManager.getInstance(context)
+            if (!enabled) {
+                wm.cancelUniqueWork(WORK_NAME)
+                return
+            }
+            val periodMinutes = intervalMinutes.coerceAtLeast(15).toLong()
+            val work = PeriodicWorkRequestBuilder<DueBoosterWorker>(periodMinutes, TimeUnit.MINUTES)
+                .build()
+            wm.enqueueUniquePeriodicWork(
+                WORK_NAME,
+                ExistingPeriodicWorkPolicy.UPDATE,
+                work,
+            )
+        }
     }
 }

@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Headphones
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Title
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material3.Button
@@ -118,6 +119,7 @@ fun SprintScreen(
     var autoAudio by remember { mutableStateOf(false) }
     var reviewedCount by remember { mutableIntStateOf(0) }
     var sessionCombo by remember { mutableIntStateOf(0) }
+    var settingsDialogOpen by remember { mutableStateOf(false) }
     val sessionStartMs = remember { System.currentTimeMillis() }
     var dragOffsetX by remember { mutableFloatStateOf(0f) }
 
@@ -355,6 +357,17 @@ fun SprintScreen(
                         )
                         Spacer(Modifier.size(6.dp))
                         Text("Library", style = MaterialTheme.typography.labelMedium)
+                    }
+                    IconButton(
+                        onClick = { settingsDialogOpen = true },
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Settings,
+                            contentDescription = "Settings & Notifications",
+                            tint = WashiMuted,
+                            modifier = Modifier.size(19.dp),
+                        )
                     }
                 }
             }
@@ -886,6 +899,13 @@ fun SprintScreen(
             }
             Spacer(Modifier.height(8.dp))
         }
+    }
+
+    if (settingsDialogOpen) {
+        AccountSettingsModal(
+            viewModel = viewModel,
+            onDismiss = { settingsDialogOpen = false },
+        )
     }
 }
 

@@ -601,4 +601,25 @@ class TataniRepositoryTest {
         assertEquals(1, result.size)
         assertEquals("ep-1", result.single().episodeId)
     }
+
+    @Test
+    fun boosterNotificationPreferencesClampAndPersistAcrossSignOut() = runTest {
+        val store = SessionStore.inMemory(activeSession())
+        assertTrue(store.boostersEnabled.value)
+        assertEquals(60, store.boosterIntervalMinutes.value)
+
+        store.setBoosterIntervalMinutes(15)
+        assertEquals(15, store.boosterIntervalMinutes.value)
+
+        // Android WorkManager enforces 15m minimum periodic interval
+        store.setBoosterIntervalMinutes(5)
+        assertEquals(15, store.boosterIntervalMinutes.value)
+
+        store.setBoostersEnabled(false)
+        assertFalse(store.boostersEnabled.value)
+
+        store.clear()
+        assertFalse(store.boostersEnabled.value)
+        assertEquals(15, store.boosterIntervalMinutes.value)
+    }
 }

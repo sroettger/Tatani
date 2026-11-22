@@ -10,6 +10,8 @@ import app.tatani.android.data.local.WordCardEntity
 import app.tatani.android.data.remote.AnimeSearchResultDto
 import app.tatani.android.data.remote.AuthSession
 import app.tatani.android.domain.SrsEngine
+import app.tatani.android.notifications.BoosterActionReceiver
+import app.tatani.android.notifications.DueBoosterWorker
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -58,6 +60,7 @@ class TataniViewModel(application: Application) : AndroidViewModel(application) 
 
     val session: StateFlow<AuthSession?> = app.sessionStore.session
     val boostersEnabled: StateFlow<Boolean> = app.sessionStore.boostersEnabled
+    val boosterIntervalMinutes: StateFlow<Int> = app.sessionStore.boosterIntervalMinutes
     val syncing: StateFlow<Boolean> = repository.syncing
     val syncError: StateFlow<String?> = repository.syncError
     val outboxCount: StateFlow<Int> = repository.outboxCount
@@ -285,6 +288,61 @@ class TataniViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setBoostersEnabled(enabled: Boolean) {
         app.sessionStore.setBoostersEnabled(enabled)
+        DueBoosterWorker.syncSchedule(app, enabled, boosterIntervalMinutes.value)
+    }
+
+    fun setBoosterIntervalMinutes(minutes: Int) {
+        app.sessionStore.setBoosterIntervalMinutes(minutes)
+        DueBoosterWorker.syncSchedule(app, boostersEnabled.value, boosterIntervalMinutes.value)
+    }
+
+    fun sendTestBoosterNotification(): Result<String> {
+        val targetCard = dueCards.value.randomOrNull() ?: graduatedCards.value.randomOrNull()
+        if (targetCard != null) {
+            val contexts = repository.decodeContexts(targetCard)
+            val posted = BoosterActionReceiver.postCardPrompt(
+                context = app,
+                card = targetCard,
+                contexts = contexts,
+                forcePeekReading = false,
+                silentUpdate = false,
+            )
+            return if (posted) {
+                Result.success(
+                    "Sent \"${targetCard.word}\" — check your notification shade to try \"I know\", \"I don't know\", or \"かな Peek\"."
+                )
+            } else {
+                Result.failure(
+                    IllegalStateException("Notifications are disabled for Tatani in Android Settings.")
+                )
+            }
+        }
+
+        val sample = deckCards.value.firstOrNull()
+        val sampleCtx = sample?.let { repository.decodeContexts(it).firstOrNull() }
+        val posted = if (sample != null) {
+            BoosterActionReceiver.postDemoPrompt(
+                context = app,
+                word = sample.word,
+                reading = sample.reading,
+                meaning = sample.meaning,
+                sentenceJp = sampleCtx?.jp ?: "${sample.word} — sample SRS card",
+                sentenceEn = sampleCtx?.en.orEmpty(),
+                lang = sample.learningLanguage,
+            )
+        } else {
+            BoosterActionReceiver.postDemoPrompt(context = app)
+        }
+
+        return if (posted) {
+            Result.success(
+                "Sent sample SRS preview — graduate words in Learn to receive your own SRS cards!"
+            )
+        } else {
+            Result.failure(
+                IllegalStateException("Notifications are disabled for Tatani in Android Settings.")
+            )
+        }
     }
 
     suspend fun updateUserLevel(level: String): Result<Unit> =

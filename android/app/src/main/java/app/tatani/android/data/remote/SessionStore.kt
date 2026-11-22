@@ -19,6 +19,7 @@ data class AuthSession(
 interface SessionBacking {
     fun getString(key: String, defaultValue: String?): String?
     fun getLong(key: String, defaultValue: Long): Long
+    fun getInt(key: String, defaultValue: Int): Int
     fun getBoolean(key: String, defaultValue: Boolean): Boolean
     fun edit(block: SessionEditor.() -> Unit)
 }
@@ -26,6 +27,7 @@ interface SessionBacking {
 interface SessionEditor {
     fun putString(key: String, value: String?)
     fun putLong(key: String, value: Long)
+    fun putInt(key: String, value: Int)
     fun putBoolean(key: String, value: Boolean)
     fun remove(key: String)
 }
@@ -35,12 +37,14 @@ private class SharedPrefsSessionBacking(
 ) : SessionBacking {
     override fun getString(key: String, defaultValue: String?): String? = prefs.getString(key, defaultValue)
     override fun getLong(key: String, defaultValue: Long): Long = prefs.getLong(key, defaultValue)
+    override fun getInt(key: String, defaultValue: Int): Int = prefs.getInt(key, defaultValue)
     override fun getBoolean(key: String, defaultValue: Boolean): Boolean = prefs.getBoolean(key, defaultValue)
     override fun edit(block: SessionEditor.() -> Unit) {
         val editor = prefs.edit()
         object : SessionEditor {
             override fun putString(key: String, value: String?) { editor.putString(key, value) }
             override fun putLong(key: String, value: Long) { editor.putLong(key, value) }
+            override fun putInt(key: String, value: Int) { editor.putInt(key, value) }
             override fun putBoolean(key: String, value: Boolean) { editor.putBoolean(key, value) }
             override fun remove(key: String) { editor.remove(key) }
         }.block()
@@ -60,6 +64,10 @@ private class InMemorySessionBacking : SessionBacking {
         (map[key] as? Long) ?: defaultValue
 
     @Synchronized
+    override fun getInt(key: String, defaultValue: Int): Int =
+        (map[key] as? Int) ?: defaultValue
+
+    @Synchronized
     override fun getBoolean(key: String, defaultValue: Boolean): Boolean =
         (map[key] as? Boolean) ?: defaultValue
 
@@ -70,6 +78,7 @@ private class InMemorySessionBacking : SessionBacking {
                 if (value == null) map.remove(key) else map[key] = value
             }
             override fun putLong(key: String, value: Long) { map[key] = value }
+            override fun putInt(key: String, value: Int) { map[key] = value }
             override fun putBoolean(key: String, value: Boolean) { map[key] = value }
             override fun remove(key: String) { map.remove(key) }
         }.block()
@@ -93,6 +102,11 @@ class SessionStore private constructor(
 
     private val _boostersEnabled = MutableStateFlow(backing.getBoolean("boosters_enabled", true))
     val boostersEnabled: StateFlow<Boolean> = _boostersEnabled.asStateFlow()
+
+    private val _boosterIntervalMinutes = MutableStateFlow(
+        backing.getInt("booster_interval_minutes", 60).coerceIn(15, 240)
+    )
+    val boosterIntervalMinutes: StateFlow<Int> = _boosterIntervalMinutes.asStateFlow()
 
     private fun loadFromBacking(): AuthSession? {
         val uid = backing.getString("user_id", null) ?: return null
@@ -133,6 +147,13 @@ class SessionStore private constructor(
     fun setBoostersEnabled(enabled: Boolean) {
         backing.edit { putBoolean("boosters_enabled", enabled) }
         _boostersEnabled.value = enabled
+    }
+
+    @Synchronized
+    fun setBoosterIntervalMinutes(minutes: Int) {
+        val clamped = minutes.coerceIn(15, 240)
+        backing.edit { putInt("booster_interval_minutes", clamped) }
+        _boosterIntervalMinutes.value = clamped
     }
 
     @Synchronized
