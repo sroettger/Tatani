@@ -29,12 +29,15 @@ const loader: kuromoji.LoaderConfig = {
   },
 };
 
+import { getOfficialJlptLevel } from "./jlpt-lookup.ts";
+
 export type Token = {
   surface_form: string;
   basic_form: string;
   reading?: string;
   pos: string;
   pos_detail_1?: string;
+  pos_detail_2?: string;
   word_type?: string;
 };
 
@@ -56,11 +59,21 @@ export function getTokenizer(): Promise<JapaneseTokenizer> {
   return tokenizerPromise;
 }
 
-// POS classes worth surfacing as vocabulary. Filter out particles, aux verbs, symbols, etc.
+// POS classes worth surfacing as vocabulary. Filter out particles, aux verbs, interjections (感動詞), symbols, etc.
 const STUDY_POS = new Set(["名詞", "動詞", "形容詞", "副詞", "形容動詞", "連体詞"]);
 
-// Skip these noun subtypes (numbers, pronouns, suffixes) — too noisy as vocab.
-const SKIP_POS_DETAIL = new Set(["数", "代名詞", "非自立", "接尾", "接続助詞"]);
+// Skip proper nouns (固有名詞: person names, surnames, places, orgs), numbers, pronouns, dependent forms, suffixes, ASCII, etc.
+const SKIP_POS_DETAIL = new Set([
+  "固有名詞",
+  "数",
+  "代名詞",
+  "非自立",
+  "接尾",
+  "接続助詞",
+  "アルファベット",
+  "間投",
+  "特殊",
+]);
 
 // Common 2-char hiragana adverbs/conjunctions that are genuine study words rather than conjugation fragments.
 const ALLOWED_SHORT_HIRAGANA = new Set([
@@ -76,8 +89,46 @@ const ALLOWED_SHORT_HIRAGANA = new Set([
   "もし",
 ]);
 
+// Vocalizations, fillers, and interjections that kuromoji sometimes tags as 副詞 or 名詞.
+const NOISE_WORDS = new Set([
+  "ああ",
+  "ええ",
+  "うん",
+  "ううん",
+  "えっと",
+  "あのう",
+  "うーん",
+  "ふん",
+  "はあ",
+  "ふう",
+  "へえ",
+  "ふうん",
+  "きゃあ",
+  "わあ",
+  "ぎゃあ",
+  "うわ",
+  "うわあ",
+  "あっ",
+  "えっ",
+  "おっ",
+  "くっ",
+  "はっ",
+  "ふっ",
+  "ちっ",
+  "ほら",
+  "ねえ",
+  "おい",
+  "さあ",
+]);
+
+// Honorific suffixes that strongly indicate the preceding unlisted noun is a character's name.
+const PERSON_HONORIFIC_RE = /^(さん|ちゃん|くん|君|様|さま|殿|氏|嬢)$/;
+// Role/title endings that can take -さん/-様 without being personal names (e.g. 社長さん, お嬢様, 神様).
+const ROLE_NOUN_RE = /(?:[長師士官員生姫王主神仏様客方人者屋店]|^(?:お|ご|御))/;
+
 // 2-char Katakana loanwords (e.g. パン, ドア, バス, キー).
 const TWO_CHAR_KATAKANA_RE = /^[ァ-ヴー]{2}$/;
+const PURE_KATAKANA_RE = /^[ァ-ヴー・＝]{2,}$/;
 
 export function katakanaToHiragana(s: string): string {
   return s.replace(/[\u30A1-\u30F6]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
@@ -125,52 +176,141 @@ export type VocabEntry = {
   example_sentence_jp: string; // best subtitle line containing the word
 };
 
-/**
- * Tokenize subtitles, return frequency-ranked vocab with example sentences.
- * `text` should be one subtitle line per "\n".
- */
-export async function extractVocabFromSubtitles(text: string): Promise<VocabEntry[]> {
-  const tokenizer = await getTokenizer();
-  const lines = text.split("\n").filter((l) => l.trim().length > 0);
+function canonicalWord(t: Token): string {
+  return t.basic_form && t.basic_form !== "*" ? t.basic_form : t.surface_form;
+}
 
-  // word -> { count, reading, pos, exampleLineIdx (shortest contextual line containing it) }
+function isEligibleBaseToken(t: Token, word: string): boolean {
+  if (!STUDY_POS.has(t.pos)) return false;
+  if (t.pos_detail_1 && SKIP_POS_DETAIL.has(t.pos_detail_1)) return false;
+  if (t.pos_detail_2 === "人名" || t.pos_detail_2 === "地域" || t.pos_detail_2 === "組織") return false;
+  if (t.word_type === "UNKNOWN") return false;
+  if (!word || word.length < 1) return false;
+  if (NOISE_WORDS.has(word)) return false;
+  if (!/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]/.test(word)) return false;
+  if (/^[、。！？…・「」『』（）()\s]+$/.test(word)) return false;
+
+  // Foreign multi-part names with nakaguro/equals (e.g. ロイド・フォージャー, ジャン＝ピエール).
+  if (/[・＝]/.test(word) && !getOfficialJlptLevel(word)) return false;
+
+  const isAllKana = /^[\u3040-\u309F\u30A0-\u30FFー]+$/.test(word);
+  if (isAllKana && word.length <= 2) {
+    const allowedKatakana = TWO_CHAR_KATAKANA_RE.test(word) && word !== "ーー";
+    if (!allowedKatakana && !ALLOWED_SHORT_HIRAGANA.has(word)) return false;
+  }
+  return true;
+}
+
+/**
+ * Detect episode-specific coined character names (e.g. アーニャ, フォージャー, フリーレン, ルーシー)
+ * that IPADIC hasn't cataloged under 固有名詞, using:
+ *  1) Honorific suffix adjacency (-さん, -ちゃん, -くん, -様, etc.) on non-JLPT nouns,
+ *  2) Nakaguro adjacency (ロイド + ・ + フォージャー),
+ *  3) Standalone vocative katakana callouts ("ルーシー！", "アーニャ、行くぞ").
+ */
+export function detectCoinedCharacterNames(tokenizedLines: Token[][]): Set<string> {
+  const names = new Set<string>();
+  const katakanaStats = new Map<string, { total: number; vocative: number }>();
+
+  for (const tokens of tokenizedLines) {
+    for (let k = 0; k < tokens.length; k++) {
+      const t = tokens[k];
+      if (t.pos !== "名詞") continue;
+      const word = canonicalWord(t);
+      if (!word || getOfficialJlptLevel(word)) continue;
+
+      const prev = k > 0 ? tokens[k - 1] : undefined;
+      const next = k + 1 < tokens.length ? tokens[k + 1] : undefined;
+
+      // 1. Honorific suffix immediately following a non-JLPT noun
+      if (
+        next &&
+        ((next.pos_detail_1 === "接尾" && next.pos_detail_2 === "人名") ||
+          PERSON_HONORIFIC_RE.test(next.surface_form))
+      ) {
+        if (PURE_KATAKANA_RE.test(word) || !ROLE_NOUN_RE.test(word)) {
+          names.add(word);
+          continue;
+        }
+      }
+
+      // 2. Adjacent to nakaguro separator in foreign full names (ロイド・フォージャー)
+      if (
+        PURE_KATAKANA_RE.test(word) &&
+        (prev?.surface_form === "・" || next?.surface_form === "・")
+      ) {
+        names.add(word);
+        continue;
+      }
+
+      // 3. Track vocative callouts for unlisted pure-Katakana nouns
+      if (PURE_KATAKANA_RE.test(word)) {
+        const stat = katakanaStats.get(word) ?? { total: 0, vocative: 0 };
+        stat.total++;
+        const isLineInitial = k === 0 || (k === 1 && /^[\s「『（(]+$/.test(tokens[0].surface_form));
+        const followedByPauseOrEnd =
+          !next ||
+          next.pos === "記号" ||
+          /^[！？!?、,…ー〜」』）)]+$/.test(next.surface_form);
+        if (isLineInitial && followedByPauseOrEnd) {
+          stat.vocative++;
+        }
+        katakanaStats.set(word, stat);
+      }
+    }
+  }
+
+  for (const [word, stat] of katakanaStats) {
+    if (stat.vocative >= 2 && stat.vocative / stat.total >= 0.3) {
+      names.add(word);
+    }
+  }
+
+  return names;
+}
+
+/**
+ * Tokenize subtitles using an explicit tokenizer instance (testable without network) or shared IPADIC.
+ */
+export function extractVocabWithTokenizer(
+  tokenizer: JapaneseTokenizer,
+  text: string,
+  extraExcludedWords?: ReadonlySet<string>,
+): VocabEntry[] {
+  const lines = text.split("\n").filter((l) => l.trim().length > 0);
+  const tokenizedLines: Token[][] = [];
+  const validLines: string[] = [];
+
+  for (const line of lines) {
+    try {
+      tokenizedLines.push(tokenizer.tokenize(line));
+      validLines.push(line);
+    } catch {
+      // Skip malformed line
+    }
+  }
+
+  const coinedNames = detectCoinedCharacterNames(tokenizedLines);
+
   const map = new Map<
     string,
     { count: number; reading: string; pos: string; exampleLineIdx: number; exampleLineLen: number }
   >();
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    let tokens: Token[];
-    try {
-      tokens = tokenizer.tokenize(line);
-    } catch {
-      continue;
-    }
+  for (let i = 0; i < tokenizedLines.length; i++) {
+    const line = validLines[i];
+    const tokens = tokenizedLines[i];
     for (const t of tokens) {
-      if (!STUDY_POS.has(t.pos)) continue;
-      if (t.pos_detail_1 && SKIP_POS_DETAIL.has(t.pos_detail_1)) continue;
-      // Drop UNKNOWN tokens entirely — kuromoji tags every unrecognized symbol/emoji as 名詞.
-      if (t.word_type === "UNKNOWN") continue;
-      const word = t.basic_form && t.basic_form !== "*" ? t.basic_form : t.surface_form;
-      if (!word || word.length < 1) continue;
-      // Must contain at least one Japanese character (kanji, hiragana, or katakana).
-      if (!/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]/.test(word)) continue;
-      // Skip pure-kana single chars and punctuation-y stuff.
-      if (/^[、。！？…・「」『』（）()\s]+$/.test(word)) continue;
-
-      const isAllKana = /^[\u3040-\u309F\u30A0-\u30FFー]+$/.test(word);
-      if (isAllKana && word.length <= 2) {
-        const allowedKatakana = TWO_CHAR_KATAKANA_RE.test(word) && word !== "ーー";
-        if (!allowedKatakana && !ALLOWED_SHORT_HIRAGANA.has(word)) continue;
-      }
+      const word = canonicalWord(t);
+      if (!isEligibleBaseToken(t, word)) continue;
+      if (coinedNames.has(word)) continue;
+      if (extraExcludedWords?.has(word)) continue;
 
       const surfaceReading = t.reading ? katakanaToHiragana(t.reading) : "";
       const reading = dictionaryFormReading(t.surface_form, word, surfaceReading);
       const cur = map.get(word);
       if (cur) {
         cur.count++;
-        // Prefer a slightly longer example line (more context) but cap at 80 chars.
         if (line.length <= 80 && line.length > cur.exampleLineLen && cur.exampleLineLen < 30) {
           cur.exampleLineIdx = i;
           cur.exampleLineLen = line.length;
@@ -188,10 +328,30 @@ export async function extractVocabFromSubtitles(text: string): Promise<VocabEntr
       reading: info.reading,
       part_of_speech: info.pos,
       frequency: info.count,
-      example_sentence_jp: lines[info.exampleLineIdx] ?? "",
+      example_sentence_jp: validLines[info.exampleLineIdx] ?? "",
     });
   }
-  // Sort by frequency desc, stable.
   out.sort((a, b) => b.frequency - a.frequency);
   return out;
+}
+
+/**
+ * Tokenize subtitles, return frequency-ranked vocab with example sentences.
+ * `text` should be one subtitle line per "\n".
+ */
+export async function extractVocabFromSubtitles(
+  text: string,
+  extraExcludedWords?: ReadonlySet<string>,
+): Promise<VocabEntry[]> {
+  const tokenizer = await getTokenizer();
+  return extractVocabWithTokenizer(tokenizer, text, extraExcludedWords);
+}
+
+/**
+ * Lightweight set extraction for sibling season episodes (used to compute cross-episode dispersion
+ * in ~15ms CPU per episode without calling AI).
+ */
+export async function extractWordSetFromSubtitles(text: string): Promise<Set<string>> {
+  const entries = await extractVocabFromSubtitles(text);
+  return new Set(entries.map((e) => e.word));
 }

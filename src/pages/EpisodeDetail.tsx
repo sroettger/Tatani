@@ -38,6 +38,7 @@ type VocabItem = {
   example_sentence_jp: string;
   example_sentence_en: string;
   frequency?: number;
+  episode_frequency?: number;
 };
 type SentenceItem = { jp: string; en: string };
 type WordPref = "study" | "kanji_only" | "skip";
@@ -331,16 +332,20 @@ export default function EpisodeDetail() {
     const score = new Map<string, number>();
     const freqMap = new Map<string, number>();
     for (const v of vocab) {
-      let freq = typeof v.frequency === "number" ? v.frequency : 0;
-      if (!freq) {
+      let weightedFreq = typeof v.frequency === "number" ? v.frequency : 0;
+      if (!weightedFreq) {
         const w = v.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         if (w) {
           const re = new RegExp(w, "g");
-          freq = (corpus.match(re) ?? []).length;
+          weightedFreq = (corpus.match(re) ?? []).length;
         }
       }
-      freqMap.set(v.word, freq);
-      score.set(v.word, freq * 10 + levelCommonness(getLevel(v)));
+      const displayFreq =
+        typeof v.episode_frequency === "number" && v.episode_frequency > 0
+          ? v.episode_frequency
+          : weightedFreq;
+      freqMap.set(v.word, displayFreq);
+      score.set(v.word, weightedFreq * 10 + levelCommonness(getLevel(v)));
     }
     return { importance: score, frequency: freqMap };
   }, [vocab, sentences, learningLanguage]);

@@ -14,8 +14,17 @@ import {
   getAiApiKey,
 } from "../_shared/ai.ts";
 import { getOfficialJlptLevel } from "../_shared/jlpt-lookup.ts";
+import {
+  rankVocabBySeasonAndUtility,
+  sampleKitsunekkoSiblingDialogues,
+  type SeasonRankedVocab,
+} from "../_shared/season-corpus.ts";
 import { cleanSubtitleDialogue } from "../_shared/subtitles.ts";
-import { extractVocabFromSubtitles, type VocabEntry } from "../_shared/tokenize-jp.ts";
+import {
+  extractVocabFromSubtitles,
+  extractWordSetFromSubtitles,
+  type VocabEntry,
+} from "../_shared/tokenize-jp.ts";
 import { extractVocabLatin } from "../_shared/tokenize-latin.ts";
 import { getUserLanguages, uiLanguageName } from "../_shared/languages.ts";
 
@@ -46,9 +55,10 @@ type TranslatedWord = {
   meaning: string;
   example_en: string;
   level: string;
+  is_proper_noun: boolean;
 };
 
-type TaggedVocab = VocabEntry & { level: string };
+type TaggedVocab = SeasonRankedVocab;
 
 type CachedVocabItem = {
   word: string;
@@ -60,6 +70,7 @@ type CachedVocabItem = {
   example_sentence_jp: string;
   example_sentence_en: string;
   frequency: number;
+  episode_frequency?: number;
 };
 
 type BatchResult = {
@@ -154,8 +165,13 @@ function buildTranslateTool(levels: string[]) {
                   enum: [...levels, "none"],
                   description: "Difficulty level of this word on the requested scale",
                 },
+                is_proper_noun: {
+                  type: "boolean",
+                  description:
+                    "true if this item is a character/person name, surname, nickname, place/country/city name, organization/brand name, fictional proper noun, vocal interjection/SFX, or broken non-word fragment; false for genuine learnable vocabulary",
+                },
               },
-              required: ["word", "meaning", "example_sentence_en", "level"],
+              required: ["word", "meaning", "example_sentence_en", "level", "is_proper_noun"],
               additionalProperties: false,
             },
           },
@@ -195,10 +211,10 @@ async function detectUnusualKanaSpellings(
 
 Only report words where:
 - The kana surface form ACTUALLY appears as a contiguous substring in the text below
-- The word is a meaningful content word (not a particle, interjection, or onomatopoeia)
+- The word is a meaningful general-language content word (NOT a character name, nickname, proper noun, particle, interjection, or onomatopoeia)
 - A learner would benefit from knowing the canonical kanji form
 
-Do NOT report words already in standard kanji form. Return at most 30 entries.
+Do NOT report character names, place names, or words already in standard kanji form. Return at most 25 entries.
 
 SUBTITLE TEXT:
 ${sample}`;
@@ -311,15 +327,39 @@ Deno.serve(async (req) => {
 
     const supabase = createAdminClient();
 
-    // Verify episode_id exists before running expensive extraction or mutating cache.
+    // Verify episode_id exists and fetch season + anime metadata for name filtering & season dispersion.
     const { data: epRow, error: epErr } = await supabase
       .from("episodes")
-      .select("id")
+      .select(
+        "id, episode_number, season_id, seasons(id, season_number, anime_id, anime(id, title_romaji, title_en, title_jp))",
+      )
       .eq("id", episode_id)
       .maybeSingle();
     if (epErr || !epRow) {
       return jsonResponse({ error: "Episode not found" }, 404);
     }
+
+    type NestedAnimeMeta = {
+      id?: string;
+      title_romaji?: string | null;
+      title_en?: string | null;
+      title_jp?: string | null;
+    };
+    type NestedSeasonMeta = {
+      id?: string;
+      season_number?: number | null;
+      anime_id?: string | null;
+      anime?: NestedAnimeMeta | null;
+    };
+    const seasonMeta = (epRow as { seasons?: NestedSeasonMeta | null }).seasons;
+    const animeMeta = seasonMeta?.anime;
+    const seasonId = (epRow as { season_id?: string | null }).season_id ?? seasonMeta?.id ?? null;
+    const seasonNumber = seasonMeta?.season_number ?? 1;
+    const episodeNumber = (epRow as { episode_number?: number | null }).episode_number ?? 1;
+    const animeTitles = [animeMeta?.title_en, animeMeta?.title_romaji, animeMeta?.title_jp]
+      .map((t) => (typeof t === "string" ? t.trim() : ""))
+      .filter((t) => t.length > 0);
+    const animeContextTitle = animeTitles[0] ?? "Anime episode";
 
     const { learning, uiLanguage } = await getUserLanguages(supabase, userId);
     const explainLang = uiLanguageName(uiLanguage);
@@ -363,7 +403,13 @@ Deno.serve(async (req) => {
       const levelInstruction = isJapanese
         ? 'Each word already has an official JLPT level tagged separately — you do not need to re-assess level, just set it to "none".'
         : `Also assign each word a CEFR difficulty level (${learning.levels.join(", ")}) based on how common/advanced it is in ${learning.name}.`;
-      const userMessage = `Translate each ${learning.name} word below into ${explainLang} using its example sentence as context. ${levelInstruction} Also extract any meaningful grammar points used in these sentences (particles/conjugations/common patterns), each tagged with a difficulty level from: ${learning.levels.join(", ")}.\n\nWORDS:\n${JSON.stringify(wordsPayload, null, 2)}`;
+      const userMessage = `Anime context: "${animeContextTitle}" (Season ${seasonNumber}, Episode ${episodeNumber}).
+Translate each ${learning.name} word below into ${explainLang} using its example sentence as context. ${levelInstruction}
+IMPORTANT: Set is_proper_noun=true for ANY character name, surname, nickname, place/city/country name, organization/company name, fictional proper noun specific only to "${animeContextTitle}", vocal interjection/sound effect, or broken non-word fragment so learners only study genuine reusable ${learning.name} vocabulary.
+Also extract meaningful grammar points used in these sentences (particles/conjugations/common patterns), each tagged with a difficulty level from: ${learning.levels.join(", ")}.
+
+WORDS:
+${JSON.stringify(wordsPayload, null, 2)}`;
 
       try {
         let lastErrMsg = "unknown AI error";
@@ -375,7 +421,7 @@ Deno.serve(async (req) => {
                 messages: [
                   {
                     role: "system",
-                    content: `You are a ${learning.name}-to-${explainLang} translator helping language learners. For each word given, provide a concise ${explainLang} meaning that fits its example sentence context, plus a natural ${explainLang} translation of that example sentence. Then extract grammar points actually used in the supplied sentences, explained in ${explainLang}. You MUST call the translate_vocab_and_extract_grammar function.`,
+                    content: `You are a ${learning.name}-to-${explainLang} translator helping language learners study reusable vocabulary from "${animeContextTitle}". Flag all character names, surnames, place/org names, fictional proper nouns, and vocal SFX with is_proper_noun=true. For real vocabulary words, provide a concise ${explainLang} meaning that fits the example sentence context, plus a natural ${explainLang} translation of that example sentence. Then extract grammar points actually used in the supplied sentences, explained in ${explainLang}. You MUST call the translate_vocab_and_extract_grammar function.`,
                   },
                   { role: "user", content: userMessage },
                 ],
@@ -409,6 +455,7 @@ Deno.serve(async (req) => {
                 meaning?: string;
                 example_sentence_en?: string;
                 level?: string;
+                is_proper_noun?: boolean;
               }>;
               grammar?: Array<{
                 pattern?: string;
@@ -426,6 +473,7 @@ Deno.serve(async (req) => {
                   meaning: v.meaning ?? "",
                   example_en: v.example_sentence_en ?? "",
                   level: v.level ?? "none",
+                  is_proper_noun: Boolean(v.is_proper_noun),
                 });
               }
             }
@@ -540,11 +588,82 @@ Deno.serve(async (req) => {
             example_sentence_jp: v.example_sentence_jp,
             example_sentence_en: (m?.example_en ?? "").trim(),
             frequency: v.frequency,
+            episode_frequency: v.episodeFrequency,
+            _skipProper: Boolean(m?.is_proper_noun),
           };
         })
-        .filter((v) => v.meaning.length > 0);
+        .filter((v) => v.meaning.length > 0 && !v._skipProper)
+        .map(({ _skipProper: _dropped, ...cleanItem }) => cleanItem);
 
       return { vocab, grammarMap, okBatches, totalBatches: batches.length, firstError };
+    };
+
+    const gatherSeasonDispersion = async (): Promise<{
+      siblingDocFreq: Map<string, number>;
+      sampledSiblingCount: number;
+    }> => {
+      const siblingDocFreq = new Map<string, number>();
+      let sampledSiblingCount = 0;
+
+      try {
+        // 1. Reuse any already-cached sibling episodes in the same season (instant DB read, 0 AI).
+        if (seasonId) {
+          const { data: sibEps } = await supabase
+            .from("episodes")
+            .select("id")
+            .eq("season_id", seasonId)
+            .neq("id", episode_id)
+            .limit(24);
+          const sibIds = (sibEps ?? []).map((e: { id: string }) => e.id);
+          if (sibIds.length > 0) {
+            const { data: sibCaches } = await supabase
+              .from("episode_vocab_cache")
+              .select("episode_id, vocab")
+              .eq("language", learning.code)
+              .in("episode_id", sibIds)
+              .limit(12);
+            for (const row of sibCaches ?? []) {
+              const list = Array.isArray(row.vocab) ? (row.vocab as Array<{ word?: string }>) : [];
+              if (list.length === 0) continue;
+              sampledSiblingCount++;
+              const seenInEp = new Set<string>();
+              for (const item of list) {
+                if (item?.word && !seenInEp.has(item.word)) {
+                  seenInEp.add(item.word);
+                  siblingDocFreq.set(item.word, (siblingDocFreq.get(item.word) ?? 0) + 1);
+                }
+              }
+            }
+          }
+        }
+
+        // 2. If fewer than 4 cached sibling episodes exist for a Japanese anime, sample up to 5
+        // sibling episode subtitle files from Kitsunekko in parallel (<= 3.2s budget, 0 AI calls!).
+        if (isJapanese && sampledSiblingCount < 4 && animeTitles.length > 0) {
+          const dialogues = await sampleKitsunekkoSiblingDialogues({
+            titles: animeTitles,
+            season: seasonNumber,
+            excludeEpisode: episodeNumber,
+            maxSamples: 5,
+            timeoutMs: 3200,
+          });
+          for (const dlg of dialogues) {
+            const wordSet = await extractWordSetFromSubtitles(dlg);
+            if (wordSet.size === 0) continue;
+            sampledSiblingCount++;
+            for (const w of wordSet) {
+              siblingDocFreq.set(w, (siblingDocFreq.get(w) ?? 0) + 1);
+            }
+          }
+        }
+      } catch (dispErr) {
+        console.warn(
+          `Episode ${episode_id} season dispersion fallback:`,
+          dispErr instanceof Error ? dispErr.message : String(dispErr),
+        );
+      }
+
+      return { siblingDocFreq, sampledSiblingCount };
     };
 
     const work = (async (): Promise<
@@ -554,14 +673,21 @@ Deno.serve(async (req) => {
           remainingTagged: TaggedVocab[];
           initialVocab: CachedVocabItem[];
           initialGrammar: Map<string, GrammarItem>;
+          siblingDocFreq: Map<string, number>;
+          sampledSiblingCount: number;
         }
       | { ok: false; error: string }
     > => {
       try {
-        const allVocab = isJapanese
-          ? await extractVocabFromSubtitles(cleaned)
-          : extractVocabLatin(cleaned, learning.code);
-        console.log(`Episode ${episode_id} [${learning.code}]: tokenized → ${allVocab.length} unique words`);
+        const [{ siblingDocFreq, sampledSiblingCount }, allVocab] = await Promise.all([
+          gatherSeasonDispersion(),
+          isJapanese
+            ? extractVocabFromSubtitles(cleaned)
+            : Promise.resolve(extractVocabLatin(cleaned, learning.code)),
+        ]);
+        console.log(
+          `Episode ${episode_id} [${learning.code}]: tokenized → ${allVocab.length} unique words (season sibling samples: ${sampledSiblingCount})`,
+        );
 
         if (isJapanese && !waitForCompletion) {
           const knownSurfaces = new Set(allVocab.map((v) => v.word));
@@ -575,14 +701,15 @@ Deno.serve(async (req) => {
           if (extraKanaVocab.length > 0) {
             console.log(`Episode ${episode_id}: +${extraKanaVocab.length} unusual-kana vocab merged`);
             allVocab.push(...extraKanaVocab);
-            allVocab.sort((a, b) => b.frequency - a.frequency);
           }
         }
 
-        const tagged: TaggedVocab[] = allVocab.map((v) => ({
-          ...v,
-          level: isJapanese ? (getOfficialJlptLevel(v.word, v.reading) ?? "none") : "none",
-        }));
+        const tagged: TaggedVocab[] = rankVocabBySeasonAndUtility(
+          allVocab,
+          (v) => (isJapanese ? (getOfficialJlptLevel(v.word, v.reading) ?? "none") : "none"),
+          siblingDocFreq,
+          sampledSiblingCount,
+        );
 
         if (tagged.length === 0) {
           throw new Error("No vocabulary extracted from subtitles");
@@ -630,6 +757,8 @@ Deno.serve(async (req) => {
           remainingTagged,
           initialVocab: finalVocab,
           initialGrammar: grammarMap,
+          siblingDocFreq,
+          sampledSiblingCount,
         };
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -663,11 +792,15 @@ Deno.serve(async (req) => {
                 aiApiKey,
               );
               if (extraKana.length > 0) {
-                const taggedExtra: TaggedVocab[] = extraKana.map((v) => ({
-                  ...v,
-                  level: getOfficialJlptLevel(v.word, v.reading) ?? "none",
-                }));
-                tailSlice = [...tailSlice, ...taggedExtra].sort((a, b) => b.frequency - a.frequency);
+                const rankedExtra = rankVocabBySeasonAndUtility(
+                  extraKana,
+                  (v) => getOfficialJlptLevel(v.word, v.reading) ?? "none",
+                  outcome.siblingDocFreq,
+                  outcome.sampledSiblingCount,
+                );
+                tailSlice = [...tailSlice, ...rankedExtra].sort(
+                  (a, b) => b.importanceScore - a.importanceScore,
+                );
               }
             }
 

@@ -1,6 +1,12 @@
 import { assertEquals, assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { dictionaryFormReading } from "./tokenize-jp.ts";
+import {
+  dictionaryFormReading,
+  extractVocabWithTokenizer,
+  type JapaneseTokenizer,
+  type Token,
+} from "./tokenize-jp.ts";
 import { extractVocabLatin } from "./tokenize-latin.ts";
+import { rankVocabBySeasonAndUtility } from "./season-corpus.ts";
 import {
   callAiChatCompletions,
   DEFAULT_AI_MODEL,
@@ -20,7 +26,7 @@ Deno.test("dictionaryFormReading handles irregular 来る/する and katakana ta
   assertEquals(dictionaryFormReading("サボっ", "サボる", "さぼっ"), "さぼる");
 });
 
-Deno.test("extractVocabLatin normalizes sentence-initial German non-nouns to lowercase when later seen lowercase", () => {
+Deno.test("extractVocabLatin normalizes German non-nouns and filters Spanish/French proper names", () => {
   const deText = "Schnell, lauf zum Haus!\nEr läuft sehr schnell zum Haus.";
   const vocab = extractVocabLatin(deText, "de");
   const schnell = vocab.find((v) => v.word.toLowerCase() === "schnell");
@@ -29,6 +35,128 @@ Deno.test("extractVocabLatin normalizes sentence-initial German non-nouns to low
   assert(haus !== undefined);
   assertEquals(schnell.word, "schnell");
   assertEquals(haus.word, "Haus");
+
+  // Spanish: character names Anya & Loid appear capitalized mid-sentence and never lowercase -> dropped;
+  // real words promesa & misión are preserved.
+  const esText = "Hola Anya, tenemos una misión secreta.\nAnya hizo una promesa con Loid hoy.";
+  const esVocab = extractVocabLatin(esText, "es");
+  const esWords = new Set(esVocab.map((v) => v.word));
+  assert(!esWords.has("anya"), "expected Anya to be filtered as proper name");
+  assert(!esWords.has("loid"), "expected Loid to be filtered as proper name");
+  assert(esWords.has("misión"));
+  assert(esWords.has("promesa"));
+});
+
+Deno.test("extractVocabWithTokenizer drops 固有名詞, honorific-bound coined names, vocative katakana names, and nakaguro names while keeping real vocab", () => {
+  const lineMap: Record<string, Token[]> = {
+    "アーニャちゃんは約束を守る": [
+      { surface_form: "アーニャ", basic_form: "アーニャ", reading: "アーニャ", pos: "名詞", pos_detail_1: "一般" },
+      { surface_form: "ちゃん", basic_form: "ちゃん", reading: "チャン", pos: "名詞", pos_detail_1: "接尾", pos_detail_2: "人名" },
+      { surface_form: "は", basic_form: "は", pos: "助詞" },
+      { surface_form: "約束", basic_form: "約束", reading: "ヤクソク", pos: "名詞", pos_detail_1: "サ変接続" },
+      { surface_form: "を", basic_form: "を", pos: "助詞" },
+      { surface_form: "守る", basic_form: "守る", reading: "マモル", pos: "動詞", pos_detail_1: "自立" },
+    ],
+    "アーニャも秘密を知る": [
+      // Even without -ちゃん on this line, アーニャ was identified as a character name across the episode!
+      { surface_form: "アーニャ", basic_form: "アーニャ", reading: "アーニャ", pos: "名詞", pos_detail_1: "一般" },
+      { surface_form: "も", basic_form: "も", pos: "助詞" },
+      { surface_form: "秘密", basic_form: "秘密", reading: "ヒミツ", pos: "名詞", pos_detail_1: "一般" },
+      { surface_form: "を", basic_form: "を", pos: "助詞" },
+      { surface_form: "知る", basic_form: "知る", reading: "シル", pos: "動詞", pos_detail_1: "自立" },
+    ],
+    "ロイドは東京で先生と話す": [
+      { surface_form: "ロイド", basic_form: "ロイド", reading: "ロイド", pos: "名詞", pos_detail_1: "固有名詞", pos_detail_2: "人名" },
+      { surface_form: "は", basic_form: "は", pos: "助詞" },
+      { surface_form: "東京", basic_form: "東京", reading: "トウキョウ", pos: "名詞", pos_detail_1: "固有名詞", pos_detail_2: "地域" },
+      { surface_form: "で", basic_form: "で", pos: "助詞" },
+      { surface_form: "先生", basic_form: "先生", reading: "センセイ", pos: "名詞", pos_detail_1: "一般" },
+      { surface_form: "と", basic_form: "と", pos: "助詞" },
+      { surface_form: "話す", basic_form: "話す", reading: "ハナス", pos: "動詞", pos_detail_1: "自立" },
+    ],
+    "ルーシー！": [
+      { surface_form: "ルーシー", basic_form: "ルーシー", reading: "ルーシー", pos: "名詞", pos_detail_1: "一般" },
+      { surface_form: "！", basic_form: "！", pos: "記号" },
+    ],
+    "ルーシー、ドアを開けて": [
+      { surface_form: "ルーシー", basic_form: "ルーシー", reading: "ルーシー", pos: "名詞", pos_detail_1: "一般" },
+      { surface_form: "、", basic_form: "、", pos: "記号" },
+      { surface_form: "ドア", basic_form: "ドア", reading: "ドア", pos: "名詞", pos_detail_1: "一般" },
+      { surface_form: "を", basic_form: "を", pos: "助詞" },
+      { surface_form: "開けて", basic_form: "開ける", reading: "アケテ", pos: "動詞", pos_detail_1: "自立" },
+    ],
+    "ロイド・フォージャーの任務": [
+      { surface_form: "ロイド", basic_form: "ロイド", reading: "ロイド", pos: "名詞", pos_detail_1: "固有名詞", pos_detail_2: "人名" },
+      { surface_form: "・", basic_form: "・", pos: "記号" },
+      { surface_form: "フォージャー", basic_form: "フォージャー", reading: "フォージャー", pos: "名詞", pos_detail_1: "一般" },
+      { surface_form: "の", basic_form: "の", pos: "助詞" },
+      { surface_form: "任務", basic_form: "任務", reading: "ニンム", pos: "名詞", pos_detail_1: "一般" },
+    ],
+  };
+
+  const mockTokenizer: JapaneseTokenizer = {
+    tokenize: (line: string) => lineMap[line] ?? [],
+  };
+
+  const extracted = extractVocabWithTokenizer(mockTokenizer, Object.keys(lineMap).join("\n"));
+  const words = new Set(extracted.map((e) => e.word));
+
+  assert(!words.has("アーニャ"), "coined honorific character name アーニャ should be filtered");
+  assert(!words.has("ロイド"), "IPADIC 固有名詞 ロイド should be filtered");
+  assert(!words.has("東京"), "IPADIC 固有名詞 東京 should be filtered");
+  assert(!words.has("ルーシー"), "vocative katakana name ルーシー should be filtered");
+  assert(!words.has("フォージャー"), "nakaguro surname フォージャー should be filtered");
+
+  assert(words.has("約束"));
+  assert(words.has("守る"));
+  assert(words.has("秘密"));
+  assert(words.has("先生"));
+  assert(words.has("ドア"));
+  assert(words.has("任務"));
+});
+
+Deno.test("rankVocabBySeasonAndUtility ranks recurring multi-episode & JLPT words above one-scene gag words", () => {
+  const entries = [
+    {
+      word: "クラゲ", // One-off jellyfish mentioned 6x in a single aquarium scene, 0x in rest of season
+      reading: "くらげ",
+      part_of_speech: "名詞",
+      frequency: 6,
+      example_sentence_jp: "クラゲが泳いでいる",
+    },
+    {
+      word: "約束", // Core N4 word mentioned 2x in this episode and across 4 other season episodes
+      reading: "やくそく",
+      part_of_speech: "名詞",
+      frequency: 2,
+      example_sentence_jp: "約束を守るよ",
+    },
+    {
+      word: "標的", // Unlisted genre word recurring across 3 other episodes in the spy season
+      reading: "ひょうてき",
+      part_of_speech: "名詞",
+      frequency: 2,
+      example_sentence_jp: "標的を確認した",
+    },
+  ];
+
+  const siblingDocFreq = new Map<string, number>([
+    ["約束", 4],
+    ["標的", 3],
+  ]);
+
+  const ranked = rankVocabBySeasonAndUtility(
+    entries,
+    (e) => (e.word === "約束" ? "N4" : "none"),
+    siblingDocFreq,
+    5,
+  );
+
+  assertEquals(ranked[0].word, "約束");
+  assertEquals(ranked[1].word, "標的");
+  assertEquals(ranked[2].word, "クラゲ");
+  assert(ranked[0].frequency > ranked[2].frequency);
+  assertEquals(ranked[0].episodeFrequency, 2);
 });
 
 Deno.test("validateClientMessages enforces role, count, and length bounds", () => {

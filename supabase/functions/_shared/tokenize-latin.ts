@@ -10,6 +10,7 @@ const STOPWORDS: Record<string, Set<string>> = {
 };
 
 const WORD_RE = /[\p{L}][\p{L}'’-]*/gu;
+const SENTENCE_START_PRE_RE = /(?:^|[.?!¡¿"«“—–:\s]\s*)$/u;
 
 /**
  * Tokenize latin-script subtitles into frequency-ranked vocabulary.
@@ -18,23 +19,44 @@ const WORD_RE = /[\p{L}][\p{L}'’-]*/gu;
 export function extractVocabLatin(text: string, lang: string): VocabEntry[] {
   const stop = STOPWORDS[lang] ?? new Set<string>();
   const lines = text.split("\n").filter((l) => l.trim().length > 0);
-  const map = new Map<string, { count: number; display: string; exampleIdx: number; exampleLen: number }>();
+  const map = new Map<
+    string,
+    {
+      count: number;
+      lowerCount: number;
+      midSentenceUpperCount: number;
+      display: string;
+      exampleIdx: number;
+      exampleLen: number;
+    }
+  >();
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const matches = line.match(WORD_RE) ?? [];
-    for (const raw of matches) {
+    WORD_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = WORD_RE.exec(line)) !== null) {
+      const raw = m[0];
+      const matchIndex = m.index;
       const token = raw.replace(/^['’-]+|['’-]+$/g, "");
       if (token.length < 2) continue;
       const key = token.toLocaleLowerCase(lang);
       if (stop.has(key)) continue;
       if (/^\d+$/.test(key)) continue;
+
+      const startsUpper = /^\p{Lu}/u.test(token);
+      const prefix = line.slice(Math.max(0, matchIndex - 3), matchIndex);
+      const isSentenceStart = matchIndex === 0 || SENTENCE_START_PRE_RE.test(prefix.trimEnd() ? line.slice(0, matchIndex) : "");
+      const isMidSentenceUpper = startsUpper && matchIndex > 0 && !/[.?!¡¿"«“—–:]\s*$/u.test(line.slice(0, matchIndex));
+
       // German nouns are capitalised — keep the original casing for display there.
-      const display = lang === "de" && /^\p{Lu}/u.test(token) ? token : key;
+      const display = lang === "de" && startsUpper ? token : key;
       const cur = map.get(key);
       if (cur) {
         cur.count++;
-        if (lang === "de" && !/^\p{Lu}/u.test(token)) {
+        if (!startsUpper) cur.lowerCount++;
+        if (isMidSentenceUpper) cur.midSentenceUpperCount++;
+        if (lang === "de" && !startsUpper) {
           cur.display = key;
         }
         if (line.length <= 120 && line.length > cur.exampleLen && cur.exampleLen < 40) {
@@ -42,13 +64,26 @@ export function extractVocabLatin(text: string, lang: string): VocabEntry[] {
           cur.exampleLen = line.length;
         }
       } else {
-        map.set(key, { count: 1, display, exampleIdx: i, exampleLen: line.length });
+        void isSentenceStart;
+        map.set(key, {
+          count: 1,
+          lowerCount: startsUpper ? 0 : 1,
+          midSentenceUpperCount: isMidSentenceUpper ? 1 : 0,
+          display,
+          exampleIdx: i,
+          exampleLen: line.length,
+        });
       }
     }
   }
 
   const out: VocabEntry[] = [];
   for (const [, info] of map) {
+    // In Spanish/French (where common nouns aren't capitalized), words that NEVER appear lowercase
+    // and appear capitalized mid-sentence (or repeatedly capitalized) are character/place names.
+    if (lang !== "de" && info.lowerCount === 0 && (info.midSentenceUpperCount >= 1 || info.count >= 2)) {
+      continue;
+    }
     out.push({
       word: info.display,
       reading: "",
@@ -59,4 +94,8 @@ export function extractVocabLatin(text: string, lang: string): VocabEntry[] {
   }
   out.sort((a, b) => b.frequency - a.frequency);
   return out;
+}
+
+export function extractWordSetLatin(text: string, lang: string): Set<string> {
+  return new Set(extractVocabLatin(text, lang).map((e) => e.word));
 }
