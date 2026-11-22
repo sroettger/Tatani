@@ -622,4 +622,99 @@ class TataniRepositoryTest {
         assertFalse(store.boostersEnabled.value)
         assertEquals(15, store.boosterIntervalMinutes.value)
     }
+
+    @Test
+    fun syncPreservesConsolidatingLearnedWordsWithPostgrestOffsetTimestampsAndConcurrentGrades() = runBlocking {
+        val dao = FakeTataniDao()
+        val enteredEpisodeCacheFetch = CountDownLatch(1)
+        val allowEpisodeCacheFinish = CountDownLatch(1)
+
+        val http = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                when {
+                    req.url.encodedPath.endsWith("/rest/v1/profiles") ->
+                        jsonResponse(req, 200, """[{"user_id":"user-a","learning_language":"ja"}]""")
+                    req.url.encodedPath.endsWith("/rest/v1/user_language_progress") ->
+                        jsonResponse(req, 200, """[{"learning_language":"ja","level":"N5","placement_done":true}]""")
+                    req.url.encodedPath.endsWith("/rest/v1/user_word_state") && req.method == "GET" ->
+                        // PostgREST returns +00:00 (not Z) and newly learned 4h consolidation words have state="learning"
+                        jsonResponse(
+                            req,
+                            200,
+                            """[{"word":"約束","reading":"やくそく","level":"N4","learning_language":"ja","state":"learning","preference":"study","known_source":"learned","correct_streak":1,"srs_level":0,"srs_due_at":"2026-11-22 20:00:00.250+00","last_reviewed_at":"2026-11-22T16:00:00+00:00","marked_known_at":"2026-11-22T16:00:00+00:00"}]"""
+                        )
+                    req.url.encodedPath.endsWith("/rest/v1/user_word_state") && req.method == "POST" ->
+                        jsonResponse(req, 201, "")
+                    req.url.encodedPath.endsWith("/rest/v1/user_anime") ->
+                        jsonResponse(
+                            req,
+                            200,
+                            """[{"position":0,"anime":{"id":"anime-1","title_romaji":"Test Anime","title_en":"Test Anime"}}]"""
+                        )
+                    req.url.encodedPath.endsWith("/rest/v1/episodes") ->
+                        jsonResponse(
+                            req,
+                            200,
+                            """[{"id":"ep-1","episode_number":1,"processing_status":"ready","seasons":{"anime_id":"anime-1","season_number":1}}]"""
+                        )
+                    req.url.encodedPath.endsWith("/rest/v1/episode_vocab_cache") -> {
+                        enteredEpisodeCacheFetch.countDown()
+                        allowEpisodeCacheFinish.await(5, TimeUnit.SECONDS)
+                        jsonResponse(
+                            req,
+                            200,
+                            """[{"episode_id":"ep-1","vocab":[{"word":"約束","reading":"やくそく","meaning":"promise","level":"N4"},{"word":"仲間","reading":"なかま","meaning":"comrade","level":"N4"}]}]"""
+                        )
+                    }
+                    else -> jsonResponse(req, 200, "[]")
+                }
+            }
+            .build()
+
+        val store = SessionStore.inMemory(activeSession(userId = "user-a", level = "N5"))
+        val client = SupabaseClient(store, "https://mock.supabase.co", "anon", http)
+        val repoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val repo = TataniRepository(dao, store, client, bgScope = repoScope)
+
+        val syncJob = async(Dispatchers.IO) {
+            repo.syncAllFromServer()
+        }
+        assertTrue(enteredEpisodeCacheFetch.await(5, TimeUnit.SECONDS))
+
+        // User graduates "仲間" AND flushes outbox WHILE syncAllFromServer is mid-flight!
+        repo.gradeCardOptimistic(
+            card = WordCardEntity(
+                word = "仲間",
+                learningLanguage = "ja",
+                reading = "なかま",
+                meaning = "comrade",
+                level = "N4",
+                primaryEpisodeId = "ep-1",
+            ),
+            remembered = true,
+            autoFlush = false,
+        )
+        assertTrue(repo.flushOutbox())
+        assertEquals("Outbox row already flushed & deleted mid-sync", 0, dao.getOutboxMutations("user-a").size)
+
+        allowEpisodeCacheFinish.countDown()
+        syncJob.await()
+
+        val cards = dao.getDeckCardsSnapshot("ja").associateBy { it.word }
+        val yakusoku = cards.getValue("約束")
+        val nakama = cards.getValue("仲間")
+
+        assertNotNull("PostgREST +00 timestamp must parse into srsDueAtEpochMs", yakusoku.srsDueAtEpochMs)
+        assertTrue("4h consolidating word must stay graduated", SrsEngine.isGraduatedForSrs(yakusoku.preference, yakusoku.knownSource, yakusoku.srsDueAtEpochMs))
+        assertFalse("4h consolidating word must NOT revert to unlearned", SrsEngine.isUnlearnedCandidate(yakusoku.hasServerState, yakusoku.state, yakusoku.preference, yakusoku.knownSource, yakusoku.srsDueAtEpochMs, false))
+
+        assertNotNull("Mid-sync graduated word must NOT be clobbered by stale server snapshot", nakama.srsDueAtEpochMs)
+        assertEquals("learned", nakama.knownSource)
+        assertTrue(SrsEngine.isGraduatedForSrs(nakama.preference, nakama.knownSource, nakama.srsDueAtEpochMs))
+
+        val epSummary = dao.observeLibraryEpisodes("ja").first().single()
+        assertEquals(2, epSummary.knownWords)
+        assertEquals(0, epSummary.unlearnedWords)
+    }
 }

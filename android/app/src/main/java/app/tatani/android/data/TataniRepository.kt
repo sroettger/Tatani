@@ -25,6 +25,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.encodeToString
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 class TataniRepository(
@@ -34,9 +35,19 @@ class TataniRepository(
     private val bgScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val onOutboxFlushFailed: (() -> Unit)? = null,
 ) {
+    private data class VersionedMutation(
+        val seq: Long,
+        val userId: String,
+        val word: String,
+        val learningLanguage: String,
+        val dto: UserWordStateDto?,
+    )
+
     private val flushMutex = Mutex()
     private val syncMutex = Mutex()
     private val authEpoch = AtomicLong(0L)
+    private val localMutationSeq = AtomicLong(0L)
+    private val recentMutations = ConcurrentHashMap<Triple<String, String, String>, VersionedMutation>()
 
     private val _syncing = MutableStateFlow(false)
     val syncing: StateFlow<Boolean> = _syncing.asStateFlow()
@@ -143,6 +154,14 @@ class TataniRepository(
             dao.upsertWordCard(restoredCard)
             val uid = sessionStore.session.value?.userId
             if (!uid.isNullOrBlank()) {
+                val seq = localMutationSeq.incrementAndGet()
+                recentMutations[Triple(uid, card.word, card.learningLanguage)] = VersionedMutation(
+                    seq = seq,
+                    userId = uid,
+                    word = card.word,
+                    learningLanguage = card.learningLanguage,
+                    dto = null,
+                )
                 dao.upsertOutboxMutation(
                     OutboxMutationEntity(
                         userId = uid,
@@ -190,6 +209,28 @@ class TataniRepository(
         dao.upsertWordCard(updatedCard)
         val uid = sessionStore.session.value?.userId
         if (!uid.isNullOrBlank()) {
+            val seq = localMutationSeq.incrementAndGet()
+            recentMutations[Triple(uid, card.word, card.learningLanguage)] = VersionedMutation(
+                seq = seq,
+                userId = uid,
+                word = card.word,
+                learningLanguage = card.learningLanguage,
+                dto = UserWordStateDto(
+                    userId = uid,
+                    word = card.word,
+                    reading = snap.reading,
+                    level = snap.level?.takeIf { it != "none" },
+                    learningLanguage = card.learningLanguage,
+                    state = snap.state,
+                    preference = snap.preference,
+                    knownSource = snap.knownSource,
+                    correctStreak = snap.correctStreak,
+                    srsLevel = snap.srsLevel,
+                    srsDueAt = snap.srsDueAtEpochMs?.let { Instant.ofEpochMilli(it).toString() },
+                    lastReviewedAt = snap.lastReviewedAtIso,
+                    markedKnownAt = snap.markedKnownAtIso,
+                ),
+            )
             dao.upsertOutboxMutation(
                 OutboxMutationEntity(
                     userId = uid,
@@ -308,35 +349,11 @@ class TataniRepository(
                 fun isBelowUserLevel(lvl: String?): Boolean =
                     userRank in 1..50 && SrsEngine.jlptRank(lvl) < userRank
 
+                val fetchBoundarySeq = localMutationSeq.get()
                 val serverStates = supabase.fetchWordStates(currentSession.userId, lang)
                 if (!isSessionStillValid()) return@withLock
 
                 val stateMap = serverStates.associateBy { it.word }.toMutableMap()
-                val pendingForLang = dao.getOutboxMutations(currentSession.userId)
-                    .filter { it.learningLanguage == lang }
-
-                // Overlay any remaining local outbox entries so local edits never flicker
-                for (pending in pendingForLang) {
-                    if (pending.state == OUTBOX_DELETE_STATE) {
-                        stateMap.remove(pending.word)
-                    } else {
-                        stateMap[pending.word] = UserWordStateDto(
-                            userId = currentSession.userId,
-                            word = pending.word,
-                            reading = pending.reading,
-                            level = pending.level,
-                            learningLanguage = lang,
-                            state = pending.state,
-                            preference = pending.preference,
-                            knownSource = pending.knownSource,
-                            correctStreak = pending.correctStreak,
-                            srsLevel = pending.srsLevel,
-                            srsDueAt = pending.srsDueAtEpochMs?.let { Instant.ofEpochMilli(it).toString() },
-                            lastReviewedAt = pending.lastReviewedAtIso,
-                            markedKnownAt = pending.markedKnownAtIso,
-                        )
-                    }
-                }
 
                 data class MutableCard(
                     val word: String,
@@ -388,6 +405,54 @@ class TataniRepository(
                 val cachesByEpisode = supabase.fetchEpisodeVocabCaches(allEpisodeIds, lang)
                     .associateBy { it.episodeId }
                 if (!isSessionStillValid()) return@withLock
+
+                // Re-read outbox & any in-memory mutations recorded after fetchWordStates started
+                // (including mutations already flushed to Supabase while episode caches downloaded!)
+                val pendingForLang = dao.getOutboxMutations(currentSession.userId)
+                    .filter { it.learningLanguage == lang }
+
+                val concurrentWords = HashSet<String>()
+                val recentForLang = recentMutations.values
+                    .filter { it.userId == currentSession.userId && it.learningLanguage == lang }
+                    .sortedBy { it.seq }
+                for (rm in recentForLang) {
+                    if (rm.seq > fetchBoundarySeq) {
+                        concurrentWords += rm.word
+                        if (rm.dto == null) {
+                            stateMap.remove(rm.word)
+                        } else {
+                            stateMap[rm.word] = rm.dto
+                        }
+                    } else if (pendingForLang.none { it.word == rm.word }) {
+                        recentMutations.remove(
+                            Triple(rm.userId, rm.word, rm.learningLanguage),
+                            rm,
+                        )
+                    }
+                }
+
+                for (pending in pendingForLang) {
+                    concurrentWords += pending.word
+                    if (pending.state == OUTBOX_DELETE_STATE) {
+                        stateMap.remove(pending.word)
+                    } else {
+                        stateMap[pending.word] = UserWordStateDto(
+                            userId = currentSession.userId,
+                            word = pending.word,
+                            reading = pending.reading,
+                            level = pending.level,
+                            learningLanguage = lang,
+                            state = pending.state,
+                            preference = pending.preference,
+                            knownSource = pending.knownSource,
+                            correctStreak = pending.correctStreak,
+                            srsLevel = pending.srsLevel,
+                            srsDueAt = pending.srsDueAtEpochMs?.let { Instant.ofEpochMilli(it).toString() },
+                            lastReviewedAt = pending.lastReviewedAtIso,
+                            markedKnownAt = pending.markedKnownAtIso,
+                        )
+                    }
+                }
 
                 val sortedEpisodes = episodes.sortedWith(
                     compareBy<app.tatani.android.data.remote.EpisodeRowDto>(
@@ -453,7 +518,7 @@ class TataniRepository(
                         }
 
                         val st = stateMap[v.word]
-                        val dueMs = st?.srsDueAt?.let { parseIsoMillis(it) }
+                        val dueMs = resolveDueMillis(st)
                         val unlearned = SrsEngine.isUnlearnedCandidate(
                             hasExistingState = st != null,
                             state = st?.state ?: "unknown",
@@ -507,7 +572,7 @@ class TataniRepository(
 
                 val entities = cardBuilder.values.map { item ->
                     val st = stateMap[item.word]
-                    val dueMs = st?.srsDueAt?.let { parseIsoMillis(it) }
+                    val dueMs = resolveDueMillis(st)
                     WordCardEntity(
                         word = item.word,
                         learningLanguage = lang,
@@ -538,11 +603,13 @@ class TataniRepository(
                 val builtWords = entities.mapTo(HashSet()) { it.word }
                 val existingGraduated = dao.getDeckCardsSnapshot(lang).filter { existing ->
                     existing.word !in builtWords &&
-                        (stateMap[existing.word]?.srsDueAt != null || pendingForLang.any { it.word == existing.word })
+                        (resolveDueMillis(stateMap[existing.word]) != null ||
+                            existing.word in concurrentWords ||
+                            pendingForLang.any { it.word == existing.word })
                 }
                 for (existing in existingGraduated) {
                     val st = stateMap[existing.word]
-                    val dueMs = st?.srsDueAt?.let { parseIsoMillis(it) }
+                    val dueMs = resolveDueMillis(st)
                     entities += existing.copy(
                         hasServerState = st != null,
                         state = st?.state ?: "unknown",
@@ -556,9 +623,55 @@ class TataniRepository(
                     )
                 }
 
-                val keepWords = HashSet<String>(entities.size + pendingForLang.size)
+                // Final ultra-narrow guard: apply any mutation recorded during the entity-mapping loop
+                val lateMutations = recentMutations.values
+                    .filter {
+                        it.userId == currentSession.userId &&
+                            it.learningLanguage == lang &&
+                            it.seq > fetchBoundarySeq
+                    }
+                    .sortedBy { it.seq }
+                if (lateMutations.isNotEmpty()) {
+                    val indexByWord = entities.withIndex().associate { it.value.word to it.index }
+                    for (lm in lateMutations) {
+                        concurrentWords += lm.word
+                        val idx = indexByWord[lm.word] ?: continue
+                        val base = entities[idx]
+                        val st = lm.dto
+                        entities[idx] = if (st == null) {
+                            base.copy(
+                                hasServerState = false,
+                                state = "unknown",
+                                preference = "study",
+                                knownSource = null,
+                                correctStreak = 0,
+                                srsLevel = 0,
+                                srsDueAtEpochMs = null,
+                                lastReviewedAtIso = null,
+                                markedKnownAtIso = null,
+                            )
+                        } else {
+                            base.copy(
+                                reading = base.reading ?: st.reading,
+                                level = base.level ?: st.level,
+                                hasServerState = true,
+                                state = st.state,
+                                preference = st.preference,
+                                knownSource = st.knownSource,
+                                correctStreak = st.correctStreak,
+                                srsLevel = st.srsLevel,
+                                srsDueAtEpochMs = resolveDueMillis(st),
+                                lastReviewedAtIso = st.lastReviewedAt,
+                                markedKnownAtIso = st.markedKnownAt,
+                            )
+                        }
+                    }
+                }
+
+                val keepWords = HashSet<String>(entities.size + pendingForLang.size + concurrentWords.size)
                 entities.forEach { keepWords += it.word }
                 pendingForLang.forEach { keepWords += it.word }
+                keepWords += concurrentWords
 
                 if (!isSessionStillValid()) return@withLock
                 dao.replaceLibraryAndPruneOrphans(
@@ -659,6 +772,7 @@ class TataniRepository(
 
     suspend fun signOut() {
         authEpoch.incrementAndGet()
+        recentMutations.clear()
         sessionStore.clear()
         syncMutex.withLock {
             flushMutex.withLock {
@@ -670,8 +784,17 @@ class TataniRepository(
         }
     }
 
-    private fun parseIsoMillis(iso: String): Long? =
-        runCatching { Instant.parse(iso).toEpochMilli() }.getOrNull()
+    private fun resolveDueMillis(st: UserWordStateDto?): Long? {
+        if (st == null) return null
+        val parsed = SrsEngine.parseTimestampMillis(st.srsDueAt)
+        if (parsed != null) return parsed
+        if (st.knownSource == "learned" || (st.state == "known" && st.knownSource != "prior")) {
+            return SrsEngine.parseTimestampMillis(st.lastReviewedAt)
+                ?: SrsEngine.parseTimestampMillis(st.markedKnownAt)
+                ?: System.currentTimeMillis()
+        }
+        return null
+    }
 
     companion object {
         const val OUTBOX_DELETE_STATE = "__delete__"

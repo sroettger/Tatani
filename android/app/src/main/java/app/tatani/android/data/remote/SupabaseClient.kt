@@ -486,16 +486,33 @@ class SupabaseClient(
         withContext(Dispatchers.IO) {
             if (rows.isEmpty()) return@withContext true
             runCatching {
-                val body = postgrestWriteJson.encodeToString(rows)
-                executeAuthenticated { token ->
-                    Request.Builder()
-                        .url("$baseUrl/rest/v1/user_word_state?on_conflict=user_id,word,learning_language")
-                        .header("apikey", anonKey)
-                        .header("Authorization", "Bearer $token")
-                        .header("Prefer", "resolution=merge-duplicates,return=minimal")
-                        .post(body.toRequestBody(jsonMedia))
-                        .build()
-                }.use { resp -> resp.isSuccessful }
+                for (batch in rows.chunked(200)) {
+                    val body = postgrestWriteJson.encodeToString(batch)
+                    val ok = executeAuthenticated { token ->
+                        Request.Builder()
+                            .url("$baseUrl/rest/v1/user_word_state?on_conflict=user_id,word,learning_language")
+                            .header("apikey", anonKey)
+                            .header("Authorization", "Bearer $token")
+                            .header("Prefer", "resolution=merge-duplicates,return=minimal")
+                            .post(body.toRequestBody(jsonMedia))
+                            .build()
+                    }.use { resp ->
+                        if (!resp.isSuccessful) {
+                            val err = resp.body?.string().orEmpty()
+                            runCatching {
+                                android.util.Log.w(
+                                    "TataniSync",
+                                    "upsertWordStates failed (${resp.code}): ${err.take(240)}"
+                                )
+                            }
+                        }
+                        resp.isSuccessful
+                    }
+                    if (!ok) return@runCatching false
+                }
+                true
+            }.onFailure { e ->
+                runCatching { android.util.Log.w("TataniSync", "upsertWordStates error", e) }
             }.getOrDefault(false)
         }
 

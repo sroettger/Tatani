@@ -3,6 +3,7 @@ package app.tatani.android.domain
 import kotlinx.serialization.Serializable
 import java.time.Instant
 import java.time.LocalDate
+import java.time.OffsetDateTime
 import java.time.ZoneId
 
 object SrsEngine {
@@ -326,7 +327,7 @@ object SrsEngine {
         isBelowUserLevel: Boolean,
     ): Boolean {
         if (preference == "skip") return false
-        if (knownSource == "prior") return false
+        if (knownSource == "prior" || knownSource == "learned") return false
         if (srsDueAtEpochMs != null) return false
         if (state == "known") return false
         if (!hasExistingState && isBelowUserLevel) return false
@@ -479,6 +480,40 @@ object SrsEngine {
         return choices
     }
 
+    /**
+     * Parses ISO-8601 and PostgreSQL/PostgREST `timestamptz` strings (`...Z`, `...+00:00`,
+     * `...+00`, space-separated `YYYY-MM-DD HH:MM:SS+00`, and arbitrary UTC offsets) into epoch
+     * milliseconds across all Android API levels without relying on JDK 12+ `Instant.parse`.
+     */
+    fun parseTimestampMillis(raw: String?): Long? {
+        if (raw.isNullOrBlank()) return null
+        var s = raw.trim()
+        if (s.length > 10 && s[10] == ' ' && s[4] == '-' && s[7] == '-') {
+            s = s.substring(0, 10) + 'T' + s.substring(11)
+        }
+        s = when {
+            s.endsWith("+00:00") || s.endsWith("-00:00") -> s.dropLast(6) + "Z"
+            s.endsWith("+0000") || s.endsWith("-0000") -> s.dropLast(5) + "Z"
+            s.endsWith("+00") || s.endsWith("-00") -> s.dropLast(3) + "Z"
+            else -> {
+                val len = s.length
+                when {
+                    len > 19 && (s[len - 3] == '+' || s[len - 3] == '-') &&
+                        s[len - 2].isDigit() && s[len - 1].isDigit() ->
+                        "$s:00"
+                    len > 21 && (s[len - 5] == '+' || s[len - 5] == '-') &&
+                        s.substring(len - 4).all { it.isDigit() } ->
+                        s.substring(0, len - 2) + ":" + s.substring(len - 2)
+                    else -> s
+                }
+            }
+        }
+        if (s.endsWith("Z") || s.endsWith("z")) {
+            runCatching { return Instant.parse(s).toEpochMilli() }
+        }
+        return runCatching { OffsetDateTime.parse(s).toInstant().toEpochMilli() }.getOrNull()
+    }
+
     fun computeDailyStreak(
         timestampsIso: Collection<String?>,
         zoneId: ZoneId = ZoneId.systemDefault(),
@@ -486,8 +521,8 @@ object SrsEngine {
     ): Int {
         val activeDays = HashSet<LocalDate>()
         for (iso in timestampsIso) {
-            if (iso.isNullOrBlank()) continue
-            val day = runCatching { Instant.parse(iso).atZone(zoneId).toLocalDate() }.getOrNull()
+            val epochMs = parseTimestampMillis(iso) ?: continue
+            val day = runCatching { Instant.ofEpochMilli(epochMs).atZone(zoneId).toLocalDate() }.getOrNull()
             if (day != null) activeDays += day
         }
         if (activeDays.isEmpty()) return 0

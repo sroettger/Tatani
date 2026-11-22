@@ -392,4 +392,27 @@ class SrsEngineTest {
 
         assertEquals(85, SrsEngine.computeComprehensionPercent(17, 20))
     }
+
+    @Test
+    fun parsesAllPostgrestAndPostgresTimestampFormatsWithoutLosingLearnedWords() {
+        val expectedMs = 1_795_363_200_123L // 2026-11-22T16:00:00.123Z
+        assertEquals(expectedMs, SrsEngine.parseTimestampMillis("2026-11-22T16:00:00.123Z"))
+        assertEquals(expectedMs, SrsEngine.parseTimestampMillis("2026-11-22T16:00:00.123+00:00"))
+        assertEquals(expectedMs, SrsEngine.parseTimestampMillis("2026-11-22T16:00:00.123000+00:00"))
+        assertEquals(expectedMs, SrsEngine.parseTimestampMillis("2026-11-22 16:00:00.123+00"))
+        assertEquals(expectedMs, SrsEngine.parseTimestampMillis("2026-11-23T01:00:00.123+09:00"))
+        assertEquals(expectedMs, SrsEngine.parseTimestampMillis("2026-11-23 01:00:00.123+09"))
+
+        // Even if srsDueAtEpochMs were null, knownSource == "learned" must NEVER revert to unlearned
+        assertFalse(
+            SrsEngine.isUnlearnedCandidate(
+                hasExistingState = true,
+                state = "learning",
+                preference = "study",
+                knownSource = "learned",
+                srsDueAtEpochMs = null,
+                isBelowUserLevel = false,
+            )
+        )
+    }
 }
