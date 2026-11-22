@@ -305,11 +305,11 @@ class TataniViewModel(application: Application) : AndroidViewModel(application) 
                 card = targetCard,
                 contexts = contexts,
                 forcePeekReading = false,
-                silentUpdate = false,
+                silentAudioAlert = false,
             )
             return if (posted) {
                 Result.success(
-                    "Sent \"${targetCard.word}\" — check your notification shade to try \"I know\", \"I don't know\", or \"かな Peek\"."
+                    "Sent \"${targetCard.word}\" — tap \"I know\", \"I don't know\", or \"かな Peek\" right on the banner!"
                 )
             } else {
                 Result.failure(

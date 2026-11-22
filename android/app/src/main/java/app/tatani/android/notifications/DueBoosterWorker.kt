@@ -52,7 +52,7 @@ class DueBoosterWorker(
             card = card,
             contexts = contexts,
             forcePeekReading = false,
-            silentUpdate = false,
+            silentAudioAlert = false,
         )
 
         return Result.success()
